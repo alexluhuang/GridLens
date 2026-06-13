@@ -37,6 +37,7 @@ class GridpackRunResult:
     return_code: int
     run_dir: Path
     log_file: Path
+    terminal_log_file: Path
     status_file: Path
     manifest_file: Path
 
@@ -74,6 +75,7 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
     work_dir = run_dir / "work"
     logs_dir = run_dir / "logs"
     log_file = logs_dir / "run.log"
+    terminal_log_file = work_dir / "terminal.log"
     status_file = run_dir / "status.json"
 
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -111,10 +113,13 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
     manifest_file = manifest.save(run_dir)
     _write_status(status_file, "running")
 
-    with log_file.open("w", encoding="utf-8") as log:
+    with log_file.open("w", encoding="utf-8") as log, terminal_log_file.open("w", encoding="utf-8") as terminal_log:
         log.write("COMMAND:\n")
         log.write(" ".join(command) + "\n\n")
+        terminal_log.write("COMMAND:\n")
+        terminal_log.write(" ".join(command) + "\n\n")
         log.flush()
+        terminal_log.flush()
 
         if log_callback:
             log_callback("Starting Docker run...\n")
@@ -135,7 +140,9 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
         assert process.stdout is not None
         for line in process.stdout:
             log.write(line)
+            terminal_log.write(line)
             log.flush()
+            terminal_log.flush()
             if log_callback:
                 log_callback(line)
 
@@ -148,6 +155,7 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
         return_code=return_code,
         run_dir=run_dir,
         log_file=log_file,
+        terminal_log_file=terminal_log_file,
         status_file=status_file,
         manifest_file=manifest_file,
     )

@@ -16,6 +16,35 @@ Fix options:
 - Log out and back in after `usermod -aG docker`.
 - Use a managed service account or approved local service wrapper.
 
+If `/etc/group` already lists your username in the `docker` group but `id` does not, your current login session has stale group membership. Run:
+
+```bash
+newgrp docker
+docker ps
+python3 scripts/check_environment.py
+```
+
+If that works, close the old terminal and continue in the new shell. A full logout/login also refreshes group membership.
+
+Docker normally creates `/var/run/docker.sock` for group `docker`. Check it with:
+
+```bash
+ls -l /var/run/docker.sock
+```
+
+Expected shape:
+
+```text
+srw-rw---- 1 root docker ... /var/run/docker.sock
+```
+
+If the socket is owned by another group, restart Docker and re-check:
+
+```bash
+sudo systemctl restart docker
+ls -l /var/run/docker.sock
+```
+
 ## Image Not Available
 
 The app defaults to `--pull=never`, so a run fails if the image is missing.

@@ -31,6 +31,8 @@ logs/run.log
 reports/
 ```
 
+The same terminal stream is also tee'd into `work/terminal.log`, so it appears with the run outputs in the Results tab and exported ZIPs.
+
 ## Review Outputs
 
 Go to Results, choose a run, and review files written under `work/`.

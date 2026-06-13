@@ -53,6 +53,7 @@ Each run creates:
 - `manifest.json`: image, executable, XML file, MPI process count, platform, input hashes, and exact Docker command.
 - `status.json`: running/completed/failed state and return code.
 - `logs/run.log`: command and streamed GridPACK output.
+- `work/terminal.log`: the same streamed terminal output tee'd into the output folder.
 
 ## Analysis Layer
 
