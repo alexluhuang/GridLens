@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=GridPACK Workbench
+Comment=Local GUI for GridPACK contingency analysis
+Exec=/opt/gridpack-workbench/GridPACKWorkbench
+Icon=gridpack-workbench
+Terminal=false
+Type=Application
+Categories=Science;Engineering;
