@@ -50,6 +50,12 @@ reports/output_inventory.csv
 reports/analysis_summary.json
 reports/success_summary.svg
 reports/report.html
+exports/master.csv
+exports/master_cleaned.csv
+exports/outliers.csv
+exports/distributions/
 ```
 
-The first success summary is a generic token-based parser. For production, add exact parsers for the GridPACK outputs used by your contingency workflow.
+The branch master files merge available branch data from the RAW file and branch-related GridPACK TXT outputs. `master_cleaned.csv` removes utilization outliers and is used for subsequent distribution analysis.
+
+Use the Analysis tab's Distributions view to select independent variables and generate layered violin plus box-and-whisker plots of transmission utilization. Each generated plot has a companion CSV table and displays the source code path used to produce it.

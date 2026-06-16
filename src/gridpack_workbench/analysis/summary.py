@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from gridpack_workbench.analysis.charts import create_success_svg
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
+from gridpack_workbench.analysis.master import build_branch_master_exports
 from gridpack_workbench.analysis.parsers import list_output_files, summarize_success_file
 
 
@@ -43,6 +44,7 @@ def generate_decision_support_report(run_dir: str | Path, dataset: RunAnalysisDa
     files = list_output_files(run_path)
     inventory_csv = write_output_inventory(run_path)
     chart_svg = create_success_svg(success, report_dir / "success_summary.svg")
+    master_exports = build_branch_master_exports(run_path, dataset)
 
     thermal = dataset.metrics.get("thermal", {})
     voltage = dataset.metrics.get("voltage", {})
@@ -59,6 +61,7 @@ def generate_decision_support_report(run_dir: str | Path, dataset: RunAnalysisDa
         "output_file_count": len(files),
         "inventory_csv": str(inventory_csv),
         "chart_svg": str(chart_svg),
+        "master": master_exports.as_dict(),
         "analysis_manifest": str(dataset.manifest_path),
         "table_dir": str(dataset.table_dir),
         "thermal_facility_count": thermal.get("facility_count", 0) if isinstance(thermal, dict) else 0,

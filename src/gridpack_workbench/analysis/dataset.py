@@ -136,7 +136,7 @@ def _enrich_with_bus_metadata(tables: dict[str, ParsedTable]) -> None:
                 )
         _append_columns(table, ["bus_name", "base_kv", "area", "zone", "voltage_class"])
 
-    for table_name in ("pflow", "qflow", "pflow_mm", "qflow_mm", "perf_mm", "line_flt_cnt"):
+    for table_name in ("branch_metadata", "pflow", "qflow", "pflow_mm", "qflow_mm", "perf_mm", "line_flt_cnt"):
         table = tables.get(table_name)
         if not table:
             continue

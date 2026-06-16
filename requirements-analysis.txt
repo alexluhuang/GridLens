@@ -1,2 +1,4 @@
 matplotlib>=3.8
 pandas>=2.2
+# On DGX systems with RAPIDS, install/provide cuDF so `import cudf.pandas`
+# succeeds and pandas calls are accelerated on the GPU.

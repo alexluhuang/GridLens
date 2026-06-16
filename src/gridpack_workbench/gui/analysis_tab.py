@@ -6,10 +6,12 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -17,7 +19,6 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -29,21 +30,20 @@ except Exception:  # pragma: no cover - exercised only on systems without matplo
     FigureCanvas = None  # type: ignore[assignment]
     Figure = None  # type: ignore[assignment]
 
-from gridpack_workbench.analysis.agent import NemoClawAgentService
+from gridpack_workbench.analysis.distributions import distribution_variables_from_master, generate_distribution_exports
+from gridpack_workbench.analysis.master import UTILIZATION_COLUMNS, ensure_branch_master_exports
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridpack_workbench.analysis.summary import generate_decision_support_report
-from gridpack_workbench.core.app_settings import AppSettings
 from gridpack_workbench.core.project import Project
 
 
 class AnalysisTab(QWidget):
-    def __init__(self, settings: AppSettings | None = None) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.settings = settings or AppSettings.load()
         self.project: Project | None = None
         self.last_report: Path | None = None
         self.current_dataset: RunAnalysisDataset | None = None
-        self.agent_service = NemoClawAgentService(self.settings)
+        self.current_master: dict[str, object] = {}
 
         layout = QVBoxLayout(self)
         self.project_label = QLabel("No project loaded.")
@@ -70,11 +70,12 @@ class AnalysisTab(QWidget):
         self.tabs.addTab(self._build_thermal_tab(), "Thermal Utilization")
         self.tabs.addTab(self._build_voltage_tab(), "Voltage / Reactive")
         self.tabs.addTab(self._build_contingency_tab(), "Contingencies")
-        self.tabs.addTab(self._build_assistant_tab(), "Assistant")
+        self.distribution_tab = self._build_distributions_tab()
+        self.tabs.addTab(self.distribution_tab, "Distributions")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, stretch=1)
 
         self._show_empty_state()
-        self._refresh_assistant_state()
 
     def set_project(self, project: Project) -> None:
         self.project = project
@@ -95,6 +96,7 @@ class AnalysisTab(QWidget):
         for index in range(self.run_combo.count()):
             if Path(self.run_combo.itemData(index)).resolve() == path:
                 self.run_combo.setCurrentIndex(index)
+                self._refresh_distribution_variables()
                 break
 
     def selected_run_dir(self) -> Path | None:
@@ -110,12 +112,14 @@ class AnalysisTab(QWidget):
             self.current_dataset = build_run_analysis(run_dir)
             summary = generate_decision_support_report(run_dir, self.current_dataset)
             self.last_report = Path(summary["html_report"])
+            self.current_master = summary.get("master", {}) if isinstance(summary.get("master"), dict) else {}
             self._refresh_filters()
+            self._refresh_distribution_variables()
             self._render_dataset()
             QMessageBox.information(
                 self,
                 "Analysis generated",
-                f"Decision support analysis generated:\n{self.current_dataset.manifest_path}",
+                f"Decision support analysis generated:\n{self.current_dataset.manifest_path}\n\nMaster dataset:\n{self.current_master.get('master_cleaned_csv', '')}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Analysis failed", str(exc))
@@ -183,42 +187,32 @@ class AnalysisTab(QWidget):
         layout.addWidget(self.contingency_table, stretch=1)
         return widget
 
-    def _build_assistant_tab(self) -> QWidget:
+    def _build_distributions_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        box = QGroupBox("NemoClaw Local Agent")
-        box_layout = QVBoxLayout(box)
-        self.assistant_status = QLabel()
-        self.assistant_status.setWordWrap(True)
-        self.assistant_question = QTextEdit()
-        self.assistant_question.setPlaceholderText("Ask about success rates, thermal bottlenecks, voltage, line faults, or another parsed result.")
-        self.assistant_question.setMaximumHeight(110)
-        ask = QPushButton("Ask Assistant")
-        ask.clicked.connect(self.ask_assistant)
-        self.ask_button = ask
-        self.assistant_answer = QTextBrowser()
-        box_layout.addWidget(self.assistant_status)
-        box_layout.addWidget(QLabel("Question"))
-        box_layout.addWidget(self.assistant_question)
-        box_layout.addWidget(ask)
-        box_layout.addWidget(self.assistant_answer, stretch=1)
-        layout.addWidget(box)
-        return widget
+        control_row = QHBoxLayout()
+        self.distribution_metric = QComboBox()
+        for column in UTILIZATION_COLUMNS:
+            self.distribution_metric.addItem(column, column)
+        generate = QPushButton("Generate Selected Distributions")
+        generate.clicked.connect(self.generate_distributions)
+        control_row.addWidget(QLabel("Utilization metric"))
+        control_row.addWidget(self.distribution_metric)
+        control_row.addWidget(generate)
+        control_row.addStretch()
+        layout.addLayout(control_row)
 
-    def ask_assistant(self) -> None:
-        run_dir = self.selected_run_dir()
-        question = self.assistant_question.toPlainText().strip()
-        if not run_dir:
-            QMessageBox.warning(self, "No run selected", "Select a run first.")
-            return
-        if not question:
-            QMessageBox.warning(self, "No question", "Enter a question about the selected run.")
-            return
-        try:
-            answer = self.agent_service.answer(run_dir, question)
-            self.assistant_answer.setHtml(answer.to_html())
-        except Exception as exc:
-            QMessageBox.critical(self, "Assistant failed", str(exc))
+        layout.addWidget(QLabel("Independent variables"))
+        self.distribution_variables = QListWidget()
+        self.distribution_variables.setSelectionMode(QAbstractItemView.MultiSelection)
+        layout.addWidget(self.distribution_variables, stretch=1)
+
+        self.distribution_outputs = QTableWidget(0, 4)
+        self.distribution_outputs.setHorizontalHeaderLabels(["Variable", "Table CSV", "Graph PNG", "Code Path"])
+        self.distribution_outputs.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(QLabel("Generated outputs"))
+        layout.addWidget(self.distribution_outputs, stretch=1)
+        return widget
 
     def _show_empty_state(self) -> None:
         self.overview.setHtml(
@@ -231,11 +225,7 @@ class AnalysisTab(QWidget):
         self._fill_table(self.thermal_table, [], [])
         self._fill_table(self.voltage_table, [], [])
         self._fill_table(self.contingency_table, [], [])
-
-    def _refresh_assistant_state(self) -> None:
-        configured = self.agent_service.is_configured()
-        self.ask_button.setEnabled(configured)
-        self.assistant_status.setText(self.agent_service.configuration_status())
+        self._fill_table(self.distribution_outputs, [], [])
 
     def _refresh_filters(self) -> None:
         self.area_filter.blockSignals(True)
@@ -254,12 +244,67 @@ class AnalysisTab(QWidget):
         self.area_filter.blockSignals(False)
         self.voltage_filter.blockSignals(False)
 
+    def _refresh_distribution_variables(self) -> None:
+        self.distribution_variables.clear()
+        run_dir = self.selected_run_dir()
+        if not run_dir:
+            return
+        try:
+            master = ensure_branch_master_exports(run_dir, self.current_dataset)
+            self.current_master = master.as_dict()
+        except Exception as exc:
+            QMessageBox.warning(self, "Cannot prepare master dataset", str(exc))
+            return
+
+        variables = distribution_variables_from_master(run_dir)
+        for variable in variables:
+            item = QListWidgetItem(variable)
+            if variable in {"area", "voltage_class", "from_area", "to_area", "rate_a", "raw_branch_type"}:
+                item.setSelected(True)
+            self.distribution_variables.addItem(item)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self.tabs.widget(index) is self.distribution_tab:
+            self._refresh_distribution_variables()
+
+    def generate_distributions(self) -> None:
+        run_dir = self.selected_run_dir()
+        if not run_dir:
+            QMessageBox.warning(self, "No run selected", "Select a run first.")
+            return
+        if self.distribution_variables.count() == 0:
+            self._refresh_distribution_variables()
+        variables = [item.text() for item in self.distribution_variables.selectedItems()]
+        if not variables:
+            QMessageBox.warning(self, "No variables selected", "Select at least one independent variable.")
+            return
+        try:
+            results = generate_distribution_exports(
+                run_dir,
+                variables,
+                utilization_metric=self.distribution_metric.currentData(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Distribution generation failed", str(exc))
+            return
+
+        rows = [
+            {
+                "variable": result.independent_variable,
+                "table_csv": str(result.table_csv),
+                "graph_png": str(result.graph_png),
+                "code_path": str(result.code_path),
+            }
+            for result in results
+        ]
+        self._fill_table(self.distribution_outputs, rows, ["variable", "table_csv", "graph_png", "code_path"])
+        QMessageBox.information(self, "Distributions generated", f"Generated {len(results)} graph/table pairs.")
+
     def _render_dataset(self) -> None:
         self._render_overview()
         self._render_thermal()
         self._render_voltage()
         self._render_contingencies()
-        self._refresh_assistant_state()
 
     def _render_overview(self) -> None:
         if not self.current_dataset:
@@ -269,6 +314,7 @@ class AnalysisTab(QWidget):
         thermal = metrics.get("thermal", {}) if isinstance(metrics.get("thermal"), dict) else {}
         voltage = metrics.get("voltage", {}) if isinstance(metrics.get("voltage"), dict) else {}
         notes = metrics.get("notes", [])
+        master_cleaned = self.current_master.get("master_cleaned_csv", "")
         self.overview.setHtml(
             f"""
             <h2>Decision Support Overview</h2>
@@ -286,6 +332,7 @@ class AnalysisTab(QWidget):
               <tr><td>Low voltage violations</td><td>{voltage.get('low_voltage_violations', 0)}</td></tr>
               <tr><td>High voltage violations</td><td>{voltage.get('high_voltage_violations', 0)}</td></tr>
             </table>
+            <p><b>Master cleaned CSV:</b> {html.escape(str(master_cleaned))}</p>
             <h3>Assumptions And Data Notes</h3>
             <ul>{''.join(f'<li>{html.escape(str(note))}</li>' for note in notes)}</ul>
             """

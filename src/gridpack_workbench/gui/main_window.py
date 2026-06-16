@@ -30,7 +30,7 @@ class MainWindow(QMainWindow):
         self.project_tab = ProjectTab(self.settings)
         self.run_tab = RunTab(self.settings)
         self.results_tab = ResultsTab()
-        self.analysis_tab = AnalysisTab(self.settings)
+        self.analysis_tab = AnalysisTab()
         self.help_tab = HelpTab()
 
         self.tabs.addTab(self.project_tab, "Project")

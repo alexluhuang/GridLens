@@ -9,6 +9,8 @@ PySide6 GUI
   -> pnnl/gridpack Docker container
   -> local output files
   -> local analysis and reports
+  -> run exports/master_cleaned.csv
+  -> utilization distribution plots and tables
 ```
 
 ## Project Folders
@@ -27,6 +29,7 @@ A regulator-facing project is stored under:
         work/
         logs/run.log
         reports/
+        exports/
     exports/
 ```
 
@@ -66,5 +69,9 @@ The first analysis layer is deliberately conservative. It can:
 - create `success_summary.svg`;
 - write `report.html`;
 - export a run ZIP.
+- write `exports/master.csv`, `exports/master_cleaned.csv`, and `exports/outliers.csv`;
+- write distribution plot PNGs and companion CSV tables under `exports/distributions/`.
 
 The next production step is to add exact parsers for the real `success.txt`, `pflow_mm.txt`, `vmag_mm.txt`, `qflow_mm.txt`, and other GridPACK output formats used by your workflow.
+
+The branch master and distribution exporters use `cuDF.pandas` when RAPIDS cuDF is available, then import pandas through that accelerated layer. Development systems without cuDF fall back to pandas so the code remains testable.

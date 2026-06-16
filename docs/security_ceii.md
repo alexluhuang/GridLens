@@ -2,7 +2,7 @@
 
 This project is designed for local-only operation with CEII data. It does not include cloud services, telemetry, external crash reports, or remote logging.
 
-No AI model or cloud service is required for the current application. If a local "Model A" assistant or automated report writer is added later, keep it fully on-device and route it only to files inside the selected project folder.
+No AI model or cloud service is required for the current application.
 
 ## Defaults
 

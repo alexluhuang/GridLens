@@ -31,13 +31,6 @@ class AppSettings:
     use_host_user: bool = True
     memory_limit: str = ""
     extra_docker_args: str = ""
-    nemoclaw_cli_path: str = "nemoclaw"
-    nemoclaw_sandbox_policy_path: str = ""
-    llm_provider_name: str = "local"
-    llm_model_name: str = ""
-    agent_tool_timeout_seconds: int = 20
-    agent_max_returned_rows: int = 50
-    agent_require_citations: bool = True
 
     @classmethod
     def config_path(cls) -> Path:

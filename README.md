@@ -11,7 +11,7 @@ Use this stack for the first production-quality MVP:
 - Python for application logic.
 - PySide6 / Qt for Python for the GUI.
 - Docker Engine for running the existing GridPACK image.
-- Local project folders for CEII input files, run logs, manifests, outputs, and reports.
+- Local project folders for CEII input files, run logs, manifests, outputs, reports, branch master datasets, and utilization plots.
 - PyInstaller for the first pilot build.
 - A Debian package for DGX OS 7 distribution.
 

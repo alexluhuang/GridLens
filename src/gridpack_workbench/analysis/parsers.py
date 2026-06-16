@@ -471,6 +471,88 @@ def parse_raw_bus_metadata(run_dir: str | Path, raw_file_name: str = "training.r
     return ParsedTable("bus_metadata", raw_file_name, columns, rows, notes)
 
 
+def parse_raw_branch_metadata(run_dir: str | Path, raw_file_name: str = "training.raw") -> ParsedTable:
+    path = Path(run_dir) / "work" / raw_file_name
+    columns = [
+        "from_bus",
+        "to_bus",
+        "line_id",
+        "r",
+        "x",
+        "b",
+        "ratea",
+        "rateb",
+        "ratec",
+        "gi",
+        "bi",
+        "gj",
+        "bj",
+        "status",
+        "metered_end",
+        "length",
+        "owner_1",
+        "owner_1_fraction",
+        "raw_branch_type",
+    ]
+    if not path.exists():
+        return ParsedTable("branch_metadata", raw_file_name, columns, notes=[f"{raw_file_name} was not found."])
+
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    rows: list[dict[str, object]] = []
+    in_branch_section = False
+    rejected = 0
+
+    for line in lines:
+        upper = line.upper()
+        if "BEGIN BRANCH DATA" in upper or "BEGIN NONTRANSFORMER BRANCH DATA" in upper:
+            in_branch_section = True
+            continue
+        if in_branch_section and ("END OF BRANCH DATA" in upper or "END OF NONTRANSFORMER BRANCH DATA" in upper):
+            break
+        if not in_branch_section:
+            continue
+
+        parsed = _parse_raw_csv_line(line)
+        if not parsed or len(parsed) < 18:
+            rejected += 1
+            continue
+        try:
+            from_bus = abs(int(float(parsed[0])))
+            to_bus = abs(int(float(parsed[1])))
+            rows.append(
+                {
+                    "from_bus": from_bus,
+                    "to_bus": to_bus,
+                    "line_id": _clean_raw_string(parsed[2]),
+                    "r": _optional_float(parsed, 3),
+                    "x": _optional_float(parsed, 4),
+                    "b": _optional_float(parsed, 5),
+                    "ratea": _optional_float(parsed, 6),
+                    "rateb": _optional_float(parsed, 7),
+                    "ratec": _optional_float(parsed, 8),
+                    "gi": _optional_float(parsed, 9),
+                    "bi": _optional_float(parsed, 10),
+                    "gj": _optional_float(parsed, 11),
+                    "bj": _optional_float(parsed, 12),
+                    "status": _optional_int(parsed, 13),
+                    "metered_end": _optional_int(parsed, 14),
+                    "length": _optional_float(parsed, 15),
+                    "owner_1": _optional_int(parsed, 16),
+                    "owner_1_fraction": _optional_float(parsed, 17),
+                    "raw_branch_type": "nontransformer_branch",
+                }
+            )
+        except (ValueError, IndexError):
+            rejected += 1
+
+    notes = []
+    if rejected:
+        notes.append(f"Rejected {rejected} RAW branch lines that did not match the expected nontransformer branch schema.")
+    if not rows:
+        notes.append("No nontransformer branch records were parsed from the RAW file.")
+    return ParsedTable("branch_metadata", raw_file_name, columns, rows, notes)
+
+
 def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
     tables = {"success": parse_success_file(run_dir)}
     for table_name in TABLE_SCHEMAS:
@@ -484,6 +566,7 @@ def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
         if candidate:
             raw_file = Path(candidate).name
     tables["bus_metadata"] = parse_raw_bus_metadata(run_dir, raw_file)
+    tables["branch_metadata"] = parse_raw_branch_metadata(run_dir, raw_file)
     return tables
 
 
@@ -520,6 +603,31 @@ def _convert_value(value: str, column: str, int_columns: set[str], string_column
     if column in int_columns:
         return int(float(value))
     return float(value)
+
+
+def _parse_raw_csv_line(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("@"):
+        return []
+    try:
+        return [part.strip() for part in next(csv.reader([line], skipinitialspace=True))]
+    except csv.Error:
+        return []
+
+
+def _clean_raw_string(value: str) -> str:
+    return value.strip().strip("'").strip('"').strip()
+
+
+def _optional_float(values: list[str], index: int) -> float | None:
+    if index >= len(values) or values[index].strip() == "":
+        return None
+    return float(values[index])
+
+
+def _optional_int(values: list[str], index: int) -> int | None:
+    value = _optional_float(values, index)
+    return int(value) if value is not None else None
 
 
 def _xml_text(root: ET.Element, path: str, default: str) -> str:

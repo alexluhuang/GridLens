@@ -1,31 +1,27 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
-import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from gridpack_workbench.analysis.agent import AnalysisToolbox, NemoClawAgentService
+from gridpack_workbench.analysis.distributions import generate_distribution_exports
 from gridpack_workbench.analysis.dataset import build_run_analysis, gini, top_share
+from gridpack_workbench.analysis.master import ensure_branch_master_exports
 from gridpack_workbench.analysis.parsers import parse_success_file, summarize_success_file
 from gridpack_workbench.analysis.summary import generate_run_report
-from gridpack_workbench.core.app_settings import AppSettings
 
 
 class AnalysisTests(unittest.TestCase):
-    def test_success_summary_and_report_compatibility(self) -> None:
+    @unittest.skipUnless(importlib.util.find_spec("pandas"), "pandas is required for export generation")
+    def test_success_summary_report_and_master_exports(self) -> None:
         with TemporaryDirectory() as tmp:
-            run_dir = Path(tmp) / "runs" / "2026-06-12_12-00-00"
-            work_dir = run_dir / "work"
-            work_dir.mkdir(parents=True)
-            (run_dir / "reports").mkdir()
-            (work_dir / "success.txt").write_text("a true\nb false\nc true\n", encoding="utf-8")
-            (work_dir / "pflow_mm.txt").write_text("demo output", encoding="utf-8")
+            run_dir = _sample_run(Path(tmp))
 
             summary = summarize_success_file(run_dir)
             self.assertTrue(summary.exists)
-            self.assertEqual(summary.success_count, 2)
+            self.assertEqual(summary.success_count, 3)
             self.assertEqual(summary.failure_count, 1)
 
             report = generate_run_report(run_dir)
@@ -33,6 +29,12 @@ class AnalysisTests(unittest.TestCase):
             self.assertTrue(Path(report["inventory_csv"]).exists())
             self.assertTrue(Path(report["chart_svg"]).exists())
             self.assertTrue(Path(report["analysis_manifest"]).exists())
+            self.assertTrue(Path(report["master"]["master_csv"]).exists())
+            self.assertTrue(Path(report["master"]["master_cleaned_csv"]).exists())
+            self.assertTrue(Path(report["master"]["outliers_csv"]).exists())
+            self.assertEqual(report["master"]["row_count"], 2)
+            self.assertEqual(report["master"]["cleaned_row_count"], 1)
+            self.assertEqual(report["master"]["outlier_row_count"], 1)
 
     def test_schema_parsers_metrics_manifest_and_raw_enrichment(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -46,6 +48,7 @@ class AnalysisTests(unittest.TestCase):
             dataset = build_run_analysis(run_dir)
             manifest = json.loads(dataset.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["tables"]["perf_mm"]["row_count"], 2)
+            self.assertEqual(manifest["tables"]["branch_metadata"]["row_count"], 2)
             self.assertTrue((run_dir / "reports" / "tables" / "perf_mm.csv").exists())
 
             perf_rows = dataset.tables["perf_mm"].rows
@@ -65,37 +68,22 @@ class AnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(gini([1, 1, 1]), 0.0)
         self.assertAlmostEqual(top_share([1, 1, 8], 1 / 3), 0.8)
 
-    def test_agent_tools_citations_and_restricted_code(self) -> None:
+    @unittest.skipUnless(
+        importlib.util.find_spec("pandas") and importlib.util.find_spec("matplotlib"),
+        "pandas and matplotlib are required for distribution generation",
+    )
+    def test_distribution_exports_are_written_to_run_exports(self) -> None:
         with TemporaryDirectory() as tmp:
             run_dir = _sample_run(Path(tmp))
-            toolbox = AnalysisToolbox(run_dir, max_rows=10, timeout_seconds=5)
+            ensure_branch_master_exports(run_dir)
 
-            answer = NemoClawAgentService(AppSettings(nemoclaw_cli_path=sys.executable)).answer(
-                run_dir,
-                "What is the top thermal bottleneck?",
-            )
-            self.assertTrue(answer.supported)
-            self.assertTrue(answer.citations)
-            self.assertIn("perf_mm", answer.citations[1].source)
-
-            result = toolbox.run_python_analysis(
-                "rows = read_table('perf_mm', limit=1)\n"
-                "print(rows[0]['row_index'])\n"
-                "save_artifact('answer.txt', rows[0]['row_index'])\n"
-            )
-            self.assertTrue(result.data["ok"])
-            self.assertTrue(Path(result.artifact_path).exists())
-
-            with self.assertRaises(ValueError):
-                toolbox.run_python_analysis("save_artifact('../bad.txt', 'nope')\n")
-
-            unsupported = NemoClawAgentService(AppSettings(nemoclaw_cli_path=sys.executable)).answer(
-                run_dir,
-                "Tell me a market price forecast.",
-            )
-            self.assertFalse(unsupported.supported)
-            self.assertTrue(unsupported.citations)
-
+            results = generate_distribution_exports(run_dir, ["area", "voltage_class"])
+            self.assertEqual(len(results), 2)
+            for result in results:
+                self.assertTrue(result.table_csv.exists())
+                self.assertTrue(result.graph_png.exists())
+                self.assertIn(str(run_dir / "exports"), str(result.table_csv))
+                self.assertEqual(result.code_path.name, "distributions.py")
 
 def _sample_run(root: Path) -> Path:
     run_dir = root / "runs" / "2026-06-12_12-00-00"
@@ -135,6 +123,13 @@ def _sample_run(root: Path) -> Path:
  101, 'BUS101', 138.0000, 1, 11, 1, 1, 1.0000, 0.0, 1.1000, 0.9000, 1.1000, 0.9000
  102, 'BUS102', 230.0000, 1, 12, 1, 1, 1.0000, 0.0, 1.1000, 0.9000, 1.1000, 0.9000
 0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+ 101, 102, '1 ', 0.010000, 0.050000, 0.000000, 100.00, 110.00, 120.00, 0.0, 0.0, 0.0, 0.0, 1, 1, 10.0, 1, 1.0
+ 102, 101, '1 ', 0.010000, 0.050000, 0.000000, 1.00, 1.00, 1.00, 0.0, 0.0, 0.0, 0.0, 1, 1, 10.0, 1, 1.0
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 """,
         encoding="utf-8",
     )
@@ -146,6 +141,26 @@ def _sample_run(root: Path) -> Path:
     (work / "perf_mm.txt").write_text(
         "1 101 102 1 0.25 0.01 1.44 -0.24 1.19 1 2\n"
         "2 102 101 1 0.04 0.00 0.64 -0.04 0.60 3 4\n",
+        encoding="utf-8",
+    )
+    (work / "pflow.txt").write_text(
+        "1 101 102 1 70 0 0\n"
+        "2 102 101 1 3 0 0\n",
+        encoding="utf-8",
+    )
+    (work / "pflow_mm.txt").write_text(
+        "1 101 102 1 50 -60 120 -110 70 -100 100 1 2\n"
+        "2 102 101 1 2 -5 20 -7 18 -1 1 3 4\n",
+        encoding="utf-8",
+    )
+    (work / "qflow.txt").write_text(
+        "1 101 102 1 10 0 0\n"
+        "2 102 101 1 1 0 0\n",
+        encoding="utf-8",
+    )
+    (work / "qflow_mm.txt").write_text(
+        "1 101 102 1 10 -15 22 -25 12 -100 100 1 2\n"
+        "2 102 101 1 1 -2 4 -3 3 -1 1 3 4\n",
         encoding="utf-8",
     )
     (work / "perf_sum.txt").write_text(
