@@ -7,10 +7,11 @@ import json
 from pathlib import Path
 import shutil
 
-from gridpack_workbench.core.validation import sanitize_project_name
+from gridpack_workbench.core.validation import ValidationError, sanitize_project_name
 
 
 PROJECT_FILE_NAME = "project.json"
+RESERVED_PROJECT_ROOT_NAMES = {"exports", "logs", "original_inputs", "reports", "runs", "work"}
 
 
 def utc_timestamp() -> str:
@@ -33,6 +34,28 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_project_root_dir(root_dir: str | Path) -> Path:
+    resolved = Path(root_dir).expanduser().resolve()
+    if resolved.name in RESERVED_PROJECT_ROOT_NAMES:
+        raise ValidationError(
+            f"Project folder cannot be the managed `{resolved.name}` folder. Choose the top-level project folder instead."
+        )
+
+    for parent in resolved.parents:
+        if (parent / PROJECT_FILE_NAME).exists():
+            raise ValidationError(
+                f"Project folder is inside an existing GridPACK Workbench project: {parent}. "
+                "Choose that top-level project folder instead."
+            )
+        if parent.name in RESERVED_PROJECT_ROOT_NAMES:
+            raise ValidationError(
+                f"Project folder cannot be inside the managed `{parent.name}` folder. "
+                "Choose the top-level project folder instead."
+            )
+
+    return resolved
 
 
 @dataclass(slots=True)
@@ -74,7 +97,7 @@ class ProjectData:
 class Project:
     def __init__(self, name: str, root_dir: str | Path):
         self.name = sanitize_project_name(name)
-        self.root_dir = Path(root_dir).expanduser().resolve()
+        self.root_dir = validate_project_root_dir(root_dir)
 
     @property
     def project_file(self) -> Path:

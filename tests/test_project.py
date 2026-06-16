@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from gridpack_workbench.core.project import Project, copy_project_inputs_to_run, open_project
+from gridpack_workbench.core.validation import ValidationError
 
 
 class ProjectTests(unittest.TestCase):
@@ -43,6 +44,22 @@ class ProjectTests(unittest.TestCase):
             self.assertEqual(len(copied), 2)
             self.assertTrue((run_dir / "work" / "case.raw").exists())
             self.assertTrue((run_dir / "work" / "input.xml").exists())
+
+    def test_project_root_cannot_be_nested_inside_managed_project_folders(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            xml = root / "input.xml"
+            xml.write_text("<Configuration />", encoding="utf-8")
+
+            project = Project("Pilot Project 3", root / "project")
+            project.save([xml], "input.xml")
+            run_dir = project.create_run_folder()
+
+            with self.assertRaises(ValidationError):
+                Project("Nested Runs Project", project.runs_dir)
+
+            with self.assertRaises(ValidationError):
+                Project("Nested Work Project", run_dir / "work")
 
 
 if __name__ == "__main__":
