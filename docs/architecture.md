@@ -1,6 +1,8 @@
 # Architecture
 
-GridPACK Workbench separates the consumer GUI from the execution engine. The GUI gathers input files and settings. The core layer creates a local project and run folder. The runner layer builds a Docker argument list and runs GridPACK. The analysis layer reads local outputs and creates reports.
+GridPACK Workbench separates the consumer GUI from the execution engine. The GUI gathers input files and settings. The
+core layer creates a local project and run folder. The runner layer builds a Docker argument list and runs GridPACK. The
+analysis layer reads local outputs and creates reports.
 
 ```text
 PySide6 GUI
@@ -33,11 +35,13 @@ A regulator-facing project is stored under:
     exports/
 ```
 
-The `original_inputs/` directory stores the project input files. Every run copies those files into that run's `work/` directory. Docker sees only the run's `work/` directory, mounted at `/app/workspace`.
+The `original_inputs/` directory stores the project input files. Every run copies those files into that run's `work/`
+directory. Docker sees only the run's `work/` directory, mounted at `/app/workspace`.
 
 ## Docker Boundary
 
-GridPACK's Docker documentation describes `/app/workspace` as the working directory and shows `mpirun -n ...` inside the container. This app follows that model and also adds security and reproducibility defaults:
+GridPACK's Docker documentation describes `/app/workspace` as the working directory and shows `mpirun -n ...` inside the
+container. This app follows that model and also adds security and reproducibility defaults:
 
 - `--network none`
 - `--pull=never`
@@ -47,7 +51,8 @@ GridPACK's Docker documentation describes `/app/workspace` as the working direct
 - `-v run/work:/app/workspace`
 - `-w /app/workspace`
 
-The command is built as a Python list and passed to `subprocess.Popen` without a shell. This avoids shell quoting problems and command injection risks.
+The command is built as a Python list and passed to `subprocess.Popen` without a shell. This avoids shell quoting
+problems and command injection risks.
 
 ## Audit Files
 
@@ -60,7 +65,7 @@ Each run creates:
 
 ## Analysis Layer
 
-The first analysis layer is deliberately conservative. It can:
+The analysis layer is deliberately local and file-based. It can:
 
 - list output files;
 - estimate success/failure counts from `success.txt`;
@@ -72,6 +77,18 @@ The first analysis layer is deliberately conservative. It can:
 - write `exports/master.csv`, `exports/master_cleaned.csv`, and `exports/outliers.csv`;
 - write distribution plot PNGs and companion CSV tables under `exports/distributions/`.
 
-The next production step is to add exact parsers for the real `success.txt`, `pflow_mm.txt`, `vmag_mm.txt`, `qflow_mm.txt`, and other GridPACK output formats used by your workflow.
+Analysis responsibilities are split by module so parser, enrichment, metric, and export changes stay isolated:
 
-The branch master and distribution exporters use `cuDF.pandas` when RAPIDS cuDF is available, then import pandas through that accelerated layer. Development systems without cuDF fall back to pandas so the code remains testable.
+- `parser_models.py`: defines shared parser data objects such as `ParsedTable`.
+- `parsers.py`: converts GridPACK output files into normalized `ParsedTable` objects.
+- `table_schemas.py`: defines the expected columns and types for whitespace-delimited GridPACK TXT outputs.
+- `raw_parsers.py`: parses RAW bus and non-transformer branch metadata.
+- `enrichment.py`: adds RAW-derived bus names, areas, zones, and voltage classes to parsed tables.
+- `metrics.py`: computes decision-support metrics from already-parsed tables.
+- `dataset.py`: orchestrates parsing, enrichment, metrics, table exports, and the analysis manifest.
+- `master.py`: creates branch-level `master.csv`, `master_cleaned.csv`, and `outliers.csv`.
+- `distributions.py`: creates utilization distribution tables and plots from `master_cleaned.csv`.
+- `report_html.py`: renders the local decision-support HTML report from a pure view model.
+
+The branch master and distribution exporters use `cuDF.pandas` when RAPIDS cuDF is available, then import pandas through
+that accelerated layer. Development systems without cuDF fall back to pandas so the code remains testable.

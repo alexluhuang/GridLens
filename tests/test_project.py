@@ -61,6 +61,34 @@ class ProjectTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 Project("Nested Work Project", run_dir / "work")
 
+    def test_project_save_requires_xml_file_to_be_an_input_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "case.raw"
+            raw.write_text("raw", encoding="utf-8")
+
+            project = Project("Missing XML Project", root / "project")
+
+            with self.assertRaisesRegex(ValidationError, "selected XML file"):
+                project.save([raw], "input.xml")
+
+    def test_project_save_rejects_duplicate_input_file_names(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+            first_xml = first / "input.xml"
+            second_xml = second / "input.xml"
+            first_xml.write_text("<Configuration />", encoding="utf-8")
+            second_xml.write_text("<Configuration />", encoding="utf-8")
+
+            project = Project("Duplicate Inputs Project", root / "project")
+
+            with self.assertRaisesRegex(ValidationError, "unique file names"):
+                project.save([first_xml, second_xml], "input.xml")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
 from gridpack_workbench.core.app_settings import AppSettings
+from gridpack_workbench.core.project import Project, ProjectData
 from gridpack_workbench.gui.analysis_tab import AnalysisTab
 from gridpack_workbench.gui.help_tab import HelpTab
 from gridpack_workbench.gui.project_tab import ProjectTab
@@ -17,8 +18,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.settings = AppSettings.load()
-        self.project = None
-        self.project_data = None
+        self.project: Project | None = None
+        self.project_data: ProjectData | None = None
 
         self.setWindowTitle(self.settings.app_name)
         self.resize(1240, 800)
@@ -38,7 +39,7 @@ class MainWindow(QMainWindow):
         title_stack.setSpacing(2)
         title = QLabel("GridPACK Workbench")
         title.setObjectName("appTitle")
-        subtitle = QLabel("Local contingency analysis, Docker execution, and decision-support exports")
+        subtitle = QLabel("High-Performance Power Grid Simulation and Contingency Analysis")
         subtitle.setObjectName("appSubtitle")
         title_stack.addWidget(title)
         title_stack.addWidget(subtitle)
@@ -65,7 +66,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.run_tab, "Run")
         self.tabs.addTab(self.results_tab, "Results")
         self.tabs.addTab(self.analysis_tab, "Analysis")
-        self.tabs.addTab(self.help_tab, "Workflow")
+        self.tabs.addTab(self.help_tab, "Help")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.run_tab.run_finished.connect(self.on_run_finished)
@@ -73,7 +74,7 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Create or open a project to begin.")
 
-    def on_project_changed(self, project: object, project_data: object) -> None:
+    def on_project_changed(self, project: Project, project_data: ProjectData) -> None:
         self.project = project
         self.project_data = project_data
         self.run_tab.set_project(project, project_data)
@@ -87,7 +88,8 @@ class MainWindow(QMainWindow):
         self.results_tab.refresh_runs(select_run=path)
         self.analysis_tab.refresh_runs(select_run=path)
         self.tabs.setCurrentWidget(self.results_tab)
-        self.context_label.setText(f"{self.project_data.name if self.project_data else 'Project'} · latest run {path.name}")
+        project_name = self.project_data.name if self.project_data else "Project"
+        self.context_label.setText(f"{project_name} · latest run {path.name}")
         self.statusBar().showMessage(f"Run finished: {path.name}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming

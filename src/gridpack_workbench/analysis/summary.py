@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import html
 import json
 from pathlib import Path
 import shutil
@@ -11,6 +10,7 @@ from gridpack_workbench.analysis.charts import create_success_svg
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridpack_workbench.analysis.master import build_branch_master_exports
 from gridpack_workbench.analysis.parsers import list_output_files, summarize_success_file
+from gridpack_workbench.analysis.report_html import DecisionSupportReportView, render_decision_support_report_html
 
 
 def write_output_inventory(run_dir: str | Path) -> Path:
@@ -73,86 +73,28 @@ def generate_decision_support_report(run_dir: str | Path, dataset: RunAnalysisDa
     summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     html_report = report_dir / "decision_support_report.html"
-    rows = "\n".join(
-        "<tr>"
-        f"<td>{html.escape(item.file_name)}</td>"
-        f"<td>{html.escape(item.relative_path)}</td>"
-        f"<td>{item.size_bytes}</td>"
-        f"<td>{html.escape(item.suffix)}</td>"
-        "</tr>"
-        for item in files
-    )
     top_bottlenecks = thermal.get("top_bottlenecks", []) if isinstance(thermal, dict) else []
     voltage_low = voltage.get("worst_low_voltage", []) if isinstance(voltage, dict) else []
     contingency = dataset.metrics.get("contingencies", {})
     worst_contingencies = contingency.get("worst_by_performance_index", []) if isinstance(contingency, dict) else []
     notes = dataset.metrics.get("notes", [])
-    html_report.write_text(
-        f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>GridPACK Decision Support Report</title>
-  <style>
-    body {{ font-family: Arial, sans-serif; margin: 32px; color: #172033; line-height: 1.42; }}
-    table {{ border-collapse: collapse; width: 100%; margin-top: 16px; }}
-    th, td {{ border: 1px solid #c8ced8; padding: 8px 10px; text-align: left; }}
-    th {{ background: #eef2f6; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }}
-    .metric {{ border: 1px solid #d8dde7; padding: 12px; background: #f8fafc; }}
-    .metric strong {{ display: block; font-size: 24px; margin-top: 4px; }}
-    .note {{ color: #485366; }}
-    .section {{ margin-top: 30px; }}
-  </style>
-</head>
-<body>
-  <h1>GridPACK Decision Support Report</h1>
-  <p><strong>Run folder:</strong> {html.escape(str(run_path))}</p>
-  <section class="section">
-    <h2>Overview</h2>
-    <div class="grid">
-      <div class="metric">Contingencies<strong>{success_metrics.get("total", success.total_count) if isinstance(success_metrics, dict) else success.total_count}</strong></div>
-      <div class="metric">Success Rate<strong>{_format_metric(success_metrics.get("success_rate_pct") if isinstance(success_metrics, dict) else None, "%")}</strong></div>
-      <div class="metric">Failed<strong>{success.failure_count}</strong></div>
-      <div class="metric">Thermal Facilities<strong>{_format_metric(summary["thermal_facility_count"])}</strong></div>
-      <div class="metric">Mean Worst Utilization<strong>{_format_metric(summary["mean_worst_utilization_pct"], "%")}</strong></div>
-      <div class="metric">Gini Stress Concentration<strong>{_format_metric(summary["gini_worst_utilization"])}</strong></div>
-      <div class="metric">Low Voltage Violations<strong>{summary["low_voltage_violations"]}</strong></div>
-      <div class="metric">High Voltage Violations<strong>{summary["high_voltage_violations"]}</strong></div>
-    </div>
-    <p class="note">{html.escape(success.note)}</p>
-    <img src="success_summary.svg" alt="Contingency success summary chart">
-  </section>
-  <section class="section">
-    <h2>Top Thermal Bottlenecks</h2>
-    {_html_table(top_bottlenecks, ["row_index", "from_bus", "to_bus", "line_id", "voltage_class", "area", "max_utilization_pct", "worst_headroom_pct", "max_contingency"])}
-  </section>
-  <section class="section">
-    <h2>Worst Low-Voltage Buses</h2>
-    {_html_table(voltage_low, ["row_index", "bus_id", "bus_name", "base_kv", "area", "min_value", "min_voltage_margin", "min_contingency"])}
-  </section>
-  <section class="section">
-    <h2>Worst Contingencies By Performance Index</h2>
-    {_html_table(worst_contingencies, ["contingency_index", "success", "violation", "isolated_warning", "performance_index_sum", "performance_index_average"])}
-  </section>
-  <section class="section">
-    <h2>Data Provenance</h2>
-    <p><strong>Analysis manifest:</strong> {html.escape(str(dataset.manifest_path))}</p>
-    <p><strong>Normalized tables:</strong> {html.escape(str(dataset.table_dir))}</p>
-    <ul>{''.join(f'<li>{html.escape(str(note))}</li>' for note in notes)}</ul>
-  </section>
-  <section class="section">
-    <h2>Output Files</h2>
-    <table>
-      <thead><tr><th>File</th><th>Path</th><th>Size bytes</th><th>Type</th></tr></thead>
-      <tbody>{rows}</tbody>
-    </table>
-  </section>
-</body>
-</html>
-""",
-        encoding="utf-8",
+    report_view = DecisionSupportReportView(
+        run_path=run_path,
+        manifest_path=dataset.manifest_path,
+        table_dir=dataset.table_dir,
+        summary=summary,
+        success_note=success.note,
+        success_total=success_metrics.get("total", success.total_count)
+        if isinstance(success_metrics, dict)
+        else success.total_count,
+        success_rate_pct=success_metrics.get("success_rate_pct") if isinstance(success_metrics, dict) else None,
+        output_files=files,
+        top_bottlenecks=top_bottlenecks,
+        voltage_low=voltage_low,
+        worst_contingencies=worst_contingencies,
+        notes=notes if isinstance(notes, list) else [],
     )
+    html_report.write_text(render_decision_support_report_html(report_view), encoding="utf-8")
 
     summary["summary_json"] = str(summary_json)
     summary["html_report"] = str(html_report)
@@ -189,22 +131,3 @@ def copy_report_bundle(run_dir: str | Path, destination_dir: str | Path) -> Path
         shutil.rmtree(destination)
     shutil.copytree(source, destination)
     return destination
-
-
-def _format_metric(value: object, suffix: str = "") -> str:
-    if value is None or value == "":
-        return "n/a"
-    if isinstance(value, float):
-        return f"{value:.2f}{suffix}"
-    return f"{value}{suffix}"
-
-
-def _html_table(rows: list[dict[str, object]], columns: list[str]) -> str:
-    if not rows:
-        return "<p class=\"note\">No rows available.</p>"
-    header = "".join(f"<th>{html.escape(column)}</th>" for column in columns)
-    body = []
-    for row in rows:
-        cells = "".join(f"<td>{html.escape(str(row.get(column, '')))}</td>" for column in columns)
-        body.append(f"<tr>{cells}</tr>")
-    return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body)}</tbody></table>"

@@ -12,6 +12,20 @@ license = { text = "GPL-3.0-only" }
 authors = [
   { name = "GridPACK Workbench Contributors" }
 ]
+keywords = ["gridpack", "contingency-analysis", "docker", "power-systems", "qt"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
 dependencies = [
   "PySide6>=6.6,<7"
 ]
@@ -22,6 +36,7 @@ analysis = [
   "pandas>=2.2"
 ]
 dev = [
+  "tomli>=2; python_version < '3.11'",
   "pytest>=8",
   "pyinstaller>=6"
 ]
@@ -38,3 +53,5 @@ gridpack_workbench = ["resources/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-ra --strict-config --strict-markers"
+xfail_strict = true

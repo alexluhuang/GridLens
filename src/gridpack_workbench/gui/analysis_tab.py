@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import html
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTableWidget,
-    QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
     QVBoxLayout,
@@ -35,6 +33,18 @@ from gridpack_workbench.analysis.master import UTILIZATION_COLUMNS, ensure_branc
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridpack_workbench.analysis.summary import generate_decision_support_report
 from gridpack_workbench.core.project import Project
+from gridpack_workbench.gui.analysis_view_models import (
+    CONTINGENCY_TABLE_COLUMNS,
+    DISTRIBUTION_OUTPUT_COLUMNS,
+    THERMAL_TABLE_COLUMNS,
+    VOLTAGE_TABLE_COLUMNS,
+    filter_performance_rows,
+    numeric_value,
+    render_analysis_overview_html,
+    should_select_distribution_variable,
+    top_numeric_rows,
+)
+from gridpack_workbench.gui.table_utils import populate_table
 from gridpack_workbench.gui.theme import set_button_role
 
 
@@ -123,10 +133,13 @@ class AnalysisTab(QWidget):
             self._refresh_filters()
             self._refresh_distribution_variables()
             self._render_dataset()
+            master_cleaned = self.current_master.get("master_cleaned_csv", "")
             QMessageBox.information(
                 self,
                 "Analysis generated",
-                f"Decision support analysis generated:\n{self.current_dataset.manifest_path}\n\nMaster dataset:\n{self.current_master.get('master_cleaned_csv', '')}",
+                "Decision support analysis generated:\n"
+                f"{self.current_dataset.manifest_path}\n\n"
+                f"Master dataset:\n{master_cleaned}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Analysis failed", str(exc))
@@ -167,7 +180,9 @@ class AnalysisTab(QWidget):
             layout.addWidget(self.thermal_canvas)
         else:
             self.thermal_figure = None
-            self.thermal_canvas = QLabel("Install the analysis optional dependencies to enable embedded Matplotlib charts.")
+            self.thermal_canvas = QLabel(
+                "Install the analysis optional dependencies to enable embedded Matplotlib charts."
+            )
             layout.addWidget(self.thermal_canvas)
 
         self.thermal_table = QTableWidget(0, 9)
@@ -230,10 +245,10 @@ class AnalysisTab(QWidget):
             compute decision-support metrics, generate normalized tables, and create an HTML report.</p>
             """
         )
-        self._fill_table(self.thermal_table, [], [])
-        self._fill_table(self.voltage_table, [], [])
-        self._fill_table(self.contingency_table, [], [])
-        self._fill_table(self.distribution_outputs, [], [])
+        populate_table(self.thermal_table, [], [])
+        populate_table(self.voltage_table, [], [])
+        populate_table(self.contingency_table, [], [])
+        populate_table(self.distribution_outputs, [], [])
 
     def _refresh_filters(self) -> None:
         self.area_filter.blockSignals(True)
@@ -267,7 +282,7 @@ class AnalysisTab(QWidget):
         variables = distribution_variables_from_master(run_dir)
         for variable in variables:
             item = QListWidgetItem(variable)
-            if variable in {"area", "voltage_class", "from_area", "to_area", "rate_a", "raw_branch_type"}:
+            if should_select_distribution_variable(variable):
                 item.setSelected(True)
             self.distribution_variables.addItem(item)
 
@@ -305,7 +320,7 @@ class AnalysisTab(QWidget):
             }
             for result in results
         ]
-        self._fill_table(self.distribution_outputs, rows, ["variable", "table_csv", "graph_png", "code_path"])
+        populate_table(self.distribution_outputs, rows, DISTRIBUTION_OUTPUT_COLUMNS)
         QMessageBox.information(self, "Distributions generated", f"Generated {len(results)} graph/table pairs.")
 
     def _render_dataset(self) -> None:
@@ -317,56 +332,29 @@ class AnalysisTab(QWidget):
     def _render_overview(self) -> None:
         if not self.current_dataset:
             return
-        metrics = self.current_dataset.metrics
-        success = metrics.get("success", {}) if isinstance(metrics.get("success"), dict) else {}
-        thermal = metrics.get("thermal", {}) if isinstance(metrics.get("thermal"), dict) else {}
-        voltage = metrics.get("voltage", {}) if isinstance(metrics.get("voltage"), dict) else {}
-        notes = metrics.get("notes", [])
-        master_cleaned = self.current_master.get("master_cleaned_csv", "")
         self.overview.setHtml(
-            f"""
-            <h2>Decision Support Overview</h2>
-            <p><b>Run:</b> {html.escape(str(self.current_dataset.run_dir))}</p>
-            <p><b>Manifest:</b> {html.escape(str(self.current_dataset.manifest_path))}</p>
-            <table>
-              <tr><th>Metric</th><th>Value</th></tr>
-              <tr><td>Contingencies</td><td>{success.get('total', 0)}</td></tr>
-              <tr><td>Success rate</td><td>{success.get('success_rate_pct', 0)}%</td></tr>
-              <tr><td>Failures</td><td>{success.get('failure', 0)}</td></tr>
-              <tr><td>Thermal facilities</td><td>{thermal.get('facility_count', 0)}</td></tr>
-              <tr><td>Mean worst utilization</td><td>{thermal.get('mean_worst_utilization_pct', 'n/a')}%</td></tr>
-              <tr><td>Stress Gini</td><td>{thermal.get('gini_worst_utilization', 'n/a')}</td></tr>
-              <tr><td>Top 20% stress share</td><td>{thermal.get('top_20_pct_stress_share', 'n/a')}</td></tr>
-              <tr><td>Low voltage violations</td><td>{voltage.get('low_voltage_violations', 0)}</td></tr>
-              <tr><td>High voltage violations</td><td>{voltage.get('high_voltage_violations', 0)}</td></tr>
-            </table>
-            <p><b>Master cleaned CSV:</b> {html.escape(str(master_cleaned))}</p>
-            <h3>Assumptions And Data Notes</h3>
-            <ul>{''.join(f'<li>{html.escape(str(note))}</li>' for note in notes)}</ul>
-            """
+            render_analysis_overview_html(
+                self.current_dataset.run_dir,
+                self.current_dataset.manifest_path,
+                self.current_dataset.metrics,
+                self.current_master,
+            )
         )
 
     def _render_thermal(self) -> None:
-        rows = self._filtered_perf_rows()
-        rows.sort(key=lambda row: float(row.get("max_utilization_pct") or 0), reverse=True)
-        rows = rows[: self.top_n.value()]
-        columns = [
-            "row_index",
-            "from_bus",
-            "to_bus",
-            "line_id",
-            "voltage_class",
-            "area",
-            "base_utilization_pct",
+        rows = top_numeric_rows(
+            self._filtered_perf_rows(),
             "max_utilization_pct",
-            "max_contingency",
-        ]
-        self._fill_table(self.thermal_table, rows, columns)
+            self.top_n.value(),
+            reverse=True,
+            missing_value=0.0,
+        )
+        populate_table(self.thermal_table, rows, THERMAL_TABLE_COLUMNS)
         if FigureCanvas and Figure and self.thermal_figure and rows:
             self.thermal_figure.clear()
             axis = self.thermal_figure.add_subplot(111)
             labels = [str(row.get("row_index", "")) for row in rows[:15]]
-            values = [float(row.get("max_utilization_pct") or 0) for row in rows[:15]]
+            values = [numeric_value(row.get("max_utilization_pct"), 0.0) for row in rows[:15]]
             axis.bar(labels, values, color="#2f6f9f")
             axis.axhline(80, color="#a66a00", linestyle="--", linewidth=1)
             axis.axhline(100, color="#a33d3d", linestyle="--", linewidth=1)
@@ -391,28 +379,23 @@ class AnalysisTab(QWidget):
             &nbsp; <b>High violations:</b> {voltage.get('high_voltage_violations', 0)}</p>
             """
         )
-        rows = self._table_rows("vmag_mm")
-        rows.sort(key=lambda row: float(row.get("min_value") or 999))
-        columns = ["row_index", "bus_id", "bus_name", "base_kv", "area", "min_value", "min_voltage_margin", "min_contingency"]
-        self._fill_table(self.voltage_table, rows[: self.top_n.value()], columns)
+        rows = top_numeric_rows(
+            self._table_rows("vmag_mm"),
+            "min_value",
+            self.top_n.value(),
+            reverse=False,
+            missing_value=999.0,
+        )
+        populate_table(self.voltage_table, rows, VOLTAGE_TABLE_COLUMNS)
 
     def _render_contingencies(self) -> None:
         if not self.current_dataset:
             return
         contingency = self.current_dataset.metrics.get("contingencies", {})
         rows = contingency.get("worst_by_performance_index", []) if isinstance(contingency, dict) else []
-        self.contingency_summary.setHtml(
-            f"<p><b>Contingencies:</b> {contingency.get('contingency_count', 0) if isinstance(contingency, dict) else 0}</p>"
-        )
-        columns = [
-            "contingency_index",
-            "success",
-            "violation",
-            "isolated_warning",
-            "performance_index_sum",
-            "performance_index_average",
-        ]
-        self._fill_table(self.contingency_table, rows[: self.top_n.value()], columns)
+        contingency_count = contingency.get("contingency_count", 0) if isinstance(contingency, dict) else 0
+        self.contingency_summary.setHtml(f"<p><b>Contingencies:</b> {contingency_count}</p>")
+        populate_table(self.contingency_table, rows[: self.top_n.value()], CONTINGENCY_TABLE_COLUMNS)
 
     def _table_rows(self, table_name: str) -> list[dict[str, object]]:
         if not self.current_dataset:
@@ -421,23 +404,6 @@ class AnalysisTab(QWidget):
         return list(table.rows) if table else []
 
     def _filtered_perf_rows(self) -> list[dict[str, object]]:
-        rows = self._table_rows("perf_mm")
         area = self.area_filter.currentData() if self.area_filter.count() else ""
         voltage_class = self.voltage_filter.currentData() if self.voltage_filter.count() else ""
-        if area:
-            rows = [row for row in rows if str(row.get("area")) == str(area)]
-        if voltage_class:
-            rows = [row for row in rows if str(row.get("voltage_class")) == str(voltage_class)]
-        return rows
-
-    def _fill_table(self, table: QTableWidget, rows: list[dict[str, object]], columns: list[str]) -> None:
-        table.clear()
-        table.setColumnCount(len(columns))
-        table.setRowCount(len(rows))
-        table.setHorizontalHeaderLabels(columns)
-        table.horizontalHeader().setStretchLastSection(True)
-        for row_index, row in enumerate(rows):
-            for column_index, column in enumerate(columns):
-                item = QTableWidgetItem(str(row.get(column, "")))
-                item.setFlags(item.flags() ^ Qt.ItemIsEditable)
-                table.setItem(row_index, column_index, item)
+        return filter_performance_rows(self._table_rows("perf_mm"), area, voltage_class)

@@ -1,237 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import csv
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 
-
-PARSER_VERSION = "2026.06.13"
-
-
-@dataclass(slots=True)
-class OutputFile:
-    file_name: str
-    relative_path: str
-    size_bytes: int
-    suffix: str
-
-
-@dataclass(slots=True)
-class SuccessSummary:
-    exists: bool
-    file_name: str
-    success_count: int = 0
-    failure_count: int = 0
-    unknown_count: int = 0
-    total_count: int = 0
-    note: str = ""
-
-
-@dataclass(slots=True)
-class ParsedTable:
-    name: str
-    source_file: str
-    columns: list[str]
-    rows: list[dict[str, object]] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
-
-    @property
-    def row_count(self) -> int:
-        return len(self.rows)
-
-    def schema_dict(self) -> dict[str, object]:
-        return {
-            "name": self.name,
-            "source_file": self.source_file,
-            "columns": self.columns,
-            "row_count": self.row_count,
-            "notes": self.notes,
-            "parser_version": PARSER_VERSION,
-        }
-
-
-TABLE_SCHEMAS: dict[str, dict[str, object]] = {
-    "vmag": {
-        "file": "vmag.txt",
-        "columns": ["row_index", "bus_id", "average", "rms_average", "rms_base"],
-        "ints": {"row_index", "bus_id"},
-        "strings": set(),
-    },
-    "vang": {
-        "file": "vang.txt",
-        "columns": ["row_index", "bus_id", "average", "rms_average", "rms_base"],
-        "ints": {"row_index", "bus_id"},
-        "strings": set(),
-    },
-    "vmag_mm": {
-        "file": "vmag_mm.txt",
-        "columns": [
-            "row_index",
-            "bus_id",
-            "base_value",
-            "min_value",
-            "max_value",
-            "min_deviation",
-            "max_deviation",
-            "min_contingency",
-            "max_contingency",
-        ],
-        "ints": {"row_index", "bus_id", "min_contingency", "max_contingency"},
-        "strings": set(),
-    },
-    "vang_mm": {
-        "file": "vang_mm.txt",
-        "columns": [
-            "row_index",
-            "bus_id",
-            "base_value",
-            "min_value",
-            "max_value",
-            "min_deviation",
-            "max_deviation",
-            "min_contingency",
-            "max_contingency",
-        ],
-        "ints": {"row_index", "bus_id", "min_contingency", "max_contingency"},
-        "strings": set(),
-    },
-    "pgen": {
-        "file": "pgen.txt",
-        "columns": ["row_index", "bus_id", "generator_id", "average", "rms_average", "rms_base"],
-        "ints": {"row_index", "bus_id"},
-        "strings": {"generator_id"},
-    },
-    "qgen": {
-        "file": "qgen.txt",
-        "columns": ["row_index", "bus_id", "generator_id", "average", "rms_average", "rms_base"],
-        "ints": {"row_index", "bus_id"},
-        "strings": {"generator_id"},
-    },
-    "pgen_mm": {
-        "file": "pgen_mm.txt",
-        "columns": [
-            "row_index",
-            "bus_id",
-            "generator_id",
-            "base_value",
-            "min_value",
-            "max_value",
-            "min_deviation",
-            "max_deviation",
-            "min_contingency",
-            "max_contingency",
-        ],
-        "ints": {"row_index", "bus_id", "min_contingency", "max_contingency"},
-        "strings": {"generator_id"},
-    },
-    "qgen_mm": {
-        "file": "qgen_mm.txt",
-        "columns": [
-            "row_index",
-            "bus_id",
-            "generator_id",
-            "base_value",
-            "min_value",
-            "max_value",
-            "min_deviation",
-            "max_deviation",
-            "min_contingency",
-            "max_contingency",
-        ],
-        "ints": {"row_index", "bus_id", "min_contingency", "max_contingency"},
-        "strings": {"generator_id"},
-    },
-    "pflow": {
-        "file": "pflow.txt",
-        "columns": ["row_index", "from_bus", "to_bus", "line_id", "average", "rms_average", "rms_base"],
-        "ints": {"row_index", "from_bus", "to_bus"},
-        "strings": {"line_id"},
-    },
-    "qflow": {
-        "file": "qflow.txt",
-        "columns": ["row_index", "from_bus", "to_bus", "line_id", "average", "rms_average", "rms_base"],
-        "ints": {"row_index", "from_bus", "to_bus"},
-        "strings": {"line_id"},
-    },
-    "pflow_mm": {
-        "file": "pflow_mm.txt",
-        "columns": [
-            "row_index",
-            "from_bus",
-            "to_bus",
-            "line_id",
-            "base_value",
-            "min_value",
-            "max_value",
-            "min_deviation",
-            "max_deviation",
-            "min_allowable",
-            "max_allowable",
-            "min_contingency",
-            "max_contingency",
-        ],
-        "ints": {"row_index", "from_bus", "to_bus", "min_contingency", "max_contingency"},
-        "strings": {"line_id"},
-    },
-    "qflow_mm": {
-        "file": "qflow_mm.txt",
-        "columns": [
-            "row_index",
-            "from_bus",
-            "to_bus",
-            "line_id",
-            "base_value",
-            "min_value",
-            "max_value",
-            "min_deviation",
-            "max_deviation",
-            "min_allowable",
-            "max_allowable",
-            "min_contingency",
-            "max_contingency",
-        ],
-        "ints": {"row_index", "from_bus", "to_bus", "min_contingency", "max_contingency"},
-        "strings": {"line_id"},
-    },
-    "perf_mm": {
-        "file": "perf_mm.txt",
-        "columns": [
-            "row_index",
-            "from_bus",
-            "to_bus",
-            "line_id",
-            "base_value",
-            "min_value",
-            "max_value",
-            "min_deviation",
-            "max_deviation",
-            "min_contingency",
-            "max_contingency",
-        ],
-        "ints": {"row_index", "from_bus", "to_bus", "min_contingency", "max_contingency"},
-        "strings": {"line_id"},
-    },
-    "perf_sum": {
-        "file": "perf_sum.txt",
-        "columns": ["contingency_index", "performance_index_sum", "performance_index_average"],
-        "ints": {"contingency_index"},
-        "strings": set(),
-    },
-    "line_flt_cnt": {
-        "file": "line_flt_cnt.txt",
-        "columns": ["row_index", "from_bus", "to_bus", "line_id", "fault_count"],
-        "ints": {"row_index", "from_bus", "to_bus", "fault_count"},
-        "strings": {"line_id"},
-    },
-    "pq_change_cnt": {
-        "file": "pq_change_cnt.txt",
-        "columns": ["row_index", "bus_id", "pq_change_count"],
-        "ints": {"row_index", "bus_id", "pq_change_count"},
-        "strings": set(),
-    },
-}
+from gridpack_workbench.analysis.parser_models import OutputFile, PARSER_VERSION, ParsedTable, SuccessSummary
+from gridpack_workbench.analysis.raw_parsers import parse_raw_branch_metadata, parse_raw_bus_metadata
+from gridpack_workbench.analysis.table_schemas import TABLE_SCHEMAS
 
 
 def list_output_files(run_dir: str | Path) -> list[OutputFile]:
@@ -351,14 +127,14 @@ def summarize_success_file(run_dir: str | Path) -> SuccessSummary:
 
 def parse_gridpack_table(run_dir: str | Path, table_name: str) -> ParsedTable:
     schema = TABLE_SCHEMAS[table_name]
-    columns = list(schema["columns"])  # type: ignore[arg-type]
-    source_file = str(schema["file"])
+    columns = list(schema["columns"])
+    source_file = schema["file"]
     path = Path(run_dir) / "work" / source_file
     if not path.exists():
         return ParsedTable(table_name, source_file, columns, notes=[f"{source_file} was not found."])
 
-    int_columns = set(schema["ints"])  # type: ignore[arg-type]
-    string_columns = set(schema["strings"])  # type: ignore[arg-type]
+    int_columns = schema["ints"]
+    string_columns = schema["strings"]
     rows: list[dict[str, object]] = []
     rejected = 0
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -419,140 +195,6 @@ def parse_input_xml(run_dir: str | Path) -> ParsedTable:
     return ParsedTable("input_settings", "input.xml", columns, [row])
 
 
-def parse_raw_bus_metadata(run_dir: str | Path, raw_file_name: str = "training.raw") -> ParsedTable:
-    path = Path(run_dir) / "work" / raw_file_name
-    columns = ["bus_id", "bus_name", "base_kv", "area", "zone", "owner", "vm", "va"]
-    if not path.exists():
-        return ParsedTable("bus_metadata", raw_file_name, columns, notes=[f"{raw_file_name} was not found."])
-
-    rows: list[dict[str, object]] = []
-    bus_started = False
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[1:]:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            parsed = next(csv.reader([line], skipinitialspace=True))
-        except csv.Error:
-            continue
-        if not parsed:
-            continue
-        first = parsed[0].strip()
-        if first == "0" and bus_started:
-            break
-        if first == "0":
-            continue
-        if len(parsed) < 9:
-            if bus_started:
-                break
-            continue
-        try:
-            bus_id = int(first)
-            row = {
-                "bus_id": bus_id,
-                "bus_name": parsed[1].strip().strip("'").strip(),
-                "base_kv": float(parsed[2]),
-                "area": int(parsed[4]),
-                "zone": int(parsed[5]),
-                "owner": int(parsed[6]),
-                "vm": float(parsed[7]),
-                "va": float(parsed[8]),
-            }
-        except (ValueError, IndexError):
-            if bus_started:
-                break
-            continue
-        rows.append(row)
-        bus_started = True
-
-    notes = []
-    if not rows:
-        notes.append("No PSS/E bus metadata records were parsed.")
-    return ParsedTable("bus_metadata", raw_file_name, columns, rows, notes)
-
-
-def parse_raw_branch_metadata(run_dir: str | Path, raw_file_name: str = "training.raw") -> ParsedTable:
-    path = Path(run_dir) / "work" / raw_file_name
-    columns = [
-        "from_bus",
-        "to_bus",
-        "line_id",
-        "r",
-        "x",
-        "b",
-        "ratea",
-        "rateb",
-        "ratec",
-        "gi",
-        "bi",
-        "gj",
-        "bj",
-        "status",
-        "metered_end",
-        "length",
-        "owner_1",
-        "owner_1_fraction",
-        "raw_branch_type",
-    ]
-    if not path.exists():
-        return ParsedTable("branch_metadata", raw_file_name, columns, notes=[f"{raw_file_name} was not found."])
-
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    rows: list[dict[str, object]] = []
-    in_branch_section = False
-    rejected = 0
-
-    for line in lines:
-        upper = line.upper()
-        if "BEGIN BRANCH DATA" in upper or "BEGIN NONTRANSFORMER BRANCH DATA" in upper:
-            in_branch_section = True
-            continue
-        if in_branch_section and ("END OF BRANCH DATA" in upper or "END OF NONTRANSFORMER BRANCH DATA" in upper):
-            break
-        if not in_branch_section:
-            continue
-
-        parsed = _parse_raw_csv_line(line)
-        if not parsed or len(parsed) < 18:
-            rejected += 1
-            continue
-        try:
-            from_bus = abs(int(float(parsed[0])))
-            to_bus = abs(int(float(parsed[1])))
-            rows.append(
-                {
-                    "from_bus": from_bus,
-                    "to_bus": to_bus,
-                    "line_id": _clean_raw_string(parsed[2]),
-                    "r": _optional_float(parsed, 3),
-                    "x": _optional_float(parsed, 4),
-                    "b": _optional_float(parsed, 5),
-                    "ratea": _optional_float(parsed, 6),
-                    "rateb": _optional_float(parsed, 7),
-                    "ratec": _optional_float(parsed, 8),
-                    "gi": _optional_float(parsed, 9),
-                    "bi": _optional_float(parsed, 10),
-                    "gj": _optional_float(parsed, 11),
-                    "bj": _optional_float(parsed, 12),
-                    "status": _optional_int(parsed, 13),
-                    "metered_end": _optional_int(parsed, 14),
-                    "length": _optional_float(parsed, 15),
-                    "owner_1": _optional_int(parsed, 16),
-                    "owner_1_fraction": _optional_float(parsed, 17),
-                    "raw_branch_type": "nontransformer_branch",
-                }
-            )
-        except (ValueError, IndexError):
-            rejected += 1
-
-    notes = []
-    if rejected:
-        notes.append(f"Rejected {rejected} RAW branch lines that did not match the expected nontransformer branch schema.")
-    if not rows:
-        notes.append("No nontransformer branch records were parsed from the RAW file.")
-    return ParsedTable("branch_metadata", raw_file_name, columns, rows, notes)
-
-
 def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
     tables = {"success": parse_success_file(run_dir)}
     for table_name in TABLE_SCHEMAS:
@@ -577,14 +219,10 @@ def sniff_table(path: str | Path, max_rows: int = 20) -> list[list[str]]:
 
     text = table_path.read_text(encoding="utf-8", errors="replace")
     sample = text[:4096]
-    try:
-        dialect = csv.Sniffer().sniff(sample)
-    except csv.Error:
-        dialect = csv.excel
-        dialect.delimiter = "," if "," in sample else None  # type: ignore[attr-defined]
+    dialect = _sniff_csv_dialect(sample)
 
     rows = []
-    if getattr(dialect, "delimiter", None):
+    if dialect is not None:
         reader = csv.reader(text.splitlines(), dialect)
         for row in reader:
             rows.append(row)
@@ -597,37 +235,21 @@ def sniff_table(path: str | Path, max_rows: int = 20) -> list[list[str]]:
     return rows
 
 
+def _sniff_csv_dialect(sample: str) -> type[csv.Dialect] | csv.Dialect | None:
+    try:
+        return csv.Sniffer().sniff(sample)
+    except csv.Error:
+        if "," in sample:
+            return csv.excel
+        return None
+
+
 def _convert_value(value: str, column: str, int_columns: set[str], string_columns: set[str]) -> object:
     if column in string_columns:
         return value.strip().strip("'").strip('"')
     if column in int_columns:
         return int(float(value))
     return float(value)
-
-
-def _parse_raw_csv_line(line: str) -> list[str]:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("@"):
-        return []
-    try:
-        return [part.strip() for part in next(csv.reader([line], skipinitialspace=True))]
-    except csv.Error:
-        return []
-
-
-def _clean_raw_string(value: str) -> str:
-    return value.strip().strip("'").strip('"').strip()
-
-
-def _optional_float(values: list[str], index: int) -> float | None:
-    if index >= len(values) or values[index].strip() == "":
-        return None
-    return float(values[index])
-
-
-def _optional_int(values: list[str], index: int) -> int | None:
-    value = _optional_float(values, index)
-    return int(value) if value is not None else None
 
 
 def _xml_text(root: ET.Element, path: str, default: str) -> str:
@@ -664,3 +286,21 @@ def _xml_bool(root: ET.Element, path: str) -> bool | None:
     if text in {"false", "0", "no"}:
         return False
     return None
+
+
+__all__ = [
+    "OutputFile",
+    "PARSER_VERSION",
+    "ParsedTable",
+    "SuccessSummary",
+    "find_success_file",
+    "list_output_files",
+    "parse_all_output_tables",
+    "parse_gridpack_table",
+    "parse_input_xml",
+    "parse_raw_branch_metadata",
+    "parse_raw_bus_metadata",
+    "parse_success_file",
+    "sniff_table",
+    "summarize_success_file",
+]

@@ -117,7 +117,8 @@ def generate_distribution_exports(
 def _group_labels(pd, series, max_categories: int):
     numeric = pd.to_numeric(series, errors="coerce")
     numeric_nonnull = numeric.dropna()
-    if len(numeric_nonnull) and len(numeric_nonnull) == len(series.dropna()) and numeric_nonnull.nunique() > max_categories:
+    all_nonnull_values_are_numeric = len(numeric_nonnull) and len(numeric_nonnull) == len(series.dropna())
+    if all_nonnull_values_are_numeric and numeric_nonnull.nunique() > max_categories:
         bins = min(10, int(numeric_nonnull.nunique()))
         try:
             return pd.qcut(numeric, q=bins, duplicates="drop").astype(str)
@@ -135,7 +136,11 @@ def _summarize_groups(frame, group_column: str, value_column: str):
     plot_data = []
     labels = []
     for group in sorted(frame[group_column].dropna().astype(str).unique()):
-        values = frame.loc[frame[group_column].astype(str) == group, value_column].dropna().astype(float)
+        values = (
+            frame.loc[frame[group_column].astype(str) == group, value_column]
+            .dropna()
+            .astype(float)
+        )
         if len(values) == 0:
             continue
         values_list = [float(value) for value in values.tolist()]
@@ -156,11 +161,24 @@ def _summarize_groups(frame, group_column: str, value_column: str):
     return summary_rows, plot_data, labels
 
 
-def _write_violin_box_plot(plt, plot_data: list[list[float]], labels: list[str], variable: str, metric: str, output_png: Path) -> None:
+def _write_violin_box_plot(
+    plt,
+    plot_data: list[list[float]],
+    labels: list[str],
+    variable: str,
+    metric: str,
+    output_png: Path,
+) -> None:
     figure_width = max(8, min(22, len(labels) * 0.55))
     fig, ax = plt.subplots(figsize=(figure_width, 6))
     positions = list(range(1, len(labels) + 1))
-    violins = ax.violinplot(plot_data, positions=positions, showmeans=False, showmedians=False, showextrema=False)
+    violins = ax.violinplot(
+        plot_data,
+        positions=positions,
+        showmeans=False,
+        showmedians=False,
+        showextrema=False,
+    )
     for body in violins["bodies"]:
         body.set_facecolor("#6aa5c8")
         body.set_edgecolor("#2f5873")

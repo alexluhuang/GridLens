@@ -10,9 +10,11 @@ python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev,analysis]"
 ```
 
-If the machine has no network access, install dependencies from an internal wheelhouse or an offline package repository approved for CEII environments.
+If the machine has no network access, install dependencies from an internal wheelhouse or an offline package repository
+approved for CEII environments.
 
-The minimal GUI dependency is also listed in `requirements.txt`; optional plotting/data dependencies are listed in `requirements-analysis.txt`.
+The minimal GUI dependency is also listed in `requirements.txt`; optional plotting/data dependencies are listed in
+`requirements-analysis.txt`.
 
 ## Run The App
 
@@ -29,17 +31,21 @@ scripts/run_app.sh
 
 ## Run Tests
 
-The tests use only the standard library and the project source tree:
+The primary test runner is `pytest`:
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests
+python -m pytest
 ```
 
-If `pytest` is installed:
+Use the editable install from the setup section before running the full suite so GUI and optional analysis dependencies
+are available. Individual tests are intentionally small and independent; prefer adding a focused regression test before
+changing parser, analysis, runner, or GUI behavior.
 
-```bash
-pytest
-```
+The test suite also checks package metadata, console-script wiring, runtime dependency mirrors, and local README
+documentation links. Keep `pyproject.toml`, `requirements.txt`, `README.md`, and `src/gridpack_workbench/__init__.py`
+in sync when changing packaging or release information.
+
+For headless machines, Qt tests set `QT_QPA_PLATFORM=offscreen` in the test module.
 
 ## Development Order
 
@@ -58,6 +64,14 @@ Build the product in this order:
 
 ## Code Style
 
-Keep user-sensitive behavior in `core/` and `runner/`, not in GUI event handlers. The GUI should gather values and call well-tested functions.
+Keep user-sensitive behavior in `core/` and `runner/`, not in GUI event handlers. The GUI should gather values and call
+well-tested functions.
 
 Never build Docker commands as shell strings. Build a list of arguments and run it without `shell=True`.
+
+Keep modules organized around one responsibility. For example, parsed GridPACK data flows through `analysis/parsers.py`,
+`analysis/enrichment.py`, `analysis/metrics.py`, and `analysis/dataset.py` before reports or exports are written. Add
+small helper modules when they make behavior reusable and testable.
+
+Use explicit, readable Python over clever shortcuts. Public functions and non-obvious helpers should have concise
+docstrings that explain behavior rather than repeat the function signature.

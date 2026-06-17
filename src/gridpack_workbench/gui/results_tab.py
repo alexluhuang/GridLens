@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 from gridpack_workbench.analysis.parsers import list_output_files
 from gridpack_workbench.analysis.summary import export_run_zip
 from gridpack_workbench.core.project import Project
+from gridpack_workbench.gui.table_utils import populate_table
 from gridpack_workbench.gui.theme import set_button_role
 
 
@@ -116,12 +116,16 @@ class ResultsTab(QWidget):
         if not run_dir:
             return
         files = list_output_files(run_dir)
-        self.output_table.setRowCount(len(files))
-        for row, output in enumerate(files):
-            self.output_table.setItem(row, 0, QTableWidgetItem(output.file_name))
-            self.output_table.setItem(row, 1, QTableWidgetItem(output.relative_path))
-            self.output_table.setItem(row, 2, QTableWidgetItem(str(output.size_bytes)))
-            self.output_table.setItem(row, 3, QTableWidgetItem(output.suffix))
+        rows = [
+            {
+                "File": output.file_name,
+                "Path": output.relative_path,
+                "Size": output.size_bytes,
+                "Type": output.suffix,
+            }
+            for output in files
+        ]
+        populate_table(self.output_table, rows, ["File", "Path", "Size", "Type"])
         self.run_selected.emit(run_dir)
 
     def open_selected_run(self) -> None:

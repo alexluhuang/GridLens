@@ -50,7 +50,7 @@ gridpack-workbench
 If you only want to verify the core code without installing GUI dependencies:
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests
+PYTHONPATH=src python3 -m pytest
 python3 scripts/check_environment.py
 ```
 

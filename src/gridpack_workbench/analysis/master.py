@@ -6,7 +6,8 @@ from pathlib import Path
 
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridpack_workbench.analysis.gpu_pandas import get_pandas
-from gridpack_workbench.analysis.parsers import ParsedTable, parse_all_output_tables
+from gridpack_workbench.analysis.parser_models import ParsedTable
+from gridpack_workbench.analysis.parsers import parse_all_output_tables
 
 
 MASTER_DATASET_VERSION = "2026.06.16"
@@ -17,6 +18,38 @@ UTILIZATION_COLUMNS = [
     "mean_contingency_utilization_pct",
     "max_contingency_utilization_pct",
 ]
+AREA_CANDIDATE_COLUMNS = ["perf_mm_area", "pflow_area", "pflow_mm_area", "line_flt_cnt_area"]
+VOLTAGE_CLASS_CANDIDATE_COLUMNS = [
+    "perf_mm_voltage_class",
+    "pflow_voltage_class",
+    "pflow_mm_voltage_class",
+    "line_flt_cnt_voltage_class",
+]
+
+
+@dataclass(slots=True)
+class MasterExportPaths:
+    exports_dir: Path
+    master_csv: Path
+    master_cleaned_csv: Path
+    outliers_csv: Path
+
+    @classmethod
+    def for_run(cls, run_dir: str | Path) -> MasterExportPaths:
+        exports_dir = Path(run_dir).expanduser().resolve() / "exports"
+        return cls(
+            exports_dir=exports_dir,
+            master_csv=exports_dir / "master.csv",
+            master_cleaned_csv=exports_dir / "master_cleaned.csv",
+            outliers_csv=exports_dir / "outliers.csv",
+        )
+
+    def all_exist(self) -> bool:
+        return (
+            self.master_csv.exists()
+            and self.master_cleaned_csv.exists()
+            and self.outliers_csv.exists()
+        )
 
 
 @dataclass(slots=True)
@@ -45,6 +78,27 @@ class MasterExportResult:
             "dataset_version": MASTER_DATASET_VERSION,
         }
 
+    @classmethod
+    def from_paths(
+        cls,
+        paths: MasterExportPaths,
+        row_count: int,
+        cleaned_row_count: int,
+        outlier_row_count: int,
+        outlier_threshold_pct: float,
+    ) -> MasterExportResult:
+        return cls(
+            exports_dir=paths.exports_dir,
+            master_csv=paths.master_csv,
+            master_cleaned_csv=paths.master_cleaned_csv,
+            outliers_csv=paths.outliers_csv,
+            row_count=row_count,
+            cleaned_row_count=cleaned_row_count,
+            outlier_row_count=outlier_row_count,
+            outlier_threshold_pct=outlier_threshold_pct,
+            code_path=Path(__file__).resolve(),
+        )
+
 
 def build_branch_master_exports(
     run_dir: str | Path,
@@ -54,8 +108,8 @@ def build_branch_master_exports(
     pd = get_pandas()
     run_path = Path(run_dir).expanduser().resolve()
     dataset = dataset or build_run_analysis(run_path)
-    exports_dir = run_path / "exports"
-    exports_dir.mkdir(parents=True, exist_ok=True)
+    paths = MasterExportPaths.for_run(run_path)
+    paths.exports_dir.mkdir(parents=True, exist_ok=True)
 
     master = _branch_base_frame(pd, dataset.tables)
     for table_name in BRANCH_OUTPUT_TABLES:
@@ -72,23 +126,16 @@ def build_branch_master_exports(
     outliers = master.loc[outlier_mask].copy()
     cleaned = master.loc[~outlier_mask].copy()
 
-    master_csv = exports_dir / "master.csv"
-    cleaned_csv = exports_dir / "master_cleaned.csv"
-    outliers_csv = exports_dir / "outliers.csv"
-    master.to_csv(master_csv, index=False)
-    cleaned.to_csv(cleaned_csv, index=False)
-    outliers.to_csv(outliers_csv, index=False)
+    master.to_csv(paths.master_csv, index=False)
+    cleaned.to_csv(paths.master_cleaned_csv, index=False)
+    outliers.to_csv(paths.outliers_csv, index=False)
 
-    return MasterExportResult(
-        exports_dir=exports_dir,
-        master_csv=master_csv,
-        master_cleaned_csv=cleaned_csv,
-        outliers_csv=outliers_csv,
+    return MasterExportResult.from_paths(
+        paths,
         row_count=int(len(master)),
         cleaned_row_count=int(len(cleaned)),
         outlier_row_count=int(len(outliers)),
         outlier_threshold_pct=outlier_threshold_pct,
-        code_path=Path(__file__).resolve(),
     )
 
 
@@ -98,25 +145,18 @@ def ensure_branch_master_exports(
     outlier_threshold_pct: float = 1000.0,
 ) -> MasterExportResult:
     run_path = Path(run_dir).expanduser().resolve()
-    exports_dir = run_path / "exports"
-    master_csv = exports_dir / "master.csv"
-    cleaned_csv = exports_dir / "master_cleaned.csv"
-    outliers_csv = exports_dir / "outliers.csv"
-    if master_csv.exists() and cleaned_csv.exists() and outliers_csv.exists():
+    paths = MasterExportPaths.for_run(run_path)
+    if paths.all_exist():
         pd = get_pandas()
-        master = pd.read_csv(master_csv)
-        cleaned = pd.read_csv(cleaned_csv)
-        outliers = pd.read_csv(outliers_csv)
-        return MasterExportResult(
-            exports_dir=exports_dir,
-            master_csv=master_csv,
-            master_cleaned_csv=cleaned_csv,
-            outliers_csv=outliers_csv,
+        master = pd.read_csv(paths.master_csv)
+        cleaned = pd.read_csv(paths.master_cleaned_csv)
+        outliers = pd.read_csv(paths.outliers_csv)
+        return MasterExportResult.from_paths(
+            paths,
             row_count=int(len(master)),
             cleaned_row_count=int(len(cleaned)),
             outlier_row_count=int(len(outliers)),
             outlier_threshold_pct=outlier_threshold_pct,
-            code_path=Path(__file__).resolve(),
         )
     if dataset is None and (run_path / "reports" / "tables").exists():
         dataset = _dataset_from_existing_report_tables(run_path)
@@ -125,8 +165,7 @@ def ensure_branch_master_exports(
 
 def read_master_cleaned(run_dir: str | Path):
     pd = get_pandas()
-    path = Path(run_dir).expanduser().resolve() / "exports" / "master_cleaned.csv"
-    return pd.read_csv(path)
+    return pd.read_csv(MasterExportPaths.for_run(run_dir).master_cleaned_csv)
 
 
 def _branch_base_frame(pd, tables: dict[str, ParsedTable]):
@@ -215,12 +254,8 @@ def _normalize_master_columns(pd, master):
         master["rate_a"] = ratea.where(ratea > 0, fallback)
     else:
         master["rate_a"] = pd.to_numeric(master["ratea"], errors="coerce")
-    master = _fill_canonical_column(master, "area", ["perf_mm_area", "pflow_area", "pflow_mm_area", "line_flt_cnt_area"])
-    master = _fill_canonical_column(
-        master,
-        "voltage_class",
-        ["perf_mm_voltage_class", "pflow_voltage_class", "pflow_mm_voltage_class", "line_flt_cnt_voltage_class"],
-    )
+    master = _fill_canonical_column(master, "area", AREA_CANDIDATE_COLUMNS)
+    master = _fill_canonical_column(master, "voltage_class", VOLTAGE_CLASS_CANDIDATE_COLUMNS)
     return master
 
 
@@ -241,7 +276,6 @@ def _add_utilization_columns(pd, master):
     min_flow = _numeric_column(pd, master, "pflow_mm_min_value")
     max_flow = _numeric_column(pd, master, "pflow_mm_max_value")
 
-    worst_flow = max_flow.abs()
     worst_flow = pd.concat([min_flow.abs(), max_flow.abs()], axis=1).max(axis=1)
 
     master["base_flow_for_utilization"] = base_flow
@@ -265,17 +299,21 @@ def _safe_pct(numerator, denominator):
 
 
 def _add_outlier_reasons(master, threshold_pct: float):
-    def reason(row) -> str:
-        reasons = []
-        for column in UTILIZATION_COLUMNS:
-            value = row.get(column)
-            try:
-                parsed = float(value)
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(parsed) and abs(parsed) > threshold_pct:
-                reasons.append(f"{column}>{threshold_pct:g}")
-        return "; ".join(reasons)
-
-    master["outlier_reason"] = master.apply(reason, axis=1)
+    master["outlier_reason"] = master.apply(
+        lambda row: outlier_reason_for_row(row, threshold_pct),
+        axis=1,
+    )
     return master
+
+
+def outlier_reason_for_row(row, threshold_pct: float) -> str:
+    reasons = []
+    for column in UTILIZATION_COLUMNS:
+        value = row.get(column)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed) and abs(parsed) > threshold_pct:
+            reasons.append(f"{column}>{threshold_pct:g}")
+    return "; ".join(reasons)

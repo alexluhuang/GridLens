@@ -22,10 +22,17 @@ from PySide6.QtWidgets import (
 )
 
 from gridpack_workbench.core.app_settings import AppSettings
-from gridpack_workbench.core.project import Project
+from gridpack_workbench.core.project import Project, ProjectData
+from gridpack_workbench.core.validation import ValidationError
+from gridpack_workbench.gui.run_view_models import (
+    RunFormValues,
+    apply_run_form_values_to_settings,
+    build_gridpack_run_request,
+    validate_run_form_values,
+)
 from gridpack_workbench.gui.theme import set_button_role
 from gridpack_workbench.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
-from gridpack_workbench.runner.gridpack_runner import GridpackRunRequest, run_gridpack_case
+from gridpack_workbench.runner.gridpack_runner import GridpackRunRequest, GridpackRunResult, run_gridpack_case
 
 
 class RunWorker(QThread):
@@ -52,7 +59,7 @@ class RunTab(QWidget):
         super().__init__()
         self.settings = settings
         self.project: Project | None = None
-        self.project_data = None
+        self.project_data: ProjectData | None = None
         self.worker: RunWorker | None = None
         self.last_run_dir: Path | None = None
 
@@ -121,7 +128,7 @@ class RunTab(QWidget):
         layout.addWidget(QLabel("Run log"))
         layout.addWidget(self.log, stretch=1)
 
-    def set_project(self, project: Project, project_data: object) -> None:
+    def set_project(self, project: Project, project_data: ProjectData) -> None:
         self.project = project
         self.project_data = project_data
         self.project_label.setText(f"Ready: {project_data.name} ({project.root_dir})")
@@ -149,32 +156,18 @@ class RunTab(QWidget):
             QMessageBox.warning(self, "No project", "Create or open a project first.")
             return
 
-        self.settings.default_gridpack_image = self.image.text().strip()
-        self.settings.default_executable = self.executable.text().strip()
-        self.settings.default_mpi_processes = self.mpi_processes.value()
-        self.settings.docker_pull_policy = self.pull_policy.currentText()
-        self.settings.use_platform_flag = self.use_platform.isChecked()
-        self.settings.use_host_user = self.use_host_user.isChecked()
-        self.settings.memory_limit = self.memory_limit.text().strip()
-        self.settings.extra_docker_args = self.extra_args.text().strip()
-        self.settings.docker_network_mode = "none" if self.network_none.isChecked() else ""
+        values = self._run_form_values()
+        try:
+            validate_run_form_values(values)
+        except ValidationError as exc:
+            QMessageBox.warning(self, "Run settings need attention", str(exc))
+            return
+
+        apply_run_form_values_to_settings(self.settings, values)
         self.settings.save()
 
         run_dir = self.project.create_run_folder()
-        request = GridpackRunRequest(
-            project_data=self.project_data,
-            run_dir=run_dir,
-            image=self.image.text().strip(),
-            executable=self.executable.text().strip(),
-            xml_filename=self.project_data.xml_file_name,
-            mpi_processes=self.mpi_processes.value(),
-            network_mode="none" if self.network_none.isChecked() else "",
-            pull_policy=self.pull_policy.currentText(),
-            use_host_user=self.use_host_user.isChecked(),
-            use_platform_flag=self.use_platform.isChecked(),
-            memory_limit=self.memory_limit.text().strip(),
-            extra_docker_args=self.extra_args.text().strip(),
-        )
+        request = build_gridpack_run_request(self.project_data, run_dir, values)
 
         self.log.clear()
         self.append_log(f"Created run folder: {run_dir}")
@@ -190,7 +183,20 @@ class RunTab(QWidget):
     def append_log(self, text: str) -> None:
         self.log.append(text.rstrip())
 
-    def on_finished(self, result: object) -> None:
+    def _run_form_values(self) -> RunFormValues:
+        return RunFormValues(
+            image=self.image.text(),
+            executable=self.executable.text(),
+            mpi_processes=self.mpi_processes.value(),
+            pull_policy=self.pull_policy.currentText(),
+            network_disabled=self.network_none.isChecked(),
+            use_platform_flag=self.use_platform.isChecked(),
+            use_host_user=self.use_host_user.isChecked(),
+            memory_limit=self.memory_limit.text(),
+            extra_docker_args=self.extra_args.text(),
+        )
+
+    def on_finished(self, result: GridpackRunResult) -> None:
         self.run_button.setEnabled(True)
         self.last_run_dir = result.run_dir
         self.open_run_button.setEnabled(True)

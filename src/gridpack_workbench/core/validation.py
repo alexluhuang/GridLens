@@ -17,7 +17,8 @@ def sanitize_project_name(name: str) -> str:
         raise ValidationError("Project name is required.")
     if not _PROJECT_NAME_PATTERN.match(cleaned):
         raise ValidationError(
-            "Project names must start and end with a letter or number and use only letters, numbers, spaces, dots, underscores, and hyphens."
+            "Project names must start and end with a letter or number and use only "
+            "letters, numbers, spaces, dots, underscores, and hyphens."
         )
     return cleaned
 

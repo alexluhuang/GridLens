@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import hashlib
@@ -40,7 +41,8 @@ def validate_project_root_dir(root_dir: str | Path) -> Path:
     resolved = Path(root_dir).expanduser().resolve()
     if resolved.name in RESERVED_PROJECT_ROOT_NAMES:
         raise ValidationError(
-            f"Project folder cannot be the managed `{resolved.name}` folder. Choose the top-level project folder instead."
+            f"Project folder cannot be the managed `{resolved.name}` folder. "
+            "Choose the top-level project folder instead."
         )
 
     for parent in resolved.parents:
@@ -122,6 +124,7 @@ class Project:
         self.exports_dir.mkdir(exist_ok=True)
 
     def save(self, input_files: list[Path], xml_file_name: str) -> ProjectData:
+        _validate_project_inputs(input_files, xml_file_name)
         self.create_directories()
         existing = self.load_data() if self.project_file.exists() else None
         created_at = existing.created_at if existing else utc_timestamp()
@@ -183,6 +186,16 @@ def open_project(project_file: str | Path) -> tuple[Project, ProjectData]:
     data = ProjectData.from_dict(raw)
     project = Project(data.name, data.root_dir)
     return project, data
+
+
+def _validate_project_inputs(input_files: list[Path], xml_file_name: str) -> None:
+    file_names = [path.name for path in input_files]
+    duplicates = sorted(name for name, count in Counter(file_names).items() if count > 1)
+    if duplicates:
+        duplicate_list = ", ".join(duplicates)
+        raise ValidationError(f"Project input files must have unique file names. Duplicates: {duplicate_list}")
+    if xml_file_name not in file_names:
+        raise ValidationError("The selected XML file must be one of the project input files.")
 
 
 def copy_project_inputs_to_run(project_data: ProjectData, run_dir: Path) -> list[Path]:
