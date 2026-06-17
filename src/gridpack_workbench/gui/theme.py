@@ -56,7 +56,7 @@ QMainWindow {
 
 #appHeader {
     background: rgba(255, 255, 255, 230);
-    border: 1px solid #d9e0ea;
+    border: 2px solid #d9e0ea;
     border-radius: 8px;
 }
 
@@ -75,13 +75,13 @@ QMainWindow {
 
 #contextLabel {
     background: #eef4ff;
-    border: 1px solid #cfe0ff;
+    border: 2px solid #cfe0ff;
     border-radius: 8px;
     padding: 7px 10px;
 }
 
 QTabWidget::pane {
-    border: 1px solid #d9e0ea;
+    border: 2px solid #d9e0ea;
     border-radius: 8px;
     background: #ffffff;
     top: -1px;
@@ -94,7 +94,7 @@ QTabWidget#mainTabs::pane {
 QTabBar::tab {
     background: transparent;
     color: #4d586a;
-    border: 1px solid transparent;
+    border: 2px solid transparent;
     border-radius: 8px;
     padding: 8px 14px;
     margin: 4px 3px 5px 0;
@@ -104,7 +104,7 @@ QTabBar::tab {
 QTabBar::tab:selected {
     background: #ffffff;
     color: #111827;
-    border: 1px solid #d9e0ea;
+    border: 2px solid #d9e0ea;
 }
 
 QTabBar::tab:hover:!selected {
@@ -114,7 +114,7 @@ QTabBar::tab:hover:!selected {
 
 QGroupBox {
     background: #ffffff;
-    border: 1px solid #d9e0ea;
+    border: 2px solid #d9e0ea;
     border-radius: 8px;
     margin-top: 14px;
     padding: 14px 12px 12px 12px;
@@ -141,7 +141,7 @@ QSpinBox,
 QListWidget,
 QTableWidget {
     background: #ffffff;
-    border: 1px solid #cfd7e4;
+    border: 2px solid #cfd7e4;
     border-radius: 8px;
     padding: 6px;
     color: #182233;
@@ -162,10 +162,39 @@ QComboBox:focus,
 QSpinBox:focus,
 QListWidget:focus,
 QTableWidget:focus {
-    border: 1px solid #2563eb;
+    border: 2px solid #2563eb;
 }
 
-QComboBox::drop-down,
+QComboBox::drop-down {
+    border: 0;
+    border-left: 2px solid #e1e7f0;
+    width: 28px;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+QComboBox QAbstractItemView {
+    background: #ffffff;
+    border: 2px solid #cfd7e4;
+    border-radius: 8px;
+    padding: 5px;
+    outline: 0;
+    selection-background-color: #dbeafe;
+    selection-color: #111827;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 6px 8px;
+    border-radius: 6px;
+}
+
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+    background: #dbeafe;
+    color: #111827;
+}
+
 QSpinBox::up-button,
 QSpinBox::down-button {
     border: 0;
@@ -174,7 +203,7 @@ QSpinBox::down-button {
 
 QPushButton {
     background: #ffffff;
-    border: 1px solid #c9d3e2;
+    border: 2px solid #c9d3e2;
     border-radius: 8px;
     padding: 7px 13px;
     color: #182233;
@@ -221,7 +250,7 @@ QCheckBox {
 QHeaderView::section {
     background: #f2f5f9;
     border: 0;
-    border-bottom: 1px solid #d9e0ea;
+    border-bottom: 2px solid #d9e0ea;
     padding: 7px;
     color: #344154;
     font-weight: 600;
@@ -266,7 +295,7 @@ QScrollBar::sub-line:vertical {
 
 QStatusBar {
     background: #ffffff;
-    border-top: 1px solid #d9e0ea;
+    border-top: 2px solid #d9e0ea;
     color: #5b667a;
 }
 """
