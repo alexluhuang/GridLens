@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from gridpack_workbench.core.app_settings import AppSettings
 from gridpack_workbench.core.project import Project, open_project, safe_folder_name
 from gridpack_workbench.core.validation import ValidationError, validate_existing_files
+from gridpack_workbench.gui.theme import set_button_role
 
 
 class ProjectTab(QWidget):
@@ -33,6 +34,8 @@ class ProjectTab(QWidget):
         self.input_paths: list[Path] = []
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
         project_box = QGroupBox("Project")
         project_form = QFormLayout(project_box)
@@ -42,6 +45,7 @@ class ProjectTab(QWidget):
         project_dir_row = QHBoxLayout()
         project_dir_row.addWidget(self.project_dir)
         browse_project = QPushButton("Browse")
+        set_button_role(browse_project, "secondary")
         browse_project.clicked.connect(self.choose_project_dir)
         project_dir_row.addWidget(browse_project)
 
@@ -55,10 +59,13 @@ class ProjectTab(QWidget):
 
         input_buttons = QHBoxLayout()
         add_files = QPushButton("Add Files")
+        set_button_role(add_files, "primary")
         add_files.clicked.connect(self.add_files)
         remove_files = QPushButton("Remove Selected")
+        set_button_role(remove_files, "destructive")
         remove_files.clicked.connect(self.remove_selected_files)
         clear_files = QPushButton("Clear")
+        set_button_role(clear_files, "secondary")
         clear_files.clicked.connect(self.clear_files)
         input_buttons.addWidget(add_files)
         input_buttons.addWidget(remove_files)
@@ -74,14 +81,17 @@ class ProjectTab(QWidget):
 
         action_row = QHBoxLayout()
         self.save_button = QPushButton("Create / Save Project")
+        set_button_role(self.save_button, "primary")
         self.save_button.clicked.connect(self.save_project)
         self.open_button = QPushButton("Open Existing Project")
+        set_button_role(self.open_button, "secondary")
         self.open_button.clicked.connect(self.open_existing_project)
         action_row.addWidget(self.save_button)
         action_row.addWidget(self.open_button)
         action_row.addStretch()
 
         self.status = QLabel("No project saved yet.")
+        self.status.setObjectName("mutedLabel")
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         layout.addWidget(project_box)

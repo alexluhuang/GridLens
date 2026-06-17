@@ -7,7 +7,9 @@ class HelpTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
         browser = QTextBrowser()
+        browser.setObjectName("documentPane")
         browser.setOpenExternalLinks(True)
         browser.setHtml(
             """

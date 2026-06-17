@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from gridpack_workbench.analysis.parsers import list_output_files
 from gridpack_workbench.analysis.summary import export_run_zip
 from gridpack_workbench.core.project import Project
+from gridpack_workbench.gui.theme import set_button_role
 
 
 class ResultsTab(QWidget):
@@ -31,7 +32,10 @@ class ResultsTab(QWidget):
         self.project: Project | None = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
         self.project_label = QLabel("No project loaded.")
+        self.project_label.setObjectName("contextLabel")
         layout.addWidget(self.project_label)
 
         split = QHBoxLayout()
@@ -45,10 +49,13 @@ class ResultsTab(QWidget):
 
         button_row = QHBoxLayout()
         refresh = QPushButton("Refresh")
+        set_button_role(refresh, "secondary")
         refresh.clicked.connect(lambda: self.refresh_runs())
         open_run = QPushButton("Open Run")
+        set_button_role(open_run, "secondary")
         open_run.clicked.connect(self.open_selected_run)
         export_zip = QPushButton("Export ZIP")
+        set_button_role(export_zip, "primary")
         export_zip.clicked.connect(self.export_selected_run)
         button_row.addWidget(refresh)
         button_row.addWidget(open_run)

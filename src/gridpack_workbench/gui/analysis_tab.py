@@ -35,6 +35,7 @@ from gridpack_workbench.analysis.master import UTILIZATION_COLUMNS, ensure_branc
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridpack_workbench.analysis.summary import generate_decision_support_report
 from gridpack_workbench.core.project import Project
+from gridpack_workbench.gui.theme import set_button_role
 
 
 class AnalysisTab(QWidget):
@@ -46,16 +47,22 @@ class AnalysisTab(QWidget):
         self.current_master: dict[str, object] = {}
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
         self.project_label = QLabel("No project loaded.")
+        self.project_label.setObjectName("contextLabel")
         layout.addWidget(self.project_label)
 
         run_row = QHBoxLayout()
         self.run_combo = QComboBox()
         refresh = QPushButton("Refresh Runs")
+        set_button_role(refresh, "secondary")
         refresh.clicked.connect(lambda: self.refresh_runs())
         analyze = QPushButton("Generate DSS Analysis")
+        set_button_role(analyze, "primary")
         analyze.clicked.connect(self.generate_report)
         open_report = QPushButton("Open HTML Report")
+        set_button_role(open_report, "secondary")
         open_report.clicked.connect(self.open_report)
         run_row.addWidget(QLabel("Run"))
         run_row.addWidget(self.run_combo, stretch=1)
@@ -195,6 +202,7 @@ class AnalysisTab(QWidget):
         for column in UTILIZATION_COLUMNS:
             self.distribution_metric.addItem(column, column)
         generate = QPushButton("Generate Selected Distributions")
+        set_button_role(generate, "primary")
         generate.clicked.connect(self.generate_distributions)
         control_row.addWidget(QLabel("Utilization metric"))
         control_row.addWidget(self.distribution_metric)

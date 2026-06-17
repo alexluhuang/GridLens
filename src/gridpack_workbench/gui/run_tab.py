@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from gridpack_workbench.core.app_settings import AppSettings
 from gridpack_workbench.core.project import Project
+from gridpack_workbench.gui.theme import set_button_role
 from gridpack_workbench.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
 from gridpack_workbench.runner.gridpack_runner import GridpackRunRequest, run_gridpack_case
 
@@ -56,6 +57,8 @@ class RunTab(QWidget):
         self.last_run_dir: Path | None = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
         config_box = QGroupBox("Container Run Settings")
         form = QFormLayout(config_box)
@@ -92,11 +95,14 @@ class RunTab(QWidget):
 
         action_row = QHBoxLayout()
         self.check_button = QPushButton("Check Docker")
+        set_button_role(self.check_button, "secondary")
         self.check_button.clicked.connect(self.check_docker)
         self.run_button = QPushButton("Run GridPACK")
+        set_button_role(self.run_button, "primary")
         self.run_button.clicked.connect(self.start_run)
         self.run_button.setEnabled(False)
         self.open_run_button = QPushButton("Open Run Folder")
+        set_button_role(self.open_run_button, "secondary")
         self.open_run_button.clicked.connect(self.open_last_run)
         self.open_run_button.setEnabled(False)
         action_row.addWidget(self.check_button)
@@ -105,6 +111,7 @@ class RunTab(QWidget):
         action_row.addStretch()
 
         self.project_label = QLabel("No project loaded.")
+        self.project_label.setObjectName("contextLabel")
         self.log = QTextEdit()
         self.log.setReadOnly(True)
 

@@ -17,10 +17,12 @@ def main() -> int:
         return 1
 
     from gridpack_workbench.gui.main_window import MainWindow
+    from gridpack_workbench.gui.theme import apply_theme
 
     app = QApplication(sys.argv)
     app.setApplicationName("GridPACK Workbench")
     app.setOrganizationName("GridPACK Workbench")
+    apply_theme(app)
     window = MainWindow()
     window.show()
     return app.exec()
