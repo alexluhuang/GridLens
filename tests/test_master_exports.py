@@ -1,8 +1,21 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
-from gridpack_workbench.analysis.master import MasterExportPaths, MasterExportResult, outlier_reason_for_row
+import pytest
+
+from gridpack_workbench.analysis.master import (
+    BASE_FLOW_SOURCE_COLUMN,
+    MAX_N1_FLOW_SOURCE_COLUMN,
+    MEAN_N1_FLOW_SOURCE_COLUMN,
+    MIN_N1_FLOW_SOURCE_COLUMN,
+    RATE_A_COLUMN,
+    MasterExportPaths,
+    MasterExportResult,
+    _add_utilization_columns,
+    outlier_reason_for_row,
+)
 
 
 def test_master_export_paths_are_grouped_by_run_exports_dir(tmp_path: Path) -> None:
@@ -44,3 +57,32 @@ def test_outlier_reason_for_row_reports_only_finite_values_above_threshold() -> 
     reason = outlier_reason_for_row(row, threshold_pct=1000.0)
 
     assert reason == "max_contingency_utilization_pct>1000"
+
+
+def test_add_utilization_columns_uses_named_master_source_columns() -> None:
+    pd = pytest.importorskip("pandas")
+    master = pd.DataFrame(
+        [
+            {
+                RATE_A_COLUMN: 100,
+                BASE_FLOW_SOURCE_COLUMN: 50,
+                MEAN_N1_FLOW_SOURCE_COLUMN: -70,
+                MIN_N1_FLOW_SOURCE_COLUMN: -120,
+                MAX_N1_FLOW_SOURCE_COLUMN: 80,
+            },
+            {
+                RATE_A_COLUMN: 0,
+                BASE_FLOW_SOURCE_COLUMN: 50,
+                MEAN_N1_FLOW_SOURCE_COLUMN: 70,
+                MIN_N1_FLOW_SOURCE_COLUMN: -120,
+                MAX_N1_FLOW_SOURCE_COLUMN: 80,
+            },
+        ]
+    )
+
+    result = _add_utilization_columns(pd, master)
+
+    assert result.loc[0, "base_case_utilization_pct"] == 50
+    assert result.loc[0, "mean_contingency_utilization_pct"] == 70
+    assert result.loc[0, "max_contingency_utilization_pct"] == 120
+    assert math.isnan(result.loc[1, "base_case_utilization_pct"])

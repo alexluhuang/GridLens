@@ -20,8 +20,14 @@ from PySide6.QtWidgets import (
 )
 
 from gridpack_workbench.core.app_settings import AppSettings
-from gridpack_workbench.core.project import Project, open_project, safe_folder_name
-from gridpack_workbench.core.validation import ValidationError, validate_existing_files
+from gridpack_workbench.core.project import open_project
+from gridpack_workbench.core.validation import ValidationError
+from gridpack_workbench.gui.project_view_models import (
+    ProjectFormValues,
+    default_project_folder,
+    prepare_project_save,
+    should_update_project_folder,
+)
 from gridpack_workbench.gui.theme import set_button_role
 
 
@@ -102,13 +108,15 @@ class ProjectTab(QWidget):
         self.project_name.textChanged.connect(self.update_default_project_dir)
 
     def update_default_project_dir(self) -> None:
-        current = Path(self.project_dir.text()).name
-        if current.startswith("GridPACK") or current == "GridPACK_Pilot_Project":
+        if should_update_project_folder(self.project_dir.text()):
             try:
-                folder_name = safe_folder_name(self.project_name.text())
+                project_dir = default_project_folder(
+                    self.settings.default_projects_dir,
+                    self.project_name.text(),
+                )
             except ValidationError:
                 return
-            self.project_dir.setText(str(self.settings.default_projects_dir / folder_name))
+            self.project_dir.setText(str(project_dir))
 
     def choose_project_dir(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose project folder", self.project_dir.text())
@@ -152,19 +160,21 @@ class ProjectTab(QWidget):
 
     def save_project(self) -> None:
         try:
-            files = validate_existing_files(self.input_paths)
-            xml_file_name = self.xml_combo.currentText().strip()
-            if not xml_file_name:
-                raise ValidationError("Add an XML input file and choose it from the XML file field.")
-            if xml_file_name not in {path.name for path in files}:
-                raise ValidationError("The selected XML file must be one of the project input files.")
-
-            project = Project(self.project_name.text(), self.project_dir.text())
-            project_data = project.save(files, xml_file_name)
+            prepared = prepare_project_save(self._project_form_values())
+            project_data = prepared.project.save(prepared.input_files, prepared.xml_file_name)
+            project = prepared.project
             self.status.setText(f"Saved project: {project.project_file}")
             self.project_changed.emit(project, project_data)
         except Exception as exc:
             QMessageBox.critical(self, "Project cannot be saved", str(exc))
+
+    def _project_form_values(self) -> ProjectFormValues:
+        return ProjectFormValues(
+            project_name=self.project_name.text(),
+            project_dir=self.project_dir.text(),
+            input_paths=self.input_paths,
+            xml_file_name=self.xml_combo.currentText(),
+        )
 
     def open_existing_project(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(

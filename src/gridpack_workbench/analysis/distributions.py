@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 
+from gridpack_workbench.analysis.distribution_stats import distribution_summary_row
 from gridpack_workbench.analysis.gpu_pandas import get_pandas
 from gridpack_workbench.analysis.master import UTILIZATION_COLUMNS, ensure_branch_master_exports
 
@@ -144,20 +145,12 @@ def _summarize_groups(frame, group_column: str, value_column: str):
         if len(values) == 0:
             continue
         values_list = [float(value) for value in values.tolist()]
+        summary_row = distribution_summary_row(group, values_list)
+        if summary_row is None:
+            continue
         labels.append(group)
         plot_data.append(values_list)
-        summary_rows.append(
-            {
-                "group": group,
-                "count": len(values_list),
-                "mean": round(sum(values_list) / len(values_list), 8),
-                "median": round(_percentile(values_list, 0.50), 8),
-                "q1": round(_percentile(values_list, 0.25), 8),
-                "q3": round(_percentile(values_list, 0.75), 8),
-                "min": round(min(values_list), 8),
-                "max": round(max(values_list), 8),
-            }
-        )
+        summary_rows.append(summary_row)
     return summary_rows, plot_data, labels
 
 
@@ -200,17 +193,6 @@ def _write_violin_box_plot(
     fig.tight_layout()
     fig.savefig(output_png, dpi=160)
     plt.close(fig)
-
-
-def _percentile(values: list[float], q: float) -> float:
-    ordered = sorted(values)
-    if not ordered:
-        return 0.0
-    index = (len(ordered) - 1) * q
-    lower = int(index)
-    upper = min(lower + 1, len(ordered) - 1)
-    weight = index - lower
-    return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
 
 def _safe_file_part(value: str) -> str:

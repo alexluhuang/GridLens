@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -20,6 +19,12 @@ from PySide6.QtWidgets import (
 from gridpack_workbench.analysis.parsers import list_output_files
 from gridpack_workbench.analysis.summary import export_run_zip
 from gridpack_workbench.core.project import Project
+from gridpack_workbench.gui.results_view_models import (
+    OUTPUT_TABLE_COLUMNS,
+    output_file_rows,
+    read_run_status,
+    run_list_label,
+)
 from gridpack_workbench.gui.table_utils import populate_table
 from gridpack_workbench.gui.theme import set_button_role
 
@@ -62,8 +67,8 @@ class ResultsTab(QWidget):
         button_row.addWidget(export_zip)
         left.addLayout(button_row)
 
-        self.output_table = QTableWidget(0, 4)
-        self.output_table.setHorizontalHeaderLabels(["File", "Path", "Size", "Type"])
+        self.output_table = QTableWidget(0, len(OUTPUT_TABLE_COLUMNS))
+        self.output_table.setHorizontalHeaderLabels(OUTPUT_TABLE_COLUMNS)
         self.output_table.horizontalHeader().setStretchLastSection(True)
         right.addWidget(QLabel("Output files"))
         right.addWidget(self.output_table)
@@ -83,8 +88,7 @@ class ResultsTab(QWidget):
             return
 
         for run_dir in self.project.list_runs():
-            status = self._read_status(run_dir)
-            label = f"{run_dir.name}    {status}"
+            label = run_list_label(run_dir, read_run_status(run_dir))
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, str(run_dir))
             self.run_list.addItem(item)
@@ -93,16 +97,6 @@ class ResultsTab(QWidget):
 
         if self.run_list.count() and not self.run_list.currentItem():
             self.run_list.setCurrentRow(0)
-
-    def _read_status(self, run_dir: Path) -> str:
-        status_file = run_dir / "status.json"
-        if not status_file.exists():
-            return "not started"
-        try:
-            data = json.loads(status_file.read_text(encoding="utf-8"))
-            return data.get("status", "unknown")
-        except json.JSONDecodeError:
-            return "unknown"
 
     def selected_run_dir(self) -> Path | None:
         item = self.run_list.currentItem()
@@ -115,17 +109,8 @@ class ResultsTab(QWidget):
         self.output_table.setRowCount(0)
         if not run_dir:
             return
-        files = list_output_files(run_dir)
-        rows = [
-            {
-                "File": output.file_name,
-                "Path": output.relative_path,
-                "Size": output.size_bytes,
-                "Type": output.suffix,
-            }
-            for output in files
-        ]
-        populate_table(self.output_table, rows, ["File", "Path", "Size", "Type"])
+        rows = output_file_rows(list_output_files(run_dir))
+        populate_table(self.output_table, rows, OUTPUT_TABLE_COLUMNS)
         self.run_selected.emit(run_dir)
 
     def open_selected_run(self) -> None:

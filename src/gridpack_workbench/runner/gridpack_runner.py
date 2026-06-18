@@ -8,7 +8,7 @@ import subprocess
 from typing import Callable
 
 from gridpack_workbench.core.project import ProjectData, copy_project_inputs_to_run, file_sha256
-from gridpack_workbench.core.run_manifest import RunManifest
+from gridpack_workbench.core.run_manifest import ManifestInputFile, RunManifest
 from gridpack_workbench.runner.docker_command import build_gridpack_docker_command
 
 
@@ -85,18 +85,18 @@ def _write_status(path: Path, status: str, return_code: int | None = None, error
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def _input_manifest_records(work_dir: Path) -> list[dict]:
+def _input_manifest_records(work_dir: Path) -> list[ManifestInputFile]:
     records = []
     for path in sorted(work_dir.iterdir()):
         if not path.is_file():
             continue
         records.append(
-            {
-                "file_name": path.name,
-                "path_in_container": f"/app/workspace/{path.name}",
-                "size_bytes": path.stat().st_size,
-                "sha256": file_sha256(path),
-            }
+            ManifestInputFile(
+                file_name=path.name,
+                path_in_container=f"/app/workspace/{path.name}",
+                size_bytes=path.stat().st_size,
+                sha256=file_sha256(path),
+            )
         )
     return records
 

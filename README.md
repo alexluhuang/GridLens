@@ -99,3 +99,4 @@ samples/      small parser/reporting sample files
 - [CEII Security Notes](docs/security_ceii.md)
 - [Packaging And Distribution](docs/packaging_distribution.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Contributing](CONTRIBUTING.md)

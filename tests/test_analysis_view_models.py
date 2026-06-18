@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from gridpack_workbench.analysis.distributions import DistributionExport
 from gridpack_workbench.gui.analysis_view_models import (
+    DISTRIBUTION_OUTPUT_COLUMNS,
+    distribution_output_rows,
     filter_performance_rows,
     metric_mapping,
     metric_notes,
@@ -45,6 +48,26 @@ def test_distribution_variable_defaults_are_centralized() -> None:
     assert should_select_distribution_variable("area")
     assert should_select_distribution_variable("voltage_class")
     assert not should_select_distribution_variable("owner_1_fraction")
+
+
+def test_distribution_output_rows_match_configured_columns(tmp_path) -> None:
+    result = DistributionExport(
+        independent_variable="area",
+        utilization_metric="max_contingency_utilization_pct",
+        table_csv=tmp_path / "area.csv",
+        graph_png=tmp_path / "area.png",
+        code_path=tmp_path / "distributions.py",
+        row_count=10,
+        group_count=2,
+    )
+
+    rows = distribution_output_rows([result])
+
+    assert list(rows[0]) == DISTRIBUTION_OUTPUT_COLUMNS
+    assert rows[0]["variable"] == "area"
+    assert rows[0]["table_csv"] == str(tmp_path / "area.csv")
+    assert rows[0]["graph_png"] == str(tmp_path / "area.png")
+    assert rows[0]["code_path"] == str(tmp_path / "distributions.py")
 
 
 def test_metric_helpers_tolerate_unexpected_shapes() -> None:

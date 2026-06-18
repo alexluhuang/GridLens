@@ -38,6 +38,7 @@ from gridpack_workbench.gui.analysis_view_models import (
     DISTRIBUTION_OUTPUT_COLUMNS,
     THERMAL_TABLE_COLUMNS,
     VOLTAGE_TABLE_COLUMNS,
+    distribution_output_rows,
     filter_performance_rows,
     numeric_value,
     render_analysis_overview_html,
@@ -311,15 +312,7 @@ class AnalysisTab(QWidget):
             QMessageBox.critical(self, "Distribution generation failed", str(exc))
             return
 
-        rows = [
-            {
-                "variable": result.independent_variable,
-                "table_csv": str(result.table_csv),
-                "graph_png": str(result.graph_png),
-                "code_path": str(result.code_path),
-            }
-            for result in results
-        ]
+        rows = distribution_output_rows(results)
         populate_table(self.distribution_outputs, rows, DISTRIBUTION_OUTPUT_COLUMNS)
         QMessageBox.information(self, "Distributions generated", f"Generated {len(results)} graph/table pairs.")
 

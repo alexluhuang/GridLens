@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import shutil
@@ -13,14 +14,43 @@ from gridpack_workbench.analysis.parsers import list_output_files, summarize_suc
 from gridpack_workbench.analysis.report_html import DecisionSupportReportView, render_decision_support_report_html
 
 
-def write_output_inventory(run_dir: str | Path) -> Path:
-    run_path = Path(run_dir)
-    report_dir = run_path / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    output_path = report_dir / "output_inventory.csv"
+@dataclass(frozen=True, slots=True)
+class DecisionSupportReportPaths:
+    run_dir: Path
+    report_dir: Path
+    inventory_csv: Path
+    success_chart_svg: Path
+    summary_json: Path
+    html_report: Path
+    legacy_html_report: Path
 
-    files = list_output_files(run_path)
-    with output_path.open("w", encoding="utf-8", newline="") as handle:
+    @classmethod
+    def for_run(cls, run_dir: str | Path) -> DecisionSupportReportPaths:
+        run_path = Path(run_dir).expanduser().resolve()
+        report_dir = run_path / "reports"
+        return cls(
+            run_dir=run_path,
+            report_dir=report_dir,
+            inventory_csv=report_dir / "output_inventory.csv",
+            success_chart_svg=report_dir / "success_summary.svg",
+            summary_json=report_dir / "analysis_summary.json",
+            html_report=report_dir / "decision_support_report.html",
+            legacy_html_report=report_dir / "report.html",
+        )
+
+    def ensure_report_dir(self) -> None:
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+
+    def default_zip_path(self) -> Path:
+        return self.run_dir.parent.parent / "exports" / f"{self.run_dir.name}.zip"
+
+
+def write_output_inventory(run_dir: str | Path) -> Path:
+    paths = DecisionSupportReportPaths.for_run(run_dir)
+    paths.ensure_report_dir()
+
+    files = list_output_files(paths.run_dir)
+    with paths.inventory_csv.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["file_name", "relative_path", "size_bytes", "suffix"])
         writer.writeheader()
         for item in files:
@@ -32,24 +62,24 @@ def write_output_inventory(run_dir: str | Path) -> Path:
                     "suffix": item.suffix,
                 }
             )
-    return output_path
+    return paths.inventory_csv
 
 
 def generate_decision_support_report(run_dir: str | Path, dataset: RunAnalysisDataset | None = None) -> dict:
     run_path = Path(run_dir).expanduser().resolve()
     dataset = dataset or build_run_analysis(run_path)
-    report_dir = dataset.report_dir
+    paths = DecisionSupportReportPaths.for_run(run_path)
+    paths.ensure_report_dir()
 
     success = summarize_success_file(run_path)
     files = list_output_files(run_path)
     inventory_csv = write_output_inventory(run_path)
-    chart_svg = create_success_svg(success, report_dir / "success_summary.svg")
+    chart_svg = create_success_svg(success, paths.success_chart_svg)
     master_exports = build_branch_master_exports(run_path, dataset)
 
     thermal = dataset.metrics.get("thermal", {})
     voltage = dataset.metrics.get("voltage", {})
     success_metrics = dataset.metrics.get("success", {})
-    summary_json = report_dir / "analysis_summary.json"
     summary = {
         "run_dir": str(run_path),
         "success_file": success.file_name,
@@ -70,9 +100,8 @@ def generate_decision_support_report(run_dir: str | Path, dataset: RunAnalysisDa
         "low_voltage_violations": voltage.get("low_voltage_violations", 0) if isinstance(voltage, dict) else 0,
         "high_voltage_violations": voltage.get("high_voltage_violations", 0) if isinstance(voltage, dict) else 0,
     }
-    summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    paths.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    html_report = report_dir / "decision_support_report.html"
     top_bottlenecks = thermal.get("top_bottlenecks", []) if isinstance(thermal, dict) else []
     voltage_low = voltage.get("worst_low_voltage", []) if isinstance(voltage, dict) else []
     contingency = dataset.metrics.get("contingencies", {})
@@ -94,14 +123,13 @@ def generate_decision_support_report(run_dir: str | Path, dataset: RunAnalysisDa
         worst_contingencies=worst_contingencies,
         notes=notes if isinstance(notes, list) else [],
     )
-    html_report.write_text(render_decision_support_report_html(report_view), encoding="utf-8")
+    paths.html_report.write_text(render_decision_support_report_html(report_view), encoding="utf-8")
 
-    summary["summary_json"] = str(summary_json)
-    summary["html_report"] = str(html_report)
-    legacy_html_report = report_dir / "report.html"
-    if legacy_html_report != html_report:
-        legacy_html_report.write_text(html_report.read_text(encoding="utf-8"), encoding="utf-8")
-    summary["legacy_html_report"] = str(legacy_html_report)
+    summary["summary_json"] = str(paths.summary_json)
+    summary["html_report"] = str(paths.html_report)
+    if paths.legacy_html_report != paths.html_report:
+        paths.legacy_html_report.write_text(paths.html_report.read_text(encoding="utf-8"), encoding="utf-8")
+    summary["legacy_html_report"] = str(paths.legacy_html_report)
     return summary
 
 
@@ -111,9 +139,10 @@ def generate_run_report(run_dir: str | Path) -> dict:
 
 
 def export_run_zip(run_dir: str | Path, destination_zip: str | Path | None = None) -> Path:
-    run_path = Path(run_dir).expanduser().resolve()
+    paths = DecisionSupportReportPaths.for_run(run_dir)
+    run_path = paths.run_dir
     if destination_zip is None:
-        destination_zip = run_path.parent.parent / "exports" / f"{run_path.name}.zip"
+        destination_zip = paths.default_zip_path()
     zip_path = Path(destination_zip).expanduser().resolve()
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -125,7 +154,7 @@ def export_run_zip(run_dir: str | Path, destination_zip: str | Path | None = Non
 
 
 def copy_report_bundle(run_dir: str | Path, destination_dir: str | Path) -> Path:
-    source = Path(run_dir).expanduser().resolve() / "reports"
+    source = DecisionSupportReportPaths.for_run(run_dir).report_dir
     destination = Path(destination_dir).expanduser().resolve()
     if destination.exists():
         shutil.rmtree(destination)

@@ -18,6 +18,13 @@ UTILIZATION_COLUMNS = [
     "mean_contingency_utilization_pct",
     "max_contingency_utilization_pct",
 ]
+RAW_RATE_A_COLUMN = "ratea"
+RATE_A_COLUMN = "rate_a"
+ALLOWABLE_FLOW_FALLBACK_COLUMN = "pflow_mm_max_allowable"
+BASE_FLOW_SOURCE_COLUMN = "pflow_mm_base_value"
+MEAN_N1_FLOW_SOURCE_COLUMN = "pflow_average"
+MIN_N1_FLOW_SOURCE_COLUMN = "pflow_mm_min_value"
+MAX_N1_FLOW_SOURCE_COLUMN = "pflow_mm_max_value"
 AREA_CANDIDATE_COLUMNS = ["perf_mm_area", "pflow_area", "pflow_mm_area", "line_flt_cnt_area"]
 VOLTAGE_CLASS_CANDIDATE_COLUMNS = [
     "perf_mm_voltage_class",
@@ -246,14 +253,14 @@ def _normalize_master_columns(pd, master):
         if key not in master.columns:
             master[key] = ""
 
-    if "ratea" not in master.columns:
-        master["ratea"] = None
-    if "pflow_mm_max_allowable" in master.columns:
-        fallback = pd.to_numeric(master["pflow_mm_max_allowable"], errors="coerce").abs()
-        ratea = pd.to_numeric(master["ratea"], errors="coerce")
-        master["rate_a"] = ratea.where(ratea > 0, fallback)
+    if RAW_RATE_A_COLUMN not in master.columns:
+        master[RAW_RATE_A_COLUMN] = None
+    if ALLOWABLE_FLOW_FALLBACK_COLUMN in master.columns:
+        fallback = pd.to_numeric(master[ALLOWABLE_FLOW_FALLBACK_COLUMN], errors="coerce").abs()
+        ratea = pd.to_numeric(master[RAW_RATE_A_COLUMN], errors="coerce")
+        master[RATE_A_COLUMN] = ratea.where(ratea > 0, fallback)
     else:
-        master["rate_a"] = pd.to_numeric(master["ratea"], errors="coerce")
+        master[RATE_A_COLUMN] = pd.to_numeric(master[RAW_RATE_A_COLUMN], errors="coerce")
     master = _fill_canonical_column(master, "area", AREA_CANDIDATE_COLUMNS)
     master = _fill_canonical_column(master, "voltage_class", VOLTAGE_CLASS_CANDIDATE_COLUMNS)
     return master
@@ -270,11 +277,11 @@ def _fill_canonical_column(master, column: str, candidates: list[str]):
 
 
 def _add_utilization_columns(pd, master):
-    rate_a = _numeric_column(pd, master, "rate_a")
-    base_flow = _numeric_column(pd, master, "pflow_mm_base_value")
-    mean_flow = _numeric_column(pd, master, "pflow_average")
-    min_flow = _numeric_column(pd, master, "pflow_mm_min_value")
-    max_flow = _numeric_column(pd, master, "pflow_mm_max_value")
+    rate_a = _numeric_column(pd, master, RATE_A_COLUMN)
+    base_flow = _numeric_column(pd, master, BASE_FLOW_SOURCE_COLUMN)
+    mean_flow = _numeric_column(pd, master, MEAN_N1_FLOW_SOURCE_COLUMN)
+    min_flow = _numeric_column(pd, master, MIN_N1_FLOW_SOURCE_COLUMN)
+    max_flow = _numeric_column(pd, master, MAX_N1_FLOW_SOURCE_COLUMN)
 
     worst_flow = pd.concat([min_flow.abs(), max_flow.abs()], axis=1).max(axis=1)
 

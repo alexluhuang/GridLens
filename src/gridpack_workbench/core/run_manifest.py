@@ -21,6 +21,14 @@ def detect_host_architecture() -> str:
 
 
 @dataclass(slots=True)
+class ManifestInputFile:
+    file_name: str
+    path_in_container: str
+    size_bytes: int
+    sha256: str
+
+
+@dataclass(slots=True)
 class RunManifest:
     run_id: str
     created_at: str
@@ -34,7 +42,7 @@ class RunManifest:
     network_mode: str
     pull_policy: str
     command: list[str]
-    input_files: list[dict] = field(default_factory=list)
+    input_files: list[ManifestInputFile] = field(default_factory=list)
     notes: str = ""
 
     @classmethod
@@ -49,7 +57,7 @@ class RunManifest:
         network_mode: str,
         pull_policy: str,
         command: list[str],
-        input_files: list[dict] | None = None,
+        input_files: list[ManifestInputFile] | None = None,
         notes: str = "",
     ) -> "RunManifest":
         return cls(

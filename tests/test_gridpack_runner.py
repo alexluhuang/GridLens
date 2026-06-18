@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -53,6 +54,20 @@ class GridpackRunnerTests(unittest.TestCase):
             self.assertTrue(terminal_log.exists())
             self.assertIn("GridPACK line 1", terminal_log.read_text(encoding="utf-8"))
             self.assertEqual(terminal_log.read_text(encoding="utf-8"), run_log.read_text(encoding="utf-8"))
+
+            expected_sha = hashlib.sha256(b"<Configuration />").hexdigest()
+            manifest = json.loads(result.manifest_file.read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["input_files"],
+                [
+                    {
+                        "file_name": "input.xml",
+                        "path_in_container": "/app/workspace/input.xml",
+                        "size_bytes": len("<Configuration />"),
+                        "sha256": expected_sha,
+                    }
+                ],
+            )
 
     def test_docker_start_failure_is_written_to_status_and_logs(self) -> None:
         with TemporaryDirectory() as tmp:

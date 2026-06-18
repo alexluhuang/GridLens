@@ -12,6 +12,12 @@ from gridpack_workbench.core.validation import (
 )
 
 
+DOCKER_BASE_COMMAND = ["docker", "run", "--rm"]
+CONTAINER_WORKSPACE = "/app/workspace"
+CONTAINER_HOME_ENV = "HOME=/tmp"
+MPI_EXECUTABLE = "mpirun"
+
+
 def _split_extra_args(extra_docker_args: str | list[str] | None) -> list[str]:
     if not extra_docker_args:
         return []
@@ -45,7 +51,7 @@ def build_gridpack_docker_command(
     if not xml_filename:
         raise ValueError("XML file name is required.")
 
-    cmd = ["docker", "run", "--rm"]
+    cmd = list(DOCKER_BASE_COMMAND)
 
     if pull_policy:
         cmd.append(f"--pull={pull_policy}")
@@ -60,7 +66,7 @@ def build_gridpack_docker_command(
 
     if use_host_user and hasattr(os, "getuid") and hasattr(os, "getgid"):
         cmd += ["-u", f"{os.getuid()}:{os.getgid()}"]
-        cmd += ["-e", "HOME=/tmp"]
+        cmd += ["-e", CONTAINER_HOME_ENV]
 
     if memory_limit.strip():
         cmd += ["--memory", memory_limit.strip()]
@@ -68,11 +74,11 @@ def build_gridpack_docker_command(
     cmd += _split_extra_args(extra_docker_args)
     cmd += [
         "-v",
-        f"{resolved_work_dir}:/app/workspace",
+        f"{resolved_work_dir}:{CONTAINER_WORKSPACE}",
         "-w",
-        "/app/workspace",
+        CONTAINER_WORKSPACE,
         image,
-        "mpirun",
+        MPI_EXECUTABLE,
         "-n",
         str(mpi_processes),
         executable,

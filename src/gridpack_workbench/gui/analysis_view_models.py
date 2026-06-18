@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 import html
 from pathlib import Path
+from typing import Protocol
 
 
 DEFAULT_DISTRIBUTION_VARIABLES = frozenset(
@@ -47,8 +48,28 @@ CONTINGENCY_TABLE_COLUMNS = [
 ]
 
 
+class DistributionExportLike(Protocol):
+    independent_variable: str
+    table_csv: Path
+    graph_png: Path
+    code_path: Path
+
+
 def should_select_distribution_variable(variable: str) -> bool:
     return variable in DEFAULT_DISTRIBUTION_VARIABLES
+
+
+def distribution_output_row(result: DistributionExportLike) -> dict[str, object]:
+    return {
+        "variable": result.independent_variable,
+        "table_csv": str(result.table_csv),
+        "graph_png": str(result.graph_png),
+        "code_path": str(result.code_path),
+    }
+
+
+def distribution_output_rows(results: Iterable[DistributionExportLike]) -> list[dict[str, object]]:
+    return [distribution_output_row(result) for result in results]
 
 
 def filter_performance_rows(
@@ -148,8 +169,11 @@ __all__ = [
     "CONTINGENCY_TABLE_COLUMNS",
     "DEFAULT_DISTRIBUTION_VARIABLES",
     "DISTRIBUTION_OUTPUT_COLUMNS",
+    "DistributionExportLike",
     "THERMAL_TABLE_COLUMNS",
     "VOLTAGE_TABLE_COLUMNS",
+    "distribution_output_row",
+    "distribution_output_rows",
     "filter_performance_rows",
     "metric_mapping",
     "metric_notes",

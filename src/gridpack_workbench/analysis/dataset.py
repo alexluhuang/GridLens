@@ -28,6 +28,8 @@ __all__ = [
 
 @dataclass(slots=True)
 class RunAnalysisDataset:
+    """Parsed run outputs, derived metrics, and generated analysis artifact paths."""
+
     run_dir: Path
     report_dir: Path
     table_dir: Path
@@ -58,6 +60,8 @@ class RunAnalysisDataset:
 
 
 def build_run_analysis(run_dir: str | Path) -> RunAnalysisDataset:
+    """Parse a run directory and write reusable CSV/JSON analysis artifacts."""
+
     run_path = Path(run_dir).expanduser().resolve()
     report_dir = run_path / "reports"
     table_dir = report_dir / "tables"

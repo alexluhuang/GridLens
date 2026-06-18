@@ -8,7 +8,72 @@ from gridpack_workbench.analysis.parser_models import ParsedTable
 from gridpack_workbench.analysis.table_helpers import append_missing_columns, as_float, pct, take_fields
 
 
-__all__ = ["compute_metrics", "gini", "top_share"]
+THERMAL_BOTTLENECK_FIELDS = [
+    "row_index",
+    "from_bus",
+    "to_bus",
+    "line_id",
+    "from_bus_name",
+    "to_bus_name",
+    "voltage_class",
+    "area",
+    "base_utilization_pct",
+    "max_utilization_pct",
+    "worst_headroom_pct",
+    "max_contingency",
+]
+VOLTAGE_EXTREME_FIELDS = [
+    "row_index",
+    "bus_id",
+    "bus_name",
+    "base_kv",
+    "area",
+    "voltage_class",
+    "base_value",
+    "min_value",
+    "max_value",
+    "min_voltage_margin",
+    "max_voltage_margin",
+    "min_contingency",
+    "max_contingency",
+]
+RANKED_COUNT_BASE_FIELDS = [
+    "row_index",
+    "bus_id",
+    "from_bus",
+    "to_bus",
+    "line_id",
+    "bus_name",
+    "from_bus_name",
+    "to_bus_name",
+    "area",
+    "voltage_class",
+]
+GENERATOR_DEVIATION_FIELDS = [
+    "row_index",
+    "bus_id",
+    "bus_name",
+    "generator_id",
+    "area",
+    "voltage_class",
+    "base_value",
+    "min_value",
+    "max_value",
+    "max_abs_deviation",
+    "min_contingency",
+    "max_contingency",
+]
+
+
+__all__ = [
+    "GENERATOR_DEVIATION_FIELDS",
+    "RANKED_COUNT_BASE_FIELDS",
+    "THERMAL_BOTTLENECK_FIELDS",
+    "VOLTAGE_EXTREME_FIELDS",
+    "compute_metrics",
+    "gini",
+    "top_share",
+]
 
 
 def compute_metrics(tables: dict[str, ParsedTable]) -> dict[str, object]:
@@ -66,7 +131,14 @@ def top_share(values: Iterable[float], fraction: float) -> float:
 
 def _success_metrics(table: ParsedTable | None) -> dict[str, object]:
     if not table or not table.rows:
-        return {"total": 0, "success": 0, "failure": 0, "unknown": 0, "violation_counts": {}, "isolated_warnings": 0}
+        return {
+            "total": 0,
+            "success": 0,
+            "failure": 0,
+            "unknown": 0,
+            "violation_counts": {},
+            "isolated_warnings": 0,
+        }
     total = len(table.rows)
     success = sum(1 for row in table.rows if row.get("success") is True)
     failure = sum(1 for row in table.rows if row.get("success") is False)
@@ -101,23 +173,7 @@ def _thermal_metrics(perf_mm: ParsedTable | None, perf_sum: ParsedTable | None) 
         reverse=True,
     )
     top_bottlenecks = [
-        take_fields(
-            row,
-            [
-                "row_index",
-                "from_bus",
-                "to_bus",
-                "line_id",
-                "from_bus_name",
-                "to_bus_name",
-                "voltage_class",
-                "area",
-                "base_utilization_pct",
-                "max_utilization_pct",
-                "worst_headroom_pct",
-                "max_contingency",
-            ],
-        )
+        take_fields(row, THERMAL_BOTTLENECK_FIELDS)
         for row in sorted_rows[:25]
     ]
     perf_summary = _perf_sum_metrics(perf_sum)
@@ -161,29 +217,14 @@ def _voltage_metrics(vmag_mm: ParsedTable | None, input_settings: ParsedTable | 
     high_rows = [row for row in vmag_mm.rows if (as_float(row.get("max_value")) or -math.inf) > max_voltage]
     low_sorted = sorted(vmag_mm.rows, key=lambda row: as_float(row.get("min_value")) or math.inf)
     high_sorted = sorted(vmag_mm.rows, key=lambda row: as_float(row.get("max_value")) or -math.inf, reverse=True)
-    fields = [
-        "row_index",
-        "bus_id",
-        "bus_name",
-        "base_kv",
-        "area",
-        "voltage_class",
-        "base_value",
-        "min_value",
-        "max_value",
-        "min_voltage_margin",
-        "max_voltage_margin",
-        "min_contingency",
-        "max_contingency",
-    ]
     return {
         "bus_count": len(vmag_mm.rows),
         "min_voltage_threshold": min_voltage,
         "max_voltage_threshold": max_voltage,
         "low_voltage_violations": len(low_rows),
         "high_voltage_violations": len(high_rows),
-        "worst_low_voltage": [take_fields(row, fields) for row in low_sorted[:10]],
-        "worst_high_voltage": [take_fields(row, fields) for row in high_sorted[:10]],
+        "worst_low_voltage": [take_fields(row, VOLTAGE_EXTREME_FIELDS) for row in low_sorted[:10]],
+        "worst_high_voltage": [take_fields(row, VOLTAGE_EXTREME_FIELDS) for row in high_sorted[:10]],
         "by_voltage_class": _group_summary(vmag_mm.rows, "voltage_class", "min_value", minimum=True),
         "by_area": _group_summary(vmag_mm.rows, "area", "min_value", minimum=True),
     }
@@ -222,22 +263,7 @@ def _ranked_count_metrics(table: ParsedTable | None, count_column: str) -> dict[
         "row_count": len(table.rows),
         "nonzero_count": len(nonzero),
         "top": [
-            take_fields(
-                row,
-                [
-                    "row_index",
-                    "bus_id",
-                    "from_bus",
-                    "to_bus",
-                    "line_id",
-                    "bus_name",
-                    "from_bus_name",
-                    "to_bus_name",
-                    "area",
-                    "voltage_class",
-                    count_column,
-                ],
-            )
+            take_fields(row, [*RANKED_COUNT_BASE_FIELDS, count_column])
             for row in rows[:20]
         ],
     }
@@ -250,23 +276,7 @@ def _generator_metrics(table: ParsedTable | None) -> dict[str, object]:
     return {
         "row_count": len(table.rows),
         "top_deviations": [
-            take_fields(
-                row,
-                [
-                    "row_index",
-                    "bus_id",
-                    "bus_name",
-                    "generator_id",
-                    "area",
-                    "voltage_class",
-                    "base_value",
-                    "min_value",
-                    "max_value",
-                    "max_abs_deviation",
-                    "min_contingency",
-                    "max_contingency",
-                ],
-            )
+            take_fields(row, GENERATOR_DEVIATION_FIELDS)
             for row in rows[:20]
         ],
     }
