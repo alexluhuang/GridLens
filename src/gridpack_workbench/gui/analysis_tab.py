@@ -30,10 +30,11 @@ except Exception:  # pragma: no cover - exercised only on systems without matplo
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridpack_workbench.core.project import Project
 from gridpack_workbench.gui.analysis_view_models import (
-    control_area_utilization_rows,
-    max_230kv_line_utilization_rows,
+    average_n1_utilization_rows,
+    max_line_utilization_rows,
     numeric_value,
-    voltage_group_utilization_rows,
+    summarize_control_area_utilization,
+    summarize_voltage_group_utilization,
 )
 from gridpack_workbench.gui.theme import set_button_role
 
@@ -50,9 +51,15 @@ class AnalysisTab(QWidget):
         super().__init__()
         self.project: Project | None = None
         self.current_dataset: RunAnalysisDataset | None = None
+        self.average_branch_rows: list[dict[str, object]] = []
+        self.max_line_rows: list[dict[str, object]] = []
         self.control_area_rows: list[dict[str, object]] = []
         self.voltage_group_rows: list[dict[str, object]] = []
         self.line_rows: list[dict[str, object]] = []
+        self.selected_control_areas: set[str] = set()
+        self.selected_voltage_groups: set[str] = set()
+        self.control_area_click_items: list[tuple[object, dict[str, object]]] = []
+        self.voltage_group_click_items: list[tuple[object, dict[str, object]]] = []
         self._wide_layout: bool | None = None
         self._dense_control_area_layout: bool | None = None
 
@@ -125,9 +132,11 @@ class AnalysisTab(QWidget):
         try:
             self.status_label.setText("Parsing GridPACK outputs and RAW metadata...")
             self.current_dataset = build_run_analysis(run_dir)
-            self.control_area_rows = control_area_utilization_rows(self.current_dataset.tables)
-            self.voltage_group_rows = voltage_group_utilization_rows(self.current_dataset.tables)
-            self.line_rows = max_230kv_line_utilization_rows(self.current_dataset.tables)
+            self.average_branch_rows = average_n1_utilization_rows(self.current_dataset.tables)
+            self.max_line_rows = max_line_utilization_rows(self.current_dataset.tables)
+            self.selected_control_areas.clear()
+            self.selected_voltage_groups.clear()
+            self._refresh_filtered_rows()
             if hasattr(self, "chart_grid"):
                 self._arrange_charts()
             self._render_charts()
@@ -135,7 +144,7 @@ class AnalysisTab(QWidget):
                 "Generated "
                 f"{len(self.control_area_rows)} control-area groups, "
                 f"{len(self.voltage_group_rows)} voltage groups, and "
-                f"{len(self.line_rows)} 230 kV line points."
+                f"{len(self.line_rows)} line points."
             )
         except Exception as exc:
             QMessageBox.critical(self, "Analysis failed", str(exc))
@@ -185,13 +194,15 @@ class AnalysisTab(QWidget):
             self.voltage_group_sort,
         )
         self.line_panel, self.line_figure, self.line_canvas = self._chart_panel(
-            "Maximum Observed Utilization of 230 kV Lines",
+            "Maximum Observed Utilization by Voltage Group",
             self.line_sort,
         )
 
         self.control_area_hover = _HoverBinding(self.control_area_canvas)
         self.voltage_group_hover = _HoverBinding(self.voltage_group_canvas)
         self.line_hover = _HoverBinding(self.line_canvas)
+        self.control_area_canvas.mpl_connect("button_press_event", self._on_control_area_click)
+        self.voltage_group_canvas.mpl_connect("button_press_event", self._on_voltage_group_click)
         self.chart_widgets = [self.control_area_panel, self.voltage_group_panel, self.line_panel]
 
         self.chart_scroll = QScrollArea()
@@ -286,8 +297,8 @@ class AnalysisTab(QWidget):
         self._draw_empty_chart(
             self.line_figure,
             self.line_canvas,
-            "Maximum Observed Utilization of 230 kV Lines",
-            "Generate graphs to view sorted 230 kV line utilization.",
+            "Maximum Observed Utilization by Voltage Group",
+            "Generate graphs to view sorted maximum line utilization.",
         )
 
     def _render_charts(self) -> None:
@@ -297,17 +308,83 @@ class AnalysisTab(QWidget):
         self._render_voltage_group_chart()
         self._render_line_chart()
 
+    def _refresh_filtered_rows(self) -> None:
+        self.control_area_rows = summarize_control_area_utilization(self.average_branch_rows)
+        selected_area_rows = [
+            row for row in self.average_branch_rows
+            if self._row_matches_selected_areas(row)
+        ]
+        self.voltage_group_rows = summarize_voltage_group_utilization(selected_area_rows)
+        visible_voltage_groups = {str(row.get("voltage_group")) for row in self.voltage_group_rows}
+        self.selected_voltage_groups.intersection_update(visible_voltage_groups)
+        self.line_rows = [
+            row for row in self.max_line_rows
+            if self._row_matches_selected_areas(row) and self._row_matches_selected_voltage_groups(row)
+        ]
+
+    def _row_matches_selected_areas(self, row: dict[str, object]) -> bool:
+        if not self.selected_control_areas:
+            return True
+        return bool(self.selected_control_areas.intersection(self._row_control_area_set(row)))
+
+    def _row_matches_selected_voltage_groups(self, row: dict[str, object]) -> bool:
+        if not self.selected_voltage_groups:
+            return True
+        return str(row.get("voltage_group") or "unknown") in self.selected_voltage_groups
+
+    def _row_control_area_set(self, row: dict[str, object]) -> set[str]:
+        areas = row.get("control_areas")
+        if isinstance(areas, str):
+            return {areas} if areas else set()
+        if isinstance(areas, (list, tuple, set)):
+            return {str(area) for area in areas if str(area)}
+        fallback = row.get("control_area")
+        return {str(fallback)} if fallback else set()
+
+    def _on_control_area_click(self, event) -> None:
+        if event.button != 1:
+            return
+        for bar, row in self.control_area_click_items:
+            contains, _ = bar.contains(event)
+            if contains:
+                area = str(row.get("control_area") or "")
+                if area in self.selected_control_areas:
+                    self.selected_control_areas.remove(area)
+                elif area:
+                    self.selected_control_areas.add(area)
+                self._refresh_filtered_rows()
+                self._render_charts()
+                return
+
+    def _on_voltage_group_click(self, event) -> None:
+        if event.button != 1:
+            return
+        for bar, row in self.voltage_group_click_items:
+            contains, _ = bar.contains(event)
+            if contains:
+                group = str(row.get("voltage_group") or "")
+                if group in self.selected_voltage_groups:
+                    self.selected_voltage_groups.remove(group)
+                elif group:
+                    self.selected_voltage_groups.add(group)
+                self._refresh_filtered_rows()
+                self._render_voltage_group_chart()
+                self._render_line_chart()
+                return
+
     def _render_control_area_chart(self) -> None:
         rows = self._sorted_group_rows(
             self.control_area_rows,
             self.control_area_sort.currentData(),
             "control_area",
         )
+        self.control_area_panel.setTitle(self._control_area_title())
         figure = self.control_area_figure
         canvas = self.control_area_canvas
         figure.clear()
         axis = figure.add_subplot(111)
         if not rows:
+            self.control_area_click_items = []
             self._draw_empty_axis(axis, "No >=100 kV line utilization data was available.")
             canvas.draw_idle()
             return
@@ -322,7 +399,11 @@ class AnalysisTab(QWidget):
         ]
         values = [numeric_value(row.get("average_utilization_pct")) for row in rows]
         y_positions = list(range(row_count))
-        bars = axis.barh(y_positions, values, height=0.72, color="#2f6f9f")
+        colors = [
+            self._selection_color(str(row.get("control_area") or ""), self.selected_control_areas, "#2f6f9f")
+            for row in rows
+        ]
+        bars = axis.barh(y_positions, values, height=0.72, color=colors)
         axis.set_yticks(y_positions)
         axis.set_yticklabels(labels)
         axis.invert_yaxis()
@@ -331,12 +412,13 @@ class AnalysisTab(QWidget):
         axis.axvline(30, color="#d83b3b", linestyle="--", linewidth=1, label="30% threshold")
         axis.set_xlabel("Average line utilization (%)")
         axis.set_ylabel("Control area")
-        axis.set_title("Average Line Utilization by Control Area")
+        axis.set_title(self._control_area_title())
         axis.margins(y=0.01)
         self._style_axis(axis)
         axis.tick_params(axis="y", labelsize=tick_font_size, pad=3)
         axis.legend(loc="lower right", fontsize=8)
-        for bar, value in zip(bars, values):
+        for bar, row, value in zip(bars, rows, values):
+            self._style_selected_bar(bar, str(row.get("control_area") or "") in self.selected_control_areas)
             axis.text(
                 value + max(max_value * 0.015, 0.5),
                 bar.get_y() + bar.get_height() / 2,
@@ -349,6 +431,7 @@ class AnalysisTab(QWidget):
         self.control_area_panel.setMinimumHeight(canvas_height + 96)
         self.control_area_panel.updateGeometry()
         self.chart_container.adjustSize()
+        self.control_area_click_items = list(zip(bars, rows))
         self.control_area_hover.bind_bars(axis, bars, rows, self._control_area_hover_text, horizontal=True)
         canvas.draw_idle()
 
@@ -358,38 +441,47 @@ class AnalysisTab(QWidget):
             self.voltage_group_sort.currentData(),
             "voltage_group",
         )
+        self.voltage_group_panel.setTitle(self._voltage_group_title())
         figure = self.voltage_group_figure
         canvas = self.voltage_group_canvas
         figure.clear()
         axis = figure.add_subplot(111)
         if not rows:
-            self._draw_empty_axis(axis, "No N-1 voltage-group utilization data was available.")
+            self.voltage_group_click_items = []
+            self._draw_empty_axis(axis, "No N-1 voltage-group utilization data matched the selected areas.")
             canvas.draw_idle()
             return
 
         labels = [str(row.get("voltage_group", "unknown")) for row in rows]
         values = [numeric_value(row.get("average_utilization_pct")) for row in rows]
-        bars = axis.bar(labels, values, color="#82a9c9")
+        colors = [
+            self._selection_color(str(row.get("voltage_group") or ""), self.selected_voltage_groups, "#82a9c9")
+            for row in rows
+        ]
+        bars = axis.bar(labels, values, color=colors)
         max_value = max(values) if values else 0
         axis.set_ylim(0, max(50, max_value * 1.22))
-        axis.set_xlabel("Voltage group")
-        axis.set_ylabel("Average loading (%)")
-        axis.set_title("Average N-1 Branch Loading by Voltage Group")
+        axis.set_xlabel(self._voltage_group_x_label())
+        axis.set_ylabel(self._voltage_group_y_label())
+        axis.set_title(self._voltage_group_title())
         self._style_axis(axis)
-        for bar, value in zip(bars, values):
+        for bar, row, value in zip(bars, rows, values):
+            self._style_selected_bar(bar, str(row.get("voltage_group") or "") in self.selected_voltage_groups)
             axis.text(bar.get_x() + bar.get_width() / 2, value + max(max_value * 0.025, 0.5), f"{value:.1f}", ha="center", va="bottom", fontsize=8, fontweight="600")
         canvas.setMinimumHeight(330)
+        self.voltage_group_click_items = list(zip(bars, rows))
         self.voltage_group_hover.bind_bars(axis, bars, rows, self._voltage_group_hover_text, horizontal=False)
         canvas.draw_idle()
 
     def _render_line_chart(self) -> None:
         rows = self._sorted_line_rows(self.line_rows, self.line_sort.currentData())
+        self.line_panel.setTitle(self._line_title())
         figure = self.line_figure
         canvas = self.line_canvas
         figure.clear()
         axis = figure.add_subplot(111)
         if not rows:
-            self._draw_empty_axis(axis, "No 230 kV line maximum-utilization data was available.")
+            self._draw_empty_axis(axis, "No line maximum-utilization data matched the selected filters.")
             canvas.draw_idle()
             return
 
@@ -405,9 +497,9 @@ class AnalysisTab(QWidget):
         else:
             axis.set_xlim(1, len(rows))
         axis.set_ylim(0, max(110, max_value * 1.08))
-        axis.set_xlabel("230 kV lines (either or both ends at 230 kV)")
+        axis.set_xlabel(self._line_x_label())
         axis.set_ylabel("Max utilization across all contingencies (%)")
-        axis.set_title("Maximum Observed Utilization of 230 kV Lines")
+        axis.set_title(self._line_title())
         self._style_axis(axis)
         axis.legend(loc="upper left", fontsize=8)
         canvas.setMinimumHeight(390)
@@ -475,6 +567,60 @@ class AnalysisTab(QWidget):
         limit = CONTROL_AREA_LABEL_LIMIT if row_count < 80 else CONTROL_AREA_LABEL_LIMIT - 6
         return textwrap.shorten(clean, width=limit, placeholder="...")
 
+    def _selection_color(self, value: str, selected: set[str], default: str) -> str:
+        if not selected:
+            return default
+        return "#d97706" if value in selected else "#b8c5d2"
+
+    def _style_selected_bar(self, bar, selected: bool) -> None:
+        if selected:
+            bar.set_edgecolor("#7c2d12")
+            bar.set_linewidth(1.4)
+        else:
+            bar.set_edgecolor("none")
+            bar.set_linewidth(0)
+
+    def _control_area_title(self) -> str:
+        if not self.selected_control_areas:
+            return "Average Line Utilization by Control Area"
+        return (
+            "Average Line Utilization by Control Area "
+            f"({self._selection_phrase(self.selected_control_areas, 'areas')} selected)"
+        )
+
+    def _voltage_group_title(self) -> str:
+        return f"Average N-1 Branch Loading by Voltage Group ({self._area_scope_label()})"
+
+    def _voltage_group_x_label(self) -> str:
+        return "Voltage groups for selected control areas" if self.selected_control_areas else "Voltage groups"
+
+    def _voltage_group_y_label(self) -> str:
+        return "Average loading in selected areas (%)" if self.selected_control_areas else "Average loading (%)"
+
+    def _line_title(self) -> str:
+        return f"Maximum Observed Utilization ({self._voltage_scope_label()}, {self._area_scope_label()})"
+
+    def _line_x_label(self) -> str:
+        if self.selected_voltage_groups:
+            return "Lines in selected voltage groups, sorted lowest to highest"
+        return "Lines in visible voltage groups, sorted lowest to highest"
+
+    def _area_scope_label(self) -> str:
+        if not self.selected_control_areas:
+            return "all control areas"
+        return self._selection_phrase(self.selected_control_areas, "areas")
+
+    def _voltage_scope_label(self) -> str:
+        if not self.selected_voltage_groups:
+            return "all visible voltage groups"
+        return self._selection_phrase(self.selected_voltage_groups, "voltage groups")
+
+    def _selection_phrase(self, values: set[str], plural_noun: str) -> str:
+        ordered = sorted(values)
+        if len(ordered) <= 2:
+            return " + ".join(ordered)
+        return f"{len(ordered)} {plural_noun}"
+
     def _control_area_hover_text(self, row: dict[str, object]) -> str:
         return (
             f"{row.get('control_area', 'unknown')}\n"
@@ -500,6 +646,7 @@ class AnalysisTab(QWidget):
             f"{row.get('line_label', '')}\n"
             f"Worst observed (perf_mm): {numeric_value(row.get('max_utilization_pct')):.1f}%\n"
             f"Contingency: {contingency}\n"
+            f"Voltage group: {row.get('voltage_group', 'unknown')}\n"
             f"Control area: {row.get('control_area', 'unknown')}\n"
             f"Voltage: {voltage}"
         )

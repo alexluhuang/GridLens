@@ -4,15 +4,18 @@ from gridpack_workbench.analysis.distributions import DistributionExport
 from gridpack_workbench.analysis.parser_models import ParsedTable
 from gridpack_workbench.gui.analysis_view_models import (
     DISTRIBUTION_OUTPUT_COLUMNS,
+    average_n1_utilization_rows,
     control_area_utilization_rows,
     distribution_output_rows,
     filter_performance_rows,
+    max_line_utilization_rows,
     max_230kv_line_utilization_rows,
     metric_mapping,
     metric_notes,
     numeric_value,
     render_analysis_overview_html,
     should_select_distribution_variable,
+    summarize_voltage_group_utilization,
     top_numeric_rows,
     voltage_group_utilization_rows,
 )
@@ -138,17 +141,25 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
     }
 
     area_rows = control_area_utilization_rows(tables)
+    branch_rows = average_n1_utilization_rows(tables)
     voltage_rows = voltage_group_utilization_rows(tables)
+    north_voltage_rows = summarize_voltage_group_utilization(
+        [row for row in branch_rows if "North" in row["control_areas"]]
+    )
     line_rows = max_230kv_line_utilization_rows(tables)
+    all_line_rows = max_line_utilization_rows(tables)
 
     assert [row["control_area"] for row in area_rows] == ["South", "North"]
     assert area_rows[0]["average_utilization_pct"] == 55.0
     assert area_rows[1]["average_utilization_pct"] == 50.0
     assert all(row["control_area"] != "Low" for row in area_rows)
     assert all(" / " not in row["control_area"] for row in area_rows)
+    assert branch_rows[3]["control_areas"] == ["North", "South"]
     assert [row["voltage_group"] for row in voltage_rows] == ["<100 kV", "100-229 kV", "230-344 kV", "345-499 kV"]
+    assert [row["voltage_group"] for row in north_voltage_rows] == ["100-229 kV", "345-499 kV"]
     assert [row["max_utilization_pct"] for row in line_rows] == [40.0, 90.0]
     assert [row["max_contingency"] for row in line_rows] == [6, 4]
+    assert [row["voltage_group"] for row in all_line_rows] == ["345-499 kV", "100-229 kV", "<100 kV", "230-344 kV"]
 
 
 def test_metric_helpers_tolerate_unexpected_shapes() -> None:

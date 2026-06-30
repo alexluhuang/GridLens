@@ -87,14 +87,30 @@ def distribution_output_rows(results: Iterable[DistributionExportLike]) -> list[
 
 def control_area_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
     """Average N-1 branch utilization by control area for lines at or above 100 kV."""
-    rows = _average_n1_utilization_rows(tables)
+    return summarize_control_area_utilization(average_n1_utilization_rows(tables))
+
+
+def average_n1_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+    """Average N-1 branch utilization rows with area and voltage labels attached."""
     duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
+    rows = []
+    for row in _average_n1_utilization_rows(tables):
+        area_labels = _endpoint_control_area_labels(row, duplicate_area_names)
+        group = str(row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
+        enriched = dict(row)
+        enriched["control_areas"] = area_labels
+        enriched["voltage_group"] = group
+        rows.append(enriched)
+    return rows
+
+
+def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
+    """Summarize average N-1 branch utilization by actual endpoint control area."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
         if _line_voltage_kv(row) < 100:
             continue
-        area_labels = _endpoint_control_area_labels(row, duplicate_area_names)
-        for area in area_labels:
+        for area in _row_control_areas(row):
             buckets.setdefault(area, []).append(float(row["utilization_pct"]))
 
     summaries = _group_average_rows(buckets, "control_area")
@@ -104,10 +120,14 @@ def control_area_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dic
 
 def voltage_group_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
     """Average N-1 branch utilization by voltage group."""
-    rows = _average_n1_utilization_rows(tables)
+    return summarize_voltage_group_utilization(average_n1_utilization_rows(tables))
+
+
+def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
+    """Summarize average N-1 branch utilization by voltage group."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
-        group = str(row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
+        group = str(row.get("voltage_group") or row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
         buckets.setdefault(group, []).append(float(row["utilization_pct"]))
 
     summaries = _group_average_rows(buckets, "voltage_group")
@@ -117,6 +137,14 @@ def voltage_group_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[di
 
 def max_230kv_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
     """Maximum observed utilization for 230 kV lines, sorted from lowest to highest."""
+    rows = [row for row in max_line_utilization_rows(tables) if _is_230kv_line(row)]
+    rows.sort(key=lambda item: numeric_value(item.get("max_utilization_pct")))
+    return rows
+
+
+def max_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+    """Maximum observed utilization rows for branch lines, sorted from lowest to highest."""
+    duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
     branches = _table_index(tables.get("branch_metadata"))
     pflow_mm = _table_index(tables.get("pflow_mm"))
     rows: list[dict[str, object]] = []
@@ -124,11 +152,10 @@ def max_230kv_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[d
     for row in _table_rows(tables, "perf_mm"):
         key = _branch_key(row)
         context = _merge_rows(branches.get(key, {}), pflow_mm.get(key, {}), row)
-        if not _is_230kv_line(context):
-            continue
         utilization = _max_utilization_pct(context)
         if utilization is None:
             continue
+        voltage_group = str(context.get("voltage_class") or voltage_class(_line_voltage_kv(context)) or "unknown")
         rows.append(
             {
                 "line_label": _line_label(context),
@@ -140,6 +167,8 @@ def max_230kv_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[d
                 "from_base_kv": context.get("from_base_kv", ""),
                 "to_base_kv": context.get("to_base_kv", ""),
                 "control_area": context.get("control_area") or context.get("area") or "unknown",
+                "control_areas": _endpoint_control_area_labels(context, duplicate_area_names),
+                "voltage_group": voltage_group,
                 "max_contingency": context.get("max_contingency", ""),
                 "max_utilization_pct": round(utilization, 6),
             }
@@ -208,6 +237,17 @@ def _endpoint_control_area_labels(row: Mapping[str, object], duplicate_names: se
             seen.add(label)
     if labels:
         return labels
+    fallback = _clean_label(row.get("control_area") or row.get("area"))
+    return [fallback] if fallback else ["unknown"]
+
+
+def _row_control_areas(row: Mapping[str, object]) -> list[str]:
+    areas = row.get("control_areas")
+    if isinstance(areas, str):
+        return [_clean_label(areas)] if areas else []
+    if isinstance(areas, Iterable):
+        labels = [_clean_label(area) for area in areas]
+        return [label for label in labels if label]
     fallback = _clean_label(row.get("control_area") or row.get("area"))
     return [fallback] if fallback else ["unknown"]
 
@@ -430,16 +470,20 @@ __all__ = [
     "DistributionExportLike",
     "THERMAL_TABLE_COLUMNS",
     "VOLTAGE_TABLE_COLUMNS",
+    "average_n1_utilization_rows",
     "control_area_utilization_rows",
     "distribution_output_row",
     "distribution_output_rows",
     "filter_performance_rows",
     "max_230kv_line_utilization_rows",
+    "max_line_utilization_rows",
     "metric_mapping",
     "metric_notes",
     "numeric_value",
     "render_analysis_overview_html",
     "should_select_distribution_variable",
+    "summarize_control_area_utilization",
+    "summarize_voltage_group_utilization",
     "top_numeric_rows",
     "voltage_group_utilization_rows",
 ]
