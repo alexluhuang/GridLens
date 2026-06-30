@@ -77,7 +77,7 @@ The analysis layer is deliberately local and file-based. It can:
 - write `exports/master.csv`, `exports/master_cleaned.csv`, and `exports/outliers.csv`;
 - write distribution plot PNGs and companion CSV tables under `exports/distributions/`.
 
-Analysis responsibilities are split by module so parser, enrichment, metric, and export changes stay isolated:
+Analysis responsibilities are split by module:
 
 - `parser_models.py`: defines shared parser data objects such as `ParsedTable`.
 - `parsers.py`: converts GridPACK output files into normalized `ParsedTable` objects.

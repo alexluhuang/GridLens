@@ -3,15 +3,13 @@
 ## Setup
 
 ```bash
-cd /home/alh360/Documents/gridpack-workbench-dev
+cd /home/user/Documents/gridpack-workbench-dev
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev,analysis]"
 ```
 
-If the machine has no network access, install dependencies from an internal wheelhouse or an offline package repository
-approved for CEII environments.
 
 The minimal GUI dependency is also listed in `requirements.txt`; optional plotting/data dependencies are listed in
 `requirements-analysis.txt`.
