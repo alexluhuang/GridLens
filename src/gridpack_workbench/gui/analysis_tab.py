@@ -1,61 +1,60 @@
 from __future__ import annotations
 
 from pathlib import Path
+import textwrap
+from typing import Callable
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QComboBox,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSpinBox,
-    QTableWidget,
-    QTabWidget,
-    QTextBrowser,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 try:  # Matplotlib is an optional analysis dependency.
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
     from matplotlib.figure import Figure
 except Exception:  # pragma: no cover - exercised only on systems without matplotlib.
     FigureCanvas = None  # type: ignore[assignment]
+    NavigationToolbar = None  # type: ignore[assignment]
     Figure = None  # type: ignore[assignment]
 
-from gridpack_workbench.analysis.distributions import distribution_variables_from_master, generate_distribution_exports
-from gridpack_workbench.analysis.master import UTILIZATION_COLUMNS, ensure_branch_master_exports
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
-from gridpack_workbench.analysis.summary import generate_decision_support_report
 from gridpack_workbench.core.project import Project
 from gridpack_workbench.gui.analysis_view_models import (
-    CONTINGENCY_TABLE_COLUMNS,
-    DISTRIBUTION_OUTPUT_COLUMNS,
-    THERMAL_TABLE_COLUMNS,
-    VOLTAGE_TABLE_COLUMNS,
-    distribution_output_rows,
-    filter_performance_rows,
+    control_area_utilization_rows,
+    max_230kv_line_utilization_rows,
     numeric_value,
-    render_analysis_overview_html,
-    should_select_distribution_variable,
-    top_numeric_rows,
+    voltage_group_utilization_rows,
 )
-from gridpack_workbench.gui.table_utils import populate_table
 from gridpack_workbench.gui.theme import set_button_role
+
+
+CONTROL_AREA_FULL_WIDTH_ROWS = 36
+CONTROL_AREA_MIN_HEIGHT = 360
+CONTROL_AREA_TOP_BOTTOM_PADDING = 150
+CONTROL_AREA_ROW_PIXELS = 26
+CONTROL_AREA_LABEL_LIMIT = 46
 
 
 class AnalysisTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.project: Project | None = None
-        self.last_report: Path | None = None
         self.current_dataset: RunAnalysisDataset | None = None
-        self.current_master: dict[str, object] = {}
+        self.control_area_rows: list[dict[str, object]] = []
+        self.voltage_group_rows: list[dict[str, object]] = []
+        self.line_rows: list[dict[str, object]] = []
+        self._wide_layout: bool | None = None
+        self._dense_control_area_layout: bool | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -69,29 +68,27 @@ class AnalysisTab(QWidget):
         refresh = QPushButton("Refresh Runs")
         set_button_role(refresh, "secondary")
         refresh.clicked.connect(lambda: self.refresh_runs())
-        analyze = QPushButton("Generate DSS Analysis")
+        analyze = QPushButton("Generate Graphs")
         set_button_role(analyze, "primary")
-        analyze.clicked.connect(self.generate_report)
-        open_report = QPushButton("Open HTML Report")
-        set_button_role(open_report, "secondary")
-        open_report.clicked.connect(self.open_report)
+        analyze.clicked.connect(self.generate_graphs)
         run_row.addWidget(QLabel("Run"))
         run_row.addWidget(self.run_combo, stretch=1)
         run_row.addWidget(refresh)
         run_row.addWidget(analyze)
-        run_row.addWidget(open_report)
         layout.addLayout(run_row)
 
-        self.tabs = QTabWidget()
-        self.overview = QTextBrowser()
-        self.tabs.addTab(self.overview, "Overview")
-        self.tabs.addTab(self._build_thermal_tab(), "Thermal Utilization")
-        self.tabs.addTab(self._build_voltage_tab(), "Voltage / Reactive")
-        self.tabs.addTab(self._build_contingency_tab(), "Contingencies")
-        self.distribution_tab = self._build_distributions_tab()
-        self.tabs.addTab(self.distribution_tab, "Distributions")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self.tabs, stretch=1)
+        self.status_label = QLabel("Select a completed run and generate the three analysis graphs.")
+        self.status_label.setObjectName("mutedLabel")
+        layout.addWidget(self.status_label)
+
+        if FigureCanvas and Figure and NavigationToolbar:
+            self._build_chart_area(layout)
+        else:
+            missing = QLabel(
+                "Install the analysis optional dependencies to enable interactive embedded charts."
+            )
+            missing.setObjectName("contextLabel")
+            layout.addWidget(missing, stretch=1)
 
         self._show_empty_state()
 
@@ -114,289 +111,488 @@ class AnalysisTab(QWidget):
         for index in range(self.run_combo.count()):
             if Path(self.run_combo.itemData(index)).resolve() == path:
                 self.run_combo.setCurrentIndex(index)
-                self._refresh_distribution_variables()
                 break
 
     def selected_run_dir(self) -> Path | None:
         value = self.run_combo.currentData()
         return Path(value) if value else None
 
-    def generate_report(self) -> None:
+    def generate_graphs(self) -> None:
         run_dir = self.selected_run_dir()
         if not run_dir:
             QMessageBox.warning(self, "No run selected", "Select a completed run first.")
             return
         try:
+            self.status_label.setText("Parsing GridPACK outputs and RAW metadata...")
             self.current_dataset = build_run_analysis(run_dir)
-            summary = generate_decision_support_report(run_dir, self.current_dataset)
-            self.last_report = Path(summary["html_report"])
-            self.current_master = summary.get("master", {}) if isinstance(summary.get("master"), dict) else {}
-            self._refresh_filters()
-            self._refresh_distribution_variables()
-            self._render_dataset()
-            master_cleaned = self.current_master.get("master_cleaned_csv", "")
-            QMessageBox.information(
-                self,
-                "Analysis generated",
-                "Decision support analysis generated:\n"
-                f"{self.current_dataset.manifest_path}\n\n"
-                f"Master dataset:\n{master_cleaned}",
+            self.control_area_rows = control_area_utilization_rows(self.current_dataset.tables)
+            self.voltage_group_rows = voltage_group_utilization_rows(self.current_dataset.tables)
+            self.line_rows = max_230kv_line_utilization_rows(self.current_dataset.tables)
+            if hasattr(self, "chart_grid"):
+                self._arrange_charts()
+            self._render_charts()
+            self.status_label.setText(
+                "Generated "
+                f"{len(self.control_area_rows)} control-area groups, "
+                f"{len(self.voltage_group_rows)} voltage groups, and "
+                f"{len(self.line_rows)} 230 kV line points."
             )
         except Exception as exc:
             QMessageBox.critical(self, "Analysis failed", str(exc))
+            self.status_label.setText("Analysis failed.")
 
-    def open_report(self) -> None:
-        if self.last_report and self.last_report.exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_report)))
+    def generate_report(self) -> None:
+        """Backward-compatible slot name for older signal connections."""
+        self.generate_graphs()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        if hasattr(self, "chart_grid"):
+            self._arrange_charts()
+
+    def _build_chart_area(self, parent_layout: QVBoxLayout) -> None:
+        self.control_area_sort = self._sort_combo(
+            [
+                ("Highest average", "value_desc"),
+                ("Lowest average", "value_asc"),
+                ("Area name", "label"),
+            ],
+            self._render_control_area_chart,
+        )
+        self.voltage_group_sort = self._sort_combo(
+            [
+                ("Voltage order", "voltage_order"),
+                ("Highest average", "value_desc"),
+                ("Lowest average", "value_asc"),
+            ],
+            self._render_voltage_group_chart,
+        )
+        self.line_sort = self._sort_combo(
+            [
+                ("Lowest to highest", "value_asc"),
+                ("Highest to lowest", "value_desc"),
+                ("Line name", "label"),
+            ],
+            self._render_line_chart,
+        )
+
+        self.control_area_panel, self.control_area_figure, self.control_area_canvas = self._chart_panel(
+            "Average Line Utilization by Control Area (100 kV and Above)",
+            self.control_area_sort,
+        )
+        self.voltage_group_panel, self.voltage_group_figure, self.voltage_group_canvas = self._chart_panel(
+            "Average Utilization by Voltage Group Under N-1 Contingencies",
+            self.voltage_group_sort,
+        )
+        self.line_panel, self.line_figure, self.line_canvas = self._chart_panel(
+            "Maximum Observed Utilization of 230 kV Lines",
+            self.line_sort,
+        )
+
+        self.control_area_hover = _HoverBinding(self.control_area_canvas)
+        self.voltage_group_hover = _HoverBinding(self.voltage_group_canvas)
+        self.line_hover = _HoverBinding(self.line_canvas)
+        self.chart_widgets = [self.control_area_panel, self.voltage_group_panel, self.line_panel]
+
+        self.chart_scroll = QScrollArea()
+        self.chart_scroll.setWidgetResizable(True)
+        self.chart_container = QWidget()
+        self.chart_grid = QGridLayout(self.chart_container)
+        self.chart_grid.setContentsMargins(0, 0, 0, 0)
+        self.chart_grid.setSpacing(12)
+        self.chart_scroll.setWidget(self.chart_container)
+        parent_layout.addWidget(self.chart_scroll, stretch=1)
+        self._arrange_charts()
+
+    def _sort_combo(
+        self,
+        options: list[tuple[str, str]],
+        callback: Callable[[], None],
+    ) -> QComboBox:
+        combo = QComboBox()
+        for label, value in options:
+            combo.addItem(label, value)
+        combo.currentIndexChanged.connect(callback)
+        return combo
+
+    def _chart_panel(self, title: str, sort_combo: QComboBox):
+        panel = QGroupBox(title)
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 12, 10, 10)
+        layout.setSpacing(8)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Sort"))
+        controls.addWidget(sort_combo)
+        controls.addStretch()
+        layout.addLayout(controls)
+
+        figure = Figure(figsize=(7.0, 3.2), constrained_layout=True)
+        canvas = FigureCanvas(figure)
+        canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        toolbar = NavigationToolbar(canvas, panel)
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas, stretch=1)
+        return panel, figure, canvas
+
+    def _arrange_charts(self) -> None:
+        wide = self.chart_scroll.viewport().width() >= 1120 if hasattr(self, "chart_scroll") else self.width() >= 1120
+        dense_control_area = len(self.control_area_rows) >= CONTROL_AREA_FULL_WIDTH_ROWS
+        if (
+            self._wide_layout == wide
+            and self._dense_control_area_layout == dense_control_area
+            and self.chart_grid.count() > 0
+        ):
             return
-        run_dir = self.selected_run_dir()
-        candidate = run_dir / "reports" / "decision_support_report.html" if run_dir else None
-        if candidate and candidate.exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(candidate)))
+        self._wide_layout = wide
+        self._dense_control_area_layout = dense_control_area
+        while self.chart_grid.count():
+            self.chart_grid.takeAt(0)
 
-    def _build_thermal_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        filter_row = QHBoxLayout()
-        self.area_filter = QComboBox()
-        self.voltage_filter = QComboBox()
-        self.top_n = QSpinBox()
-        self.top_n.setRange(5, 500)
-        self.top_n.setValue(25)
-        self.top_n.valueChanged.connect(self._render_thermal)
-        self.area_filter.currentIndexChanged.connect(self._render_thermal)
-        self.voltage_filter.currentIndexChanged.connect(self._render_thermal)
-        filter_row.addWidget(QLabel("Area"))
-        filter_row.addWidget(self.area_filter)
-        filter_row.addWidget(QLabel("Voltage class"))
-        filter_row.addWidget(self.voltage_filter)
-        filter_row.addWidget(QLabel("Top N"))
-        filter_row.addWidget(self.top_n)
-        filter_row.addStretch()
-        layout.addLayout(filter_row)
-
-        if FigureCanvas and Figure:
-            self.thermal_figure = Figure(figsize=(7, 2.8))
-            self.thermal_canvas = FigureCanvas(self.thermal_figure)
-            layout.addWidget(self.thermal_canvas)
+        if wide and dense_control_area:
+            self.chart_grid.addWidget(self.control_area_panel, 0, 0, 1, 2)
+            self.chart_grid.addWidget(self.voltage_group_panel, 1, 0, 1, 2)
+            self.chart_grid.addWidget(self.line_panel, 2, 0, 1, 2)
+            self.chart_grid.setColumnStretch(0, 1)
+            self.chart_grid.setColumnStretch(1, 1)
+        elif wide:
+            self.chart_grid.addWidget(self.control_area_panel, 0, 0)
+            self.chart_grid.addWidget(self.voltage_group_panel, 0, 1)
+            self.chart_grid.addWidget(self.line_panel, 1, 0, 1, 2)
+            self.chart_grid.setColumnStretch(0, 1)
+            self.chart_grid.setColumnStretch(1, 1)
         else:
-            self.thermal_figure = None
-            self.thermal_canvas = QLabel(
-                "Install the analysis optional dependencies to enable embedded Matplotlib charts."
-            )
-            layout.addWidget(self.thermal_canvas)
-
-        self.thermal_table = QTableWidget(0, 9)
-        layout.addWidget(self.thermal_table, stretch=1)
-        return widget
-
-    def _build_voltage_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.voltage_summary = QTextBrowser()
-        self.voltage_summary.setMaximumHeight(150)
-        self.voltage_table = QTableWidget(0, 8)
-        layout.addWidget(self.voltage_summary)
-        layout.addWidget(self.voltage_table, stretch=1)
-        return widget
-
-    def _build_contingency_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.contingency_summary = QTextBrowser()
-        self.contingency_summary.setMaximumHeight(150)
-        self.contingency_table = QTableWidget(0, 6)
-        layout.addWidget(self.contingency_summary)
-        layout.addWidget(self.contingency_table, stretch=1)
-        return widget
-
-    def _build_distributions_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        control_row = QHBoxLayout()
-        self.distribution_metric = QComboBox()
-        for column in UTILIZATION_COLUMNS:
-            self.distribution_metric.addItem(column, column)
-        generate = QPushButton("Generate Selected Distributions")
-        set_button_role(generate, "primary")
-        generate.clicked.connect(self.generate_distributions)
-        control_row.addWidget(QLabel("Utilization metric"))
-        control_row.addWidget(self.distribution_metric)
-        control_row.addWidget(generate)
-        control_row.addStretch()
-        layout.addLayout(control_row)
-
-        layout.addWidget(QLabel("Independent variables"))
-        self.distribution_variables = QListWidget()
-        self.distribution_variables.setSelectionMode(QAbstractItemView.MultiSelection)
-        layout.addWidget(self.distribution_variables, stretch=1)
-
-        self.distribution_outputs = QTableWidget(0, 4)
-        self.distribution_outputs.setHorizontalHeaderLabels(["Variable", "Table CSV", "Graph PNG", "Code Path"])
-        self.distribution_outputs.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(QLabel("Generated outputs"))
-        layout.addWidget(self.distribution_outputs, stretch=1)
-        return widget
+            for row, widget in enumerate(self.chart_widgets):
+                self.chart_grid.addWidget(widget, row, 0)
+            self.chart_grid.setColumnStretch(0, 1)
+            self.chart_grid.setColumnStretch(1, 0)
 
     def _show_empty_state(self) -> None:
-        self.overview.setHtml(
-            """
-            <h2>Decision Support Analysis</h2>
-            <p>Select a run and click <b>Generate DSS Analysis</b> to parse GridPACK outputs,
-            compute decision-support metrics, generate normalized tables, and create an HTML report.</p>
-            """
+        if not (FigureCanvas and Figure and hasattr(self, "control_area_figure")):
+            return
+        self._draw_empty_chart(
+            self.control_area_figure,
+            self.control_area_canvas,
+            "Average Line Utilization by Control Area",
+            "Generate graphs to view control-area utilization.",
         )
-        populate_table(self.thermal_table, [], [])
-        populate_table(self.voltage_table, [], [])
-        populate_table(self.contingency_table, [], [])
-        populate_table(self.distribution_outputs, [], [])
+        self._draw_empty_chart(
+            self.voltage_group_figure,
+            self.voltage_group_canvas,
+            "Average Utilization by Voltage Group",
+            "Generate graphs to view N-1 voltage-group utilization.",
+        )
+        self._draw_empty_chart(
+            self.line_figure,
+            self.line_canvas,
+            "Maximum Observed Utilization of 230 kV Lines",
+            "Generate graphs to view sorted 230 kV line utilization.",
+        )
 
-    def _refresh_filters(self) -> None:
-        self.area_filter.blockSignals(True)
-        self.voltage_filter.blockSignals(True)
-        self.area_filter.clear()
-        self.voltage_filter.clear()
-        self.area_filter.addItem("All", "")
-        self.voltage_filter.addItem("All", "")
-        rows = self._table_rows("perf_mm")
-        areas = sorted({str(row.get("area", "")) for row in rows if row.get("area")})
-        voltage_classes = sorted({str(row.get("voltage_class", "")) for row in rows if row.get("voltage_class")})
-        for area in areas:
-            self.area_filter.addItem(area, area)
-        for voltage_class in voltage_classes:
-            self.voltage_filter.addItem(voltage_class, voltage_class)
-        self.area_filter.blockSignals(False)
-        self.voltage_filter.blockSignals(False)
-
-    def _refresh_distribution_variables(self) -> None:
-        self.distribution_variables.clear()
-        run_dir = self.selected_run_dir()
-        if not run_dir:
+    def _render_charts(self) -> None:
+        if not (FigureCanvas and Figure and hasattr(self, "control_area_figure")):
             return
-        try:
-            master = ensure_branch_master_exports(run_dir, self.current_dataset)
-            self.current_master = master.as_dict()
-        except Exception as exc:
-            QMessageBox.warning(self, "Cannot prepare master dataset", str(exc))
+        self._render_control_area_chart()
+        self._render_voltage_group_chart()
+        self._render_line_chart()
+
+    def _render_control_area_chart(self) -> None:
+        rows = self._sorted_group_rows(
+            self.control_area_rows,
+            self.control_area_sort.currentData(),
+            "control_area",
+        )
+        figure = self.control_area_figure
+        canvas = self.control_area_canvas
+        figure.clear()
+        axis = figure.add_subplot(111)
+        if not rows:
+            self._draw_empty_axis(axis, "No >=100 kV line utilization data was available.")
+            canvas.draw_idle()
             return
 
-        variables = distribution_variables_from_master(run_dir)
-        for variable in variables:
-            item = QListWidgetItem(variable)
-            if should_select_distribution_variable(variable):
-                item.setSelected(True)
-            self.distribution_variables.addItem(item)
-
-    def _on_tab_changed(self, index: int) -> None:
-        if self.tabs.widget(index) is self.distribution_tab:
-            self._refresh_distribution_variables()
-
-    def generate_distributions(self) -> None:
-        run_dir = self.selected_run_dir()
-        if not run_dir:
-            QMessageBox.warning(self, "No run selected", "Select a run first.")
-            return
-        if self.distribution_variables.count() == 0:
-            self._refresh_distribution_variables()
-        variables = [item.text() for item in self.distribution_variables.selectedItems()]
-        if not variables:
-            QMessageBox.warning(self, "No variables selected", "Select at least one independent variable.")
-            return
-        try:
-            results = generate_distribution_exports(
-                run_dir,
-                variables,
-                utilization_metric=self.distribution_metric.currentData(),
+        row_count = len(rows)
+        canvas_height = self._control_area_canvas_height(row_count)
+        tick_font_size = self._control_area_tick_font_size(row_count)
+        value_font_size = max(7, tick_font_size - 1)
+        labels = [
+            self._control_area_axis_label(row.get("control_area", "unknown"), row_count)
+            for row in rows
+        ]
+        values = [numeric_value(row.get("average_utilization_pct")) for row in rows]
+        y_positions = list(range(row_count))
+        bars = axis.barh(y_positions, values, height=0.72, color="#2f6f9f")
+        axis.set_yticks(y_positions)
+        axis.set_yticklabels(labels)
+        axis.invert_yaxis()
+        max_value = max(values) if values else 0
+        axis.set_xlim(0, max(35, max_value * 1.22))
+        axis.axvline(30, color="#d83b3b", linestyle="--", linewidth=1, label="30% threshold")
+        axis.set_xlabel("Average line utilization (%)")
+        axis.set_ylabel("Control area")
+        axis.set_title("Average Line Utilization by Control Area")
+        axis.margins(y=0.01)
+        self._style_axis(axis)
+        axis.tick_params(axis="y", labelsize=tick_font_size, pad=3)
+        axis.legend(loc="lower right", fontsize=8)
+        for bar, value in zip(bars, values):
+            axis.text(
+                value + max(max_value * 0.015, 0.5),
+                bar.get_y() + bar.get_height() / 2,
+                f"{value:.1f}%",
+                va="center",
+                fontsize=value_font_size,
+                clip_on=False,
             )
-        except Exception as exc:
-            QMessageBox.critical(self, "Distribution generation failed", str(exc))
+        canvas.setMinimumHeight(canvas_height)
+        self.control_area_panel.setMinimumHeight(canvas_height + 96)
+        self.control_area_panel.updateGeometry()
+        self.chart_container.adjustSize()
+        self.control_area_hover.bind_bars(axis, bars, rows, self._control_area_hover_text, horizontal=True)
+        canvas.draw_idle()
+
+    def _render_voltage_group_chart(self) -> None:
+        rows = self._sorted_group_rows(
+            self.voltage_group_rows,
+            self.voltage_group_sort.currentData(),
+            "voltage_group",
+        )
+        figure = self.voltage_group_figure
+        canvas = self.voltage_group_canvas
+        figure.clear()
+        axis = figure.add_subplot(111)
+        if not rows:
+            self._draw_empty_axis(axis, "No N-1 voltage-group utilization data was available.")
+            canvas.draw_idle()
             return
 
-        rows = distribution_output_rows(results)
-        populate_table(self.distribution_outputs, rows, DISTRIBUTION_OUTPUT_COLUMNS)
-        QMessageBox.information(self, "Distributions generated", f"Generated {len(results)} graph/table pairs.")
+        labels = [str(row.get("voltage_group", "unknown")) for row in rows]
+        values = [numeric_value(row.get("average_utilization_pct")) for row in rows]
+        bars = axis.bar(labels, values, color="#82a9c9")
+        max_value = max(values) if values else 0
+        axis.set_ylim(0, max(50, max_value * 1.22))
+        axis.set_xlabel("Voltage group")
+        axis.set_ylabel("Average loading (%)")
+        axis.set_title("Average N-1 Branch Loading by Voltage Group")
+        self._style_axis(axis)
+        for bar, value in zip(bars, values):
+            axis.text(bar.get_x() + bar.get_width() / 2, value + max(max_value * 0.025, 0.5), f"{value:.1f}", ha="center", va="bottom", fontsize=8, fontweight="600")
+        canvas.setMinimumHeight(330)
+        self.voltage_group_hover.bind_bars(axis, bars, rows, self._voltage_group_hover_text, horizontal=False)
+        canvas.draw_idle()
 
-    def _render_dataset(self) -> None:
-        self._render_overview()
-        self._render_thermal()
-        self._render_voltage()
-        self._render_contingencies()
-
-    def _render_overview(self) -> None:
-        if not self.current_dataset:
+    def _render_line_chart(self) -> None:
+        rows = self._sorted_line_rows(self.line_rows, self.line_sort.currentData())
+        figure = self.line_figure
+        canvas = self.line_canvas
+        figure.clear()
+        axis = figure.add_subplot(111)
+        if not rows:
+            self._draw_empty_axis(axis, "No 230 kV line maximum-utilization data was available.")
+            canvas.draw_idle()
             return
-        self.overview.setHtml(
-            render_analysis_overview_html(
-                self.current_dataset.run_dir,
-                self.current_dataset.manifest_path,
-                self.current_dataset.metrics,
-                self.current_master,
-            )
+
+        x_values = list(range(1, len(rows) + 1))
+        values = [numeric_value(row.get("max_utilization_pct")) for row in rows]
+        max_value = max(values) if values else 0
+        axis.axhspan(0, 100, color="#dff2dd", alpha=0.75, label="Capability")
+        axis.fill_between(x_values, values, color="#92d0c8", alpha=0.55, label="Utilization")
+        axis.plot(x_values, values, color="#1f6fb2", linewidth=1.5)
+        axis.axhline(100, color="#70a36a", linewidth=1)
+        if len(rows) == 1:
+            axis.set_xlim(0.5, 1.5)
+        else:
+            axis.set_xlim(1, len(rows))
+        axis.set_ylim(0, max(110, max_value * 1.08))
+        axis.set_xlabel("230 kV lines (either or both ends at 230 kV)")
+        axis.set_ylabel("Max utilization across all contingencies (%)")
+        axis.set_title("Maximum Observed Utilization of 230 kV Lines")
+        self._style_axis(axis)
+        axis.legend(loc="upper left", fontsize=8)
+        canvas.setMinimumHeight(390)
+        self.line_hover.bind_curve(axis, x_values, values, rows, self._line_hover_text)
+        canvas.draw_idle()
+
+    def _sorted_group_rows(
+        self,
+        rows: list[dict[str, object]],
+        mode: object,
+        label_column: str,
+    ) -> list[dict[str, object]]:
+        sorted_rows = list(rows)
+        if mode == "value_asc":
+            sorted_rows.sort(key=lambda row: numeric_value(row.get("average_utilization_pct")))
+        elif mode == "label":
+            sorted_rows.sort(key=lambda row: str(row.get(label_column, "")))
+        elif mode == "value_desc":
+            sorted_rows.sort(key=lambda row: numeric_value(row.get("average_utilization_pct")), reverse=True)
+        return sorted_rows
+
+    def _sorted_line_rows(self, rows: list[dict[str, object]], mode: object) -> list[dict[str, object]]:
+        sorted_rows = list(rows)
+        if mode == "value_desc":
+            sorted_rows.sort(key=lambda row: numeric_value(row.get("max_utilization_pct")), reverse=True)
+        elif mode == "label":
+            sorted_rows.sort(key=lambda row: str(row.get("line_label", "")))
+        else:
+            sorted_rows.sort(key=lambda row: numeric_value(row.get("max_utilization_pct")))
+        return sorted_rows
+
+    def _draw_empty_chart(self, figure, canvas, title: str, message: str) -> None:
+        figure.clear()
+        axis = figure.add_subplot(111)
+        axis.set_title(title)
+        self._draw_empty_axis(axis, message)
+        canvas.draw_idle()
+
+    def _draw_empty_axis(self, axis, message: str) -> None:
+        axis.text(0.5, 0.5, message, ha="center", va="center", transform=axis.transAxes, color="#5b667a")
+        axis.set_axis_off()
+
+    def _style_axis(self, axis) -> None:
+        axis.grid(True, axis="y", color="#d8dde7", linewidth=0.8, alpha=0.8)
+        axis.grid(True, axis="x", color="#e9edf4", linewidth=0.6, alpha=0.7)
+        axis.set_axisbelow(True)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["left"].set_color("#9aa5b5")
+        axis.spines["bottom"].set_color("#9aa5b5")
+        axis.tick_params(axis="both", labelsize=8)
+
+    def _control_area_canvas_height(self, row_count: int) -> int:
+        return max(CONTROL_AREA_MIN_HEIGHT, CONTROL_AREA_TOP_BOTTOM_PADDING + row_count * CONTROL_AREA_ROW_PIXELS)
+
+    def _control_area_tick_font_size(self, row_count: int) -> int:
+        if row_count >= 120:
+            return 7
+        if row_count >= 80:
+            return 8
+        return 9
+
+    def _control_area_axis_label(self, label: object, row_count: int) -> str:
+        clean = " ".join(str(label or "unknown").split())
+        limit = CONTROL_AREA_LABEL_LIMIT if row_count < 80 else CONTROL_AREA_LABEL_LIMIT - 6
+        return textwrap.shorten(clean, width=limit, placeholder="...")
+
+    def _control_area_hover_text(self, row: dict[str, object]) -> str:
+        return (
+            f"{row.get('control_area', 'unknown')}\n"
+            f"Group average: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
+            f"Lines: {row.get('line_count', 0)}\n"
+            f"Line average range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
+            f"{numeric_value(row.get('max_utilization_pct')):.1f}%"
         )
 
-    def _render_thermal(self) -> None:
-        rows = top_numeric_rows(
-            self._filtered_perf_rows(),
-            "max_utilization_pct",
-            self.top_n.value(),
-            reverse=True,
-            missing_value=0.0,
+    def _voltage_group_hover_text(self, row: dict[str, object]) -> str:
+        return (
+            f"{row.get('voltage_group', 'unknown')}\n"
+            f"Group average: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
+            f"Lines: {row.get('line_count', 0)}\n"
+            f"Line average range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
+            f"{numeric_value(row.get('max_utilization_pct')):.1f}%"
         )
-        populate_table(self.thermal_table, rows, THERMAL_TABLE_COLUMNS)
-        if FigureCanvas and Figure and self.thermal_figure and rows:
-            self.thermal_figure.clear()
-            axis = self.thermal_figure.add_subplot(111)
-            labels = [str(row.get("row_index", "")) for row in rows[:15]]
-            values = [numeric_value(row.get("max_utilization_pct"), 0.0) for row in rows[:15]]
-            axis.bar(labels, values, color="#2f6f9f")
-            axis.axhline(80, color="#a66a00", linestyle="--", linewidth=1)
-            axis.axhline(100, color="#a33d3d", linestyle="--", linewidth=1)
-            axis.set_title("Worst-Contingency Thermal Utilization")
-            axis.set_ylabel("Utilization (%)")
-            axis.set_xlabel("Facility row index")
-            axis.tick_params(axis="x", labelrotation=45)
-            self.thermal_figure.tight_layout()
-            self.thermal_canvas.draw()
 
-    def _render_voltage(self) -> None:
-        if not self.current_dataset:
+    def _line_hover_text(self, row: dict[str, object]) -> str:
+        voltage = f"{row.get('from_base_kv', '')} / {row.get('to_base_kv', '')} kV"
+        contingency = row.get("max_contingency") or "n/a"
+        return (
+            f"{row.get('line_label', '')}\n"
+            f"Worst observed (perf_mm): {numeric_value(row.get('max_utilization_pct')):.1f}%\n"
+            f"Contingency: {contingency}\n"
+            f"Control area: {row.get('control_area', 'unknown')}\n"
+            f"Voltage: {voltage}"
+        )
+
+
+class _HoverBinding:
+    def __init__(self, canvas) -> None:
+        self.canvas = canvas
+        self.axis = None
+        self.annotation = None
+        self.mode = ""
+        self.bar_items = []
+        self.curve_x: list[int] = []
+        self.curve_y: list[float] = []
+        self.curve_rows: list[dict[str, object]] = []
+        self.text_for_row: Callable[[dict[str, object]], str] | None = None
+        self.horizontal = False
+        self.canvas.mpl_connect("motion_notify_event", self._on_motion)
+
+    def bind_bars(self, axis, bars, rows, text_for_row, *, horizontal: bool) -> None:
+        self.axis = axis
+        self.mode = "bars"
+        self.bar_items = list(zip(bars, rows))
+        self.curve_x = []
+        self.curve_y = []
+        self.curve_rows = []
+        self.text_for_row = text_for_row
+        self.horizontal = horizontal
+        self.annotation = self._annotation(axis)
+
+    def bind_curve(self, axis, x_values, y_values, rows, text_for_row) -> None:
+        self.axis = axis
+        self.mode = "curve"
+        self.bar_items = []
+        self.curve_x = list(x_values)
+        self.curve_y = list(y_values)
+        self.curve_rows = list(rows)
+        self.text_for_row = text_for_row
+        self.annotation = self._annotation(axis)
+
+    def _annotation(self, axis):
+        annotation = axis.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(12, 12),
+            textcoords="offset points",
+            bbox={"boxstyle": "round,pad=0.35", "fc": "#ffffff", "ec": "#7a8798", "alpha": 0.96},
+            arrowprops={"arrowstyle": "->", "color": "#7a8798", "linewidth": 0.8},
+        )
+        annotation.set_visible(False)
+        annotation.set_zorder(20)
+        return annotation
+
+    def _on_motion(self, event) -> None:
+        if self.axis is None or self.annotation is None or self.text_for_row is None:
             return
-        voltage = self.current_dataset.metrics.get("voltage", {})
-        if not isinstance(voltage, dict):
-            voltage = {}
-        self.voltage_summary.setHtml(
-            f"""
-            <p><b>Voltage thresholds:</b> {voltage.get('min_voltage_threshold', 0.9)}
-            to {voltage.get('max_voltage_threshold', 1.1)} p.u.</p>
-            <p><b>Low violations:</b> {voltage.get('low_voltage_violations', 0)}
-            &nbsp; <b>High violations:</b> {voltage.get('high_voltage_violations', 0)}</p>
-            """
-        )
-        rows = top_numeric_rows(
-            self._table_rows("vmag_mm"),
-            "min_value",
-            self.top_n.value(),
-            reverse=False,
-            missing_value=999.0,
-        )
-        populate_table(self.voltage_table, rows, VOLTAGE_TABLE_COLUMNS)
-
-    def _render_contingencies(self) -> None:
-        if not self.current_dataset:
+        if event.inaxes != self.axis:
+            self._hide()
             return
-        contingency = self.current_dataset.metrics.get("contingencies", {})
-        rows = contingency.get("worst_by_performance_index", []) if isinstance(contingency, dict) else []
-        contingency_count = contingency.get("contingency_count", 0) if isinstance(contingency, dict) else 0
-        self.contingency_summary.setHtml(f"<p><b>Contingencies:</b> {contingency_count}</p>")
-        populate_table(self.contingency_table, rows[: self.top_n.value()], CONTINGENCY_TABLE_COLUMNS)
+        if self.mode == "bars":
+            for bar, row in self.bar_items:
+                contains, _ = bar.contains(event)
+                if contains:
+                    if self.horizontal:
+                        xy = (bar.get_width(), bar.get_y() + bar.get_height() / 2)
+                    else:
+                        xy = (bar.get_x() + bar.get_width() / 2, bar.get_height())
+                    self._show(xy, self.text_for_row(row), event)
+                    return
+            self._hide()
+            return
+        if self.mode == "curve" and event.xdata is not None and self.curve_x:
+            nearest_index = min(range(len(self.curve_x)), key=lambda index: abs(self.curve_x[index] - event.xdata))
+            xy = (self.curve_x[nearest_index], self.curve_y[nearest_index])
+            self._show(xy, self.text_for_row(self.curve_rows[nearest_index]), event)
 
-    def _table_rows(self, table_name: str) -> list[dict[str, object]]:
-        if not self.current_dataset:
-            return []
-        table = self.current_dataset.tables.get(table_name)
-        return list(table.rows) if table else []
+    def _show(self, xy, text: str, event) -> None:
+        self.annotation.xy = xy
+        self._place_annotation(event)
+        self.annotation.set_text(text)
+        self.annotation.set_visible(True)
+        self.canvas.draw_idle()
 
-    def _filtered_perf_rows(self) -> list[dict[str, object]]:
-        area = self.area_filter.currentData() if self.area_filter.count() else ""
-        voltage_class = self.voltage_filter.currentData() if self.voltage_filter.count() else ""
-        return filter_performance_rows(self._table_rows("perf_mm"), area, voltage_class)
+    def _place_annotation(self, event) -> None:
+        width = max(self.canvas.width(), 1)
+        height = max(self.canvas.height(), 1)
+        x_offset = -14 if event.x > width * 0.70 else 14
+        y_offset = -14 if event.y > height * 0.70 else 14
+        self.annotation.set_position((x_offset, y_offset))
+        self.annotation.set_ha("right" if x_offset < 0 else "left")
+        self.annotation.set_va("top" if y_offset < 0 else "bottom")
+
+    def _hide(self) -> None:
+        if self.annotation and self.annotation.get_visible():
+            self.annotation.set_visible(False)
+            self.canvas.draw_idle()

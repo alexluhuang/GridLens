@@ -1,0 +1,254 @@
+BUS DATA COLUMNS
+@!   I,'NAME        ', BASKV, IDE,AREA,ZONE,OWNER, VM,        VA,    NVHI,   NVLO,   EVHI,   EVLO
+
+BUS DATA COLUMN KEY
+i (int) – unique bus identifier 1-999997
+name (string) – bus name, 8 characters, must be enclosed in single quotes
+basekv (float) – base voltage (kilo volts)
+ide (int) – bus type, PQ = 1, PV = 2, reference = 3, isolated = 4
+area (int) – area id, 1-9999 (default = 1)
+zone (int) – zone id, 1-9999 (default = 1)
+owner (int) – owner id, 1-9999 (default = 1)
+vm (float) – voltage magnitude (volts p.u.) (default = 1.0)
+va (float) – voltage angle (degrees) (default = 0.0)
+nvhi (float) – voltage magnitude upper bound, normal conditions (volts p.u.) (default = 1.1)
+nvlo (float) – voltage magnitude lower bound, normal conditions (volts p.u.) (default = 0.9)
+evhi (float) – voltage magnitude upper bound, emergency conditions (volts p.u.) (default = 1.1)
+evlo (float) – voltage magnitude lower bound, emergency conditions (volts p.u.) (default = 0.9)
+
+LOAD DATA COLUMNS
+@!   I,'ID',STAT,AREA,ZONE,      PL,        QL,        IP,        IQ,        YP,        YQ, OWNER,SCALE,INTRPT
+
+LOAD DATA COLUMN KEY
+i (int) – the identifier of the bus that this load is connected to
+id (string) – load identifier (not unique)
+status (int) – load status (in service = 1, out of service = 0)
+area (int) – area id, 1-9999 (default = the area of the connecting bus)
+zone (int) – zone id, 1-9999 (default = the zone of the connecting bus)
+pl (float) – active power load (MW) (default = 0.0)
+ql (float) – reactive power output (MVAr) (default = 0.0)
+ip (float) – real current load (MW per unit voltage) (default = 0.0)
+iq (float) – imaginary current load (MVAr per unit voltage) (default = 0.0)
+yp (float) – real admittance load (MW per unit voltage) (default = 0.0)
+yq (float) – imaginary admittance load (MVAr per unit voltage) (default = 0.0)
+owner (int) – owner id, 1-9999 (default = the owner of the connecting bus)
+scale (int) – scaling flag (scalable = 1, fixed = 0) (default = 1)
+intrpt (int) – interruptible flag, (interruptible = 1, non-interruptible = 0) (optional, default = 0)
+
+FIXED SHUNT DATA COLUMNS
+@!   I,'ID',STATUS,  GL,        BL
+
+FIXED SHUNT DATA COLUMN KEY
+index (int) – unique fixed shunt identifier
+i (int) – the identifier of the bus that this fixed shunt is connected to
+id (string) – fixed shunt identifier (not unique)
+status (int) – fixed shunt status (in service = 1, out of service = 0)
+gl (float) – the conductance to ground in MW at one per unit voltage (default = 0.0)
+bl (float) – the susceptance to ground in MVar at one per unit voltage (default = 0.0)
+
+GENERATOR DATA COLUMNS
+@!   I,'ID',      PG,        QG,        QT,        QB,     VS,    IREG,     MBASE,     ZR,         ZX,         RT,         XT,     GTAP,STAT, RMPCT,      PT,        PB,    O1,    F1
+
+GENERATOR DATA COLUMN KEY
+i (int) – the identifier of the bus that this generator is connected to
+id (string) – machine identifier (not unique)
+pg (float) – active power output (MW)
+qg (float) – reactive power output (MVAr)
+qt (float) – reactive power output upper bound (MVAr)
+qb (float) – reactive power output lower bound (MVAr)
+vs (float) – voltage magnitude setpoint (volts p.u.)
+ireg (int) – Remote controlled bus index (must be type 1), zero to control own voltage, and must be zero for gen at swing bus
+mbase (float) – machine mva base (MVA)
+zr (float) – machine resistance, pu on MBASE
+zx (float) – machine reactance, pu on MBASE
+rt (float) – step up transformer resistance, p.u. on MBASE
+xt (float) – step up transformer reactance, p.u. on MBASE
+gtap (float) – step up transformer off nominal turns ratio
+stat (int) – generator status (in service = 1, out of service = 0)
+rmpct (float) – percent of total VARS required to hold voltage at bus IREG to come from bus I - for remote buses controlled by several generators
+pt (float) – active power output upper bound (MW)
+pb (float) – active power output lower bound (MW)
+o1 (int) – owner one id, 1-9999 (default = the owner of the connecting bus)
+f1 (float) – owner one fraction of total ownership (default = 1.0)
+
+NONTRANSFORMER BRANCH DATA COLUMNS
+@!   I,     J,'CKT',     R,          X,         B,    RATE1,   RATE2,   RATE3,  GI,       BI,       GJ,       BJ,STAT,MET,  LEN,  O1,  F1
+
+NONTRANSFORMER BRANCH DATA COLUMN KEY
+i (int) – the identifier of the from bus
+j (int) – the identifier of the to bus, (note a leading minus indicates that the meter is on the from side of the line)
+ckt (str) – circuit identifier
+r (float) – the branch resistance (p.u.)
+x (float) – the branch reactance (p.u.)
+b (float) – the total branch charging susceptance (p.u.)
+ratea (float) – base rating (MVA)
+rateb (float) – shorter rating (MVA)
+ratec (float) – shortest rating (MVA)
+gi (float) – line shunt conductance at from end (bus i) (p.u.)
+bi (float) – line shunt susceptance at from end (bus i) (p.u.)
+gj (float) – line shunt conductance at to end (bus j) (p.u.)
+bj (float) – line shunt susceptance at to end (bus j) (p.u.)
+st (int) – branch status (in service = 1, out of service = 0)
+met (int) – metered end flag (<= 1 indicates the i-bus, >= 2 indicates the j-bus)
+len (float) – line length (user selected units)
+o1 (int) – owner one id, 1-9999 (default = the owner of the connecting bus)
+f1 (float) – owner one fraction of total ownership (default = 1.0)
+
+TRANSFORMER DATA LINE 1 COLUMNS
+@!   I,     J,     K,'CKT',CW,CZ,CM,     MAG1,        MAG2,NMETR,               'N A M E',               STAT,O1,  F1,    O2,  F2,    O3,  F3,    O4,  F4,     'VECGRP'
+
+TRANSFORMER DATA LINE 1 COLUMN KEY
+i (int) – the identifier of the primary bus
+j (int) – the identifier of the secondary bus
+k (int) – the identifier of the tertiary bus (0 if a two winding transformer)
+ckt (string) – circuit identifier
+cw (int) – turn ratio units (1 = off-nominal pu winding bus base voltage, 2 = voltage kc, 3 = off-nominal pu nominal winding voltage)
+cz (int) – winding impedance units (1 = pu on system mva base, 2 = pu on specified mva base, 3 = )
+cm (int) – mag units (1 = pu on system mva, 2 = )
+mag1 (float) – ground conductance on the primary bus
+mag2 (float) – ground susceptance on the primary bus
+nmetr (int) – the nonmetered end of the transformer the primary, secondary, and tertiary buses are specified by 1,2,3 respectively
+name (string) – name of the transformer
+stat (int) – transformer status (0 = out of service, 1 = in service, 2 = winding 2 out, 3 = winding 3 out, 4 = winding 1 out)
+o1 (int) – owner one id, 1-9999 (default = the owner of the connecting bus)
+f1 (float) – owner one fraction of total ownership (default = 1.0)
+o2 (int) – owner two id, 1-9999 (default = the owner of the connecting bus)
+f2 (float) – owner two fraction of total ownership (default = 1.0)
+o3 (int) – owner three id, 1-9999 (default = the owner of the connecting bus)
+f3 (float) – owner three fraction of total ownership (default = 1.0)
+o4 (int) – owner four id, 1-9999 (default = the owner of the connecting bus)
+f4 (float) – owner four fraction of total ownership (default = 1.0)
+vecgrp (string) – vector group identifier (default = ‘ ‘)
+
+TRANSFORMER DATA LINE 2 COLUMNS (TWO-WINDING ONLY)
+@!   R12,       X12,   SBASE12
+
+TRANSFORMER DATA LINE 2 COLUMN KEY (TWO-WINDING-ONLY)
+r12 (float) – resistance between terminal i and j (default 0.0)
+x12 (float) – reactance between terminal i and j
+sbase12 (float) – the MVA base between terminal i and j
+
+TRANSFORMER DATA LINE 3 COLUMNS (TWO-WINDING-ONLY)
+@!WINDV,  NOMV,    ANG,  RATEA,  RATEB,  RATEC, COD,CONT,   RMA,    RMI,    VMA,    VMI, NTP,TAB,  CR,     CX,   CNXA
+
+TRANSFORMER DATA LINE 3 COLUMN KEY (TWO-WINDING ONLY)
+windv (float) – off-nominal turn ratio (p.u.) (default = 1.0)
+nomv (float) – base voltage (kilo volts)
+ang (float) – angle shift (degrees)
+ratea (float) – base rating (MVA)
+rateb (float) – shorter rating (MVA)
+ratec (float) – shortest rating (MVA)
+cod (int) – transformer control mode
+cont (int) – remote bus index for transformer voltage control ()
+rma (float) – off-nominal turn ratio upper bound
+rmi (float) – off-nominal turn ratio lower bound
+vma (float) – controller band upper limit
+vmi (float) – controller band lower limit
+ntp (int) – number of tap positions available 2-9999 (default = 33)
+tab (int) – the identifier of the transformer impedance correction table
+cr (float) – load drop compensation resistance (p.u.)
+cx (float) – load drop compensation reactance (p.u.)
+cnxa (float) – winding connection angle (degrees) (default = 0.0)
+
+TRANSFORMER DATA LINE 4 COLUMNS (TWO-WINDING ONLY)
+WINDV, NOMV
+
+TRANSFORMER DATA LINE 4 COLUMN KEY (TWO-WINDING ONLY)
+windv (float) – off-nominal turn ratio (p.u.) (default = 1.0)
+nomv (float) – base voltage (kilo volts)
+
+TRANSFORMER DATA LINES 2-4 COLUMNS (THREE-WINDING ONLY)
+@!WINDV,  NOMV,    ANG,  RATEA,  RATEB,  RATEC, COD,CONT,   RMA,    RMI,    VMA,    VMI, NTP,TAB,  CR,     CX,   CNXA
+
+TRANSFORMER DATA LINES 2-4 COLUMN KEY (THREE-WINDING ONLY)
+# note: line 2 is for wind 1, line 3, is for wind 2, and line 4 is for wind 3
+windv (float) – off-nominal turn ratio (p.u.) (default = 1.0)
+nomv (float) – base voltage (kilo volts)
+ang (float) – angle shift (degrees)
+ratea (float) – base rating (MVA)
+rateb (float) – shorter rating (MVA)
+ratec (float) – shortest rating (MVA)
+cod (int) – transformer control mode
+cont (int) – remote bus index for transformer voltage control ()
+rma (float) – off-nominal turn ratio upper bound
+rmi (float) – off-nominal turn ratio lower bound
+vma (float) – controller band upper limit
+vmi (float) – controller band lower limit
+ntp (int) – number of tap positions available 2-9999 (default = 33)
+tab (int) – the identifier of the transformer impedance correction table
+cr (float) – load drop compensation resistance (p.u.)
+cx (float) – load drop compensation reactance (p.u.)
+cnxa (float) – winding connection angle (degrees) (default = 0.0)
+
+AREA INTERCHANGE DATA COLUMNS
+@! I,   ISW,     PDES,      PTOL,    'ARNAME'
+
+AREA INTERCHANGE DATA COLUMN KEY
+i (int) – the identifier of the area
+isw (int) – the identifier of the interchange slack bus
+pdes (float) – desired net area interchange (MW)
+ptol (float) – interchange tolerance (MW += out)
+arnam (string) – area name, 8 characters, must be enclosed in single quotes
+
+VSC DC LINE DATA LINE 1 COLUMNS
+@!  'NAME',   MDC,     RDC,   O1,  F1
+
+VSC DC LINE DATA LINE 1 COLUMN KEY
+name (str) – name of VSC DC Line
+mdc (int) – control mode (status)
+rdc (float) – dc line resistance
+oi (int) – owner number
+fi (float) – fraction of total ownership assigned to oi
+
+VSC DC LINE DATA LINES 2-3 COLUMNS
+@!IBUS,TYPE,MODE,     DCSET,   ACSET,     ALOSS,     BLOSS,   MINLOSS,     SMAX,      IMAX,   PWF,        MAXQ,      MINQ, REMOT,  RMPCT
+
+VSC DC LINE DATA LINES 2-3 COLUMN KEY
+ibus (int) – bus number
+type (int) – type of converter dc control
+mode (int) – ac control mode
+dcset (float) – dc setpoint
+acset (float) – ac setpoint
+aloss (float) – coefficient to linear equation for converter losses
+bloss (float) – coefficient to linear equation for converter losses
+minloss (float) – minimum losses
+smax (float) – MVA rating
+imax (float) – ac current rating
+pwf (float) – power weighting factor
+maxq (float) – reactive power upper limit
+minq (float) – reactive power lower limit
+remot (int) – bus number of remote regulating bus
+rmpct (float) – percent of Mvar required to hold bus voltage
+
+SWITCHED SHUNT DATA COLUMNS
+# note: shunts have varying number of blocks. so, if a shunt only has 5 blocks, columns N6 through B8 will not exist.
+@!  I,MODSW,ADJM,ST, VSWHI,  VSWLO, SWREG,  RMPCT,   'RMIDNT',      BINIT,N1,     B1, N2,     B2, N3,     B3, N4,     B4, N5,     B5, N6,     B6, N7,     B7, N8,     B8
+
+SWITCHED SHUNT DATA COLUMN KEY
+index (int) – unique switched shunt identifier
+i (int) – the identifier of the bus that this switched shunt is connected to
+modsw (int) – control mode (locked = 0, discrete = 1, continuous = 2, … 6) (default = 1)
+adjm (int) – adjustment method (input order = 0, admittance order = 1) (default = 0)
+stat (int) – switched shunt status (in service = 1, out of service = 0)
+vswhi (float) – control parameter upper bound (default = 1.0)
+vswlo (float) – control parameter lower bound (default = 1.0)
+swrem (int) – bus id to monitor reactive power (default = 0)
+rmpct (float) – percentage of reactive power this shunt should contribute (default = 100.0)
+rmidnt (string) – the name of the dc line or facts device where the reactive output should be controlled
+binit (float) – initial shunt susceptance (MVAr per unit voltage) (default = 0.0)
+n1 (int) – the number of steps in block 1 (default = 0)
+b1 (float) – the susceptance increment of block 1 (default = 0.0)
+n2 (int) – the number of steps in block 2 (default = 0)
+b2 (float) – the susceptance increment of block 2 (default = 0.0)
+n3 (int) – the number of steps in block 3 (default = 0)
+b3 (float) – the susceptance increment of block 3 (default = 0.0)
+n4 (int) – the number of steps in block 4 (default = 0)
+b4 (float) – the susceptance increment of block 4 (default = 0.0)
+n5 (int) – the number of steps in block 5 (default = 0)
+b5 (float) – the susceptance increment of block 5 (default = 0.0)
+n6 (int) – the number of steps in block 6 (default = 0)
+b6 (float) – the susceptance increment of block 6 (default = 0.0)
+n7 (int) – the number of steps in block 7 (default = 0)
+b7 (float) – the susceptance increment of block 7 (default = 0.0)
+n8 (int) – the number of steps in block 8 (default = 0)
+b8 (float) – the susceptance increment of block 8 (default = 0.0)

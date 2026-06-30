@@ -21,6 +21,15 @@ def test_enrich_with_bus_metadata_adds_branch_context() -> None:
                 {"bus_id": 102, "bus_name": "TO", "base_kv": 230.0, "area": 12, "zone": 1},
             ],
         ),
+        "area_metadata": ParsedTable(
+            name="area_metadata",
+            source_file="case.raw",
+            columns=["area", "area_name"],
+            rows=[
+                {"area": 11, "area_name": "North"},
+                {"area": 12, "area_name": "South"},
+            ],
+        ),
         "perf_mm": ParsedTable(
             name="perf_mm",
             source_file="perf_mm.txt",
@@ -35,5 +44,7 @@ def test_enrich_with_bus_metadata_adds_branch_context() -> None:
     assert row["from_bus_name"] == "FROM"
     assert row["to_bus_name"] == "TO"
     assert row["area"] == "11-12"
+    assert row["control_area"] == "North / South"
+    assert row["from_area_name"] == "North"
     assert row["voltage_class"] == "230-344 kV"
     assert "voltage_class" in tables["perf_mm"].columns

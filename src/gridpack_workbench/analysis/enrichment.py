@@ -27,6 +27,8 @@ def enrich_with_bus_metadata(tables: dict[str, ParsedTable]) -> None:
     if not metadata or not metadata.rows:
         return
 
+    areas = _area_names(tables.get("area_metadata"))
+    _enrich_bus_metadata_with_area_names(metadata, areas)
     buses = {bus_id: row for row in metadata.rows if (bus_id := _bus_id(row, "bus_id")) is not None}
     _enrich_bus_tables(tables, buses)
     _enrich_branch_tables(tables, buses)
@@ -61,11 +63,12 @@ def _enrich_bus_tables(tables: dict[str, ParsedTable], buses: dict[int, dict[str
                         "bus_name": bus.get("bus_name", ""),
                         "base_kv": bus.get("base_kv"),
                         "area": bus.get("area"),
+                        "area_name": bus.get("area_name", ""),
                         "zone": bus.get("zone"),
                         "voltage_class": voltage_class(bus.get("base_kv")),
                     }
                 )
-        append_missing_columns(table, ["bus_name", "base_kv", "area", "zone", "voltage_class"])
+        append_missing_columns(table, ["bus_name", "base_kv", "area", "area_name", "zone", "voltage_class"])
 
 
 def _enrich_branch_tables(tables: dict[str, ParsedTable], buses: dict[int, dict[str, object]]) -> None:
@@ -80,6 +83,8 @@ def _enrich_branch_tables(tables: dict[str, ParsedTable], buses: dict[int, dict[
             to_kv = to_bus.get("base_kv") if to_bus else None
             from_area = from_bus.get("area") if from_bus else None
             to_area = to_bus.get("area") if to_bus else None
+            from_area_name = from_bus.get("area_name", "") if from_bus else ""
+            to_area_name = to_bus.get("area_name", "") if to_bus else ""
             row.update(
                 {
                     "from_bus_name": from_bus.get("bus_name", "") if from_bus else "",
@@ -88,7 +93,15 @@ def _enrich_branch_tables(tables: dict[str, ParsedTable], buses: dict[int, dict[
                     "to_base_kv": to_kv,
                     "from_area": from_area,
                     "to_area": to_area,
+                    "from_area_name": from_area_name,
+                    "to_area_name": to_area_name,
                     "area": _area_label(from_area, to_area),
+                    "control_area": _control_area_label(
+                        from_area,
+                        to_area,
+                        from_area_name,
+                        to_area_name,
+                    ),
                     "voltage_class": voltage_class(max(float_or_zero(from_kv), float_or_zero(to_kv)) or None),
                 }
             )
@@ -101,10 +114,32 @@ def _enrich_branch_tables(tables: dict[str, ParsedTable], buses: dict[int, dict[
                 "to_base_kv",
                 "from_area",
                 "to_area",
+                "from_area_name",
+                "to_area_name",
                 "area",
+                "control_area",
                 "voltage_class",
             ],
         )
+
+
+def _area_names(table: ParsedTable | None) -> dict[int, str]:
+    if not table:
+        return {}
+    names: dict[int, str] = {}
+    for row in table.rows:
+        area_id = _bus_id(row, "area")
+        area_name = str(row.get("area_name") or "").strip()
+        if area_id is not None and area_name:
+            names[area_id] = area_name
+    return names
+
+
+def _enrich_bus_metadata_with_area_names(table: ParsedTable, areas: dict[int, str]) -> None:
+    for row in table.rows:
+        area_id = _bus_id(row, "area")
+        row["area_name"] = areas.get(area_id, "")
+    append_missing_columns(table, ["area_name"])
 
 
 def _area_label(from_area: object, to_area: object) -> str:
@@ -113,6 +148,23 @@ def _area_label(from_area: object, to_area: object) -> str:
     if from_area == to_area:
         return str(from_area)
     return f"{from_area}-{to_area}"
+
+
+def _control_area_label(
+    from_area: object,
+    to_area: object,
+    from_area_name: object,
+    to_area_name: object,
+) -> str:
+    from_label = str(from_area_name or from_area or "").strip()
+    to_label = str(to_area_name or to_area or "").strip()
+    if not from_label and not to_label:
+        return "unknown"
+    if not to_label or from_label == to_label:
+        return from_label
+    if not from_label:
+        return to_label
+    return f"{from_label} / {to_label}"
 
 
 def _bus_id(row: dict[str, object], column: str) -> int | None:

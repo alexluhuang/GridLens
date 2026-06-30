@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from gridpack_workbench.analysis.distributions import DistributionExport
+from gridpack_workbench.analysis.parser_models import ParsedTable
 from gridpack_workbench.gui.analysis_view_models import (
     DISTRIBUTION_OUTPUT_COLUMNS,
+    control_area_utilization_rows,
     distribution_output_rows,
     filter_performance_rows,
+    max_230kv_line_utilization_rows,
     metric_mapping,
     metric_notes,
     numeric_value,
     render_analysis_overview_html,
     should_select_distribution_variable,
     top_numeric_rows,
+    voltage_group_utilization_rows,
 )
 
 
@@ -70,6 +74,83 @@ def test_distribution_output_rows_match_configured_columns(tmp_path) -> None:
     assert rows[0]["code_path"] == str(tmp_path / "distributions.py")
 
 
+def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
+    tables = {
+        "area_metadata": ParsedTable(
+            name="area_metadata",
+            source_file="training.raw",
+            columns=[],
+            rows=[
+                {"area": 1, "area_name": "North"},
+                {"area": 2, "area_name": "South"},
+            ],
+        ),
+        "branch_metadata": ParsedTable(
+            name="branch_metadata",
+            source_file="training.raw",
+            columns=[],
+            rows=[
+                _branch(101, 102, "1", 138.0, 138.0, 100.0, "North", "100-229 kV", 1, "North", 1, "North"),
+                _branch(201, 202, "1", 230.0, 230.0, 200.0, "South", "230-344 kV", 2, "South", 2, "South"),
+                _branch(301, 302, "1", 69.0, 69.0, 100.0, "Low", "<100 kV"),
+                _branch(401, 402, "1", 230.0, 345.0, 50.0, "North / South", "345-499 kV", 1, "North", 2, "South"),
+            ],
+        ),
+        "pflow": ParsedTable(
+            name="pflow",
+            source_file="pflow.txt",
+            columns=[],
+            rows=[
+                _flow(101, 102, "1", 50.0),
+                _flow(201, 202, "1", 120.0),
+                _flow(301, 302, "1", 70.0),
+                _flow(401, 402, "1", 25.0),
+            ],
+        ),
+        "qflow": ParsedTable(
+            name="qflow",
+            source_file="qflow.txt",
+            columns=[],
+            rows=[
+                _flow(101, 102, "1", 0.0),
+                _flow(201, 202, "1", 0.0),
+                _flow(301, 302, "1", 0.0),
+                _flow(401, 402, "1", 0.0),
+            ],
+        ),
+        "pflow_mm": ParsedTable(
+            name="pflow_mm",
+            source_file="pflow_mm.txt",
+            columns=[],
+            rows=[],
+        ),
+        "perf_mm": ParsedTable(
+            name="perf_mm",
+            source_file="perf_mm.txt",
+            columns=[],
+            rows=[
+                _perf(101, 102, "1", 0.25, 3),
+                _perf(201, 202, "1", 0.81, 4),
+                _perf(301, 302, "1", 0.64, 5),
+                _perf(401, 402, "1", 0.16, 6),
+            ],
+        ),
+    }
+
+    area_rows = control_area_utilization_rows(tables)
+    voltage_rows = voltage_group_utilization_rows(tables)
+    line_rows = max_230kv_line_utilization_rows(tables)
+
+    assert [row["control_area"] for row in area_rows] == ["South", "North"]
+    assert area_rows[0]["average_utilization_pct"] == 55.0
+    assert area_rows[1]["average_utilization_pct"] == 50.0
+    assert all(row["control_area"] != "Low" for row in area_rows)
+    assert all(" / " not in row["control_area"] for row in area_rows)
+    assert [row["voltage_group"] for row in voltage_rows] == ["<100 kV", "100-229 kV", "230-344 kV", "345-499 kV"]
+    assert [row["max_utilization_pct"] for row in line_rows] == [40.0, 90.0]
+    assert [row["max_contingency"] for row in line_rows] == [6, 4]
+
+
 def test_metric_helpers_tolerate_unexpected_shapes() -> None:
     metrics = {
         "success": "not-a-dict",
@@ -109,3 +190,54 @@ def test_overview_html_escapes_metrics_paths_and_notes(tmp_path) -> None:
     assert "run &lt;unsafe&gt;" in html
     assert "manifest &lt;unsafe&gt;.json" in html
     assert "master &lt;cleaned&gt;.csv" in html
+
+
+def _branch(
+    from_bus: int,
+    to_bus: int,
+    line_id: str,
+    from_base_kv: float,
+    to_base_kv: float,
+    ratea: float,
+    control_area: str,
+    voltage_class: str,
+    from_area: int | None = None,
+    from_area_name: str = "",
+    to_area: int | None = None,
+    to_area_name: str = "",
+) -> dict[str, object]:
+    return {
+        "from_bus": from_bus,
+        "to_bus": to_bus,
+        "line_id": line_id,
+        "from_bus_name": f"BUS{from_bus}",
+        "to_bus_name": f"BUS{to_bus}",
+        "from_base_kv": from_base_kv,
+        "to_base_kv": to_base_kv,
+        "ratea": ratea,
+        "control_area": control_area,
+        "from_area": from_area,
+        "from_area_name": from_area_name,
+        "to_area": to_area,
+        "to_area_name": to_area_name,
+        "voltage_class": voltage_class,
+    }
+
+
+def _flow(from_bus: int, to_bus: int, line_id: str, average: float) -> dict[str, object]:
+    return {
+        "from_bus": from_bus,
+        "to_bus": to_bus,
+        "line_id": line_id,
+        "average": average,
+    }
+
+
+def _perf(from_bus: int, to_bus: int, line_id: str, max_value: float, max_contingency: int) -> dict[str, object]:
+    return {
+        "from_bus": from_bus,
+        "to_bus": to_bus,
+        "line_id": line_id,
+        "max_value": max_value,
+        "max_contingency": max_contingency,
+    }

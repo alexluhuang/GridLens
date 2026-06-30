@@ -6,7 +6,11 @@ import re
 import xml.etree.ElementTree as ET
 
 from gridpack_workbench.analysis.parser_models import OutputFile, PARSER_VERSION, ParsedTable, SuccessSummary
-from gridpack_workbench.analysis.raw_parsers import parse_raw_branch_metadata, parse_raw_bus_metadata
+from gridpack_workbench.analysis.raw_parsers import (
+    parse_raw_area_metadata,
+    parse_raw_branch_metadata,
+    parse_raw_bus_metadata,
+)
 from gridpack_workbench.analysis.table_schemas import TABLE_SCHEMAS
 
 
@@ -208,6 +212,7 @@ def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
         if candidate:
             raw_file = Path(candidate).name
     tables["bus_metadata"] = parse_raw_bus_metadata(run_dir, raw_file)
+    tables["area_metadata"] = parse_raw_area_metadata(run_dir, raw_file)
     tables["branch_metadata"] = parse_raw_branch_metadata(run_dir, raw_file)
     return tables
 
@@ -298,6 +303,7 @@ __all__ = [
     "parse_all_output_tables",
     "parse_gridpack_table",
     "parse_input_xml",
+    "parse_raw_area_metadata",
     "parse_raw_branch_metadata",
     "parse_raw_bus_metadata",
     "parse_success_file",

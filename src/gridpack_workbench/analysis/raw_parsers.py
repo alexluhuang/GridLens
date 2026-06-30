@@ -7,6 +7,7 @@ from gridpack_workbench.analysis.parser_models import ParsedTable
 
 
 BUS_METADATA_COLUMNS = ["bus_id", "bus_name", "base_kv", "area", "zone", "owner", "vm", "va"]
+AREA_METADATA_COLUMNS = ["area", "slack_bus", "pdes", "ptol", "area_name"]
 BRANCH_METADATA_COLUMNS = [
     "from_bus",
     "to_bus",
@@ -150,6 +151,57 @@ def parse_raw_branch_metadata(run_dir: str | Path, raw_file_name: str = "trainin
     return ParsedTable("branch_metadata", raw_file_name, BRANCH_METADATA_COLUMNS, rows, notes)
 
 
+def parse_raw_area_metadata(run_dir: str | Path, raw_file_name: str = "training.raw") -> ParsedTable:
+    """Parse PSS/E RAW area interchange rows for control-area labels."""
+    path = Path(run_dir) / "work" / raw_file_name
+    if not path.exists():
+        return ParsedTable(
+            "area_metadata",
+            raw_file_name,
+            AREA_METADATA_COLUMNS,
+            notes=[f"{raw_file_name} was not found."],
+        )
+
+    rows: list[dict[str, object]] = []
+    in_area_section = False
+    rejected = 0
+
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        upper = line.upper()
+        if "BEGIN AREA DATA" in upper or "BEGIN AREA INTERCHANGE DATA" in upper:
+            in_area_section = True
+            continue
+        if in_area_section and ("END OF AREA DATA" in upper or "END OF AREA INTERCHANGE DATA" in upper):
+            break
+        if not in_area_section:
+            continue
+
+        parsed = _parse_raw_csv_line(line)
+        if not parsed or len(parsed) < 5:
+            rejected += 1
+            continue
+
+        try:
+            rows.append(
+                {
+                    "area": int(float(parsed[0])),
+                    "slack_bus": _optional_int(parsed, 1),
+                    "pdes": _optional_float(parsed, 2),
+                    "ptol": _optional_float(parsed, 3),
+                    "area_name": _clean_raw_string(parsed[4]),
+                }
+            )
+        except (ValueError, IndexError):
+            rejected += 1
+
+    notes = []
+    if rejected:
+        notes.append(f"Rejected {rejected} RAW area lines that did not match the expected area schema.")
+    if not rows:
+        notes.append("No area interchange records were parsed from the RAW file.")
+    return ParsedTable("area_metadata", raw_file_name, AREA_METADATA_COLUMNS, rows, notes)
+
+
 def _parse_raw_csv_line(line: str) -> list[str]:
     stripped = line.strip()
     if not stripped or stripped.startswith("@"):
@@ -176,8 +228,10 @@ def _optional_int(values: list[str], index: int) -> int | None:
 
 
 __all__ = [
+    "AREA_METADATA_COLUMNS",
     "BRANCH_METADATA_COLUMNS",
     "BUS_METADATA_COLUMNS",
+    "parse_raw_area_metadata",
     "parse_raw_branch_metadata",
     "parse_raw_bus_metadata",
 ]
