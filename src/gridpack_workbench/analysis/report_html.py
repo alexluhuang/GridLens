@@ -17,6 +17,7 @@ THERMAL_COLUMNS = [
     "area",
     "max_utilization_pct",
     "worst_headroom_pct",
+    "max_utilization_contingency",
     "max_contingency",
 ]
 LOW_VOLTAGE_COLUMNS = [

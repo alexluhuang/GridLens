@@ -20,6 +20,7 @@ THERMAL_BOTTLENECK_FIELDS = [
     "base_utilization_pct",
     "max_utilization_pct",
     "worst_headroom_pct",
+    "max_utilization_contingency",
     "max_contingency",
 ]
 VOLTAGE_EXTREME_FIELDS = [
@@ -78,14 +79,14 @@ __all__ = [
 
 def compute_metrics(tables: dict[str, ParsedTable]) -> dict[str, object]:
     """Compute decision-support metrics from parsed GridPACK output tables."""
-    _add_thermal_utilization_columns(tables.get("perf_mm"))
+    _add_pflow_utilization_columns(tables.get("pflow"), tables.get("pflow_mm"), tables.get("branch_metadata"))
     _add_voltage_margin_columns(tables.get("vmag_mm"), tables.get("input_settings"))
     _add_generator_deviation_columns(tables.get("pgen_mm"))
     _add_generator_deviation_columns(tables.get("qgen_mm"))
 
     return {
         "success": _success_metrics(tables.get("success")),
-        "thermal": _thermal_metrics(tables.get("perf_mm"), tables.get("perf_sum")),
+        "thermal": _thermal_metrics(tables.get("pflow_mm"), tables.get("perf_sum")),
         "voltage": _voltage_metrics(tables.get("vmag_mm"), tables.get("input_settings")),
         "contingencies": _contingency_metrics(tables.get("success"), tables.get("perf_sum")),
         "line_faults": _ranked_count_metrics(tables.get("line_flt_cnt"), "fault_count"),
@@ -95,11 +96,10 @@ def compute_metrics(tables: dict[str, ParsedTable]) -> dict[str, object]:
             "qgen": _generator_metrics(tables.get("qgen_mm")),
         },
         "notes": [
-            "Thermal utilization is computed as sqrt(performance_index) * 100 from perf_mm.txt.",
+            "Thermal utilization is computed from pflow.txt and pflow_mm.txt real-power flow divided by line rating.",
             (
-                "Because GridPACK perf_mm contains min/max line performance rather than full "
-                "per-contingency distributions, concentration metrics use worst-contingency "
-                "utilization as a proxy."
+                "Performance-index outputs remain available for contingency ranking, but are "
+                "not used as utilization metrics."
             ),
             "Voltage-class and area summaries require bus metadata parsed from the run RAW file.",
         ],
@@ -161,14 +161,14 @@ def _success_metrics(table: ParsedTable | None) -> dict[str, object]:
     }
 
 
-def _thermal_metrics(perf_mm: ParsedTable | None, perf_sum: ParsedTable | None) -> dict[str, object]:
-    if not perf_mm or not perf_mm.rows:
-        return {"facility_count": 0, "top_bottlenecks": [], "note": "perf_mm.txt was not available."}
+def _thermal_metrics(pflow_mm: ParsedTable | None, perf_sum: ParsedTable | None) -> dict[str, object]:
+    if not pflow_mm or not pflow_mm.rows:
+        return {"facility_count": 0, "top_bottlenecks": [], "note": "pflow_mm.txt was not available."}
 
-    values = [as_float(row.get("max_utilization_pct")) for row in perf_mm.rows]
+    values = [as_float(row.get("max_utilization_pct")) for row in pflow_mm.rows]
     values = [value for value in values if value is not None]
     sorted_rows = sorted(
-        perf_mm.rows,
+        pflow_mm.rows,
         key=lambda row: (as_float(row.get("max_utilization_pct")) or -math.inf),
         reverse=True,
     )
@@ -187,8 +187,8 @@ def _thermal_metrics(perf_mm: ParsedTable | None, perf_sum: ParsedTable | None) 
         "gini_worst_utilization": round(gini(values), 6) if values else None,
         "top_20_pct_stress_share": round(top_share(values, 0.20), 6) if values else None,
         "top_bottlenecks": top_bottlenecks,
-        "by_voltage_class": _group_summary(perf_mm.rows, "voltage_class", "max_utilization_pct"),
-        "by_area": _group_summary(perf_mm.rows, "area", "max_utilization_pct"),
+        "by_voltage_class": _group_summary(pflow_mm.rows, "voltage_class", "max_utilization_pct"),
+        "by_area": _group_summary(pflow_mm.rows, "area", "max_utilization_pct"),
         "performance_index_by_contingency": perf_summary,
     }
 
@@ -282,21 +282,117 @@ def _generator_metrics(table: ParsedTable | None) -> dict[str, object]:
     }
 
 
-def _add_thermal_utilization_columns(table: ParsedTable | None) -> None:
-    if not table:
+def _add_pflow_utilization_columns(
+    pflow: ParsedTable | None,
+    pflow_mm: ParsedTable | None,
+    branch_metadata: ParsedTable | None,
+) -> None:
+    branches = _table_index(branch_metadata)
+    pflow_mm_index = _table_index(pflow_mm)
+
+    if pflow:
+        for row in pflow.rows:
+            key = _branch_key(row)
+            rating = _line_rating(_merge_rows(branches.get(key, {}), pflow_mm_index.get(key, {}), row))
+            average = as_float(row.get("average"))
+            row["average_utilization_pct"] = _pct(abs(average), rating) if average is not None else None
+        append_missing_columns(pflow, ["average_utilization_pct"])
+
+    if not pflow_mm:
         return
-    for row in table.rows:
-        base = as_float(row.get("base_value")) or 0.0
-        min_value = as_float(row.get("min_value")) or 0.0
-        max_value = as_float(row.get("max_value")) or 0.0
-        row["base_utilization_pct"] = round(math.sqrt(max(base, 0.0)) * 100, 6)
-        row["min_utilization_pct"] = round(math.sqrt(max(min_value, 0.0)) * 100, 6)
-        row["max_utilization_pct"] = round(math.sqrt(max(max_value, 0.0)) * 100, 6)
-        row["worst_headroom_pct"] = round(100 - float(row["max_utilization_pct"]), 6)
+
+    for row in pflow_mm.rows:
+        key = _branch_key(row)
+        context = _merge_rows(branches.get(key, {}), row)
+        rating = _line_rating(context)
+        base_value = as_float(row.get("base_value"))
+        min_value = as_float(row.get("min_value"))
+        max_value = as_float(row.get("max_value"))
+        worst_value, worst_contingency = _worst_pflow_value_and_contingency(row, min_value, max_value)
+        row["base_utilization_pct"] = _pct(abs(base_value), rating) if base_value is not None else None
+        row["min_utilization_pct"] = _pct(abs(min_value), rating) if min_value is not None else None
+        row["max_utilization_pct"] = _pct(abs(worst_value), rating) if worst_value is not None else None
+        row["worst_headroom_pct"] = (
+            round(100 - float(row["max_utilization_pct"]), 6)
+            if row["max_utilization_pct"] is not None
+            else None
+        )
+        row["max_utilization_contingency"] = worst_contingency
     append_missing_columns(
-        table,
-        ["base_utilization_pct", "min_utilization_pct", "max_utilization_pct", "worst_headroom_pct"],
+        pflow_mm,
+        [
+            "base_utilization_pct",
+            "min_utilization_pct",
+            "max_utilization_pct",
+            "worst_headroom_pct",
+            "max_utilization_contingency",
+        ],
     )
+
+
+def _worst_pflow_value_and_contingency(
+    row: dict[str, object],
+    min_value: float | None,
+    max_value: float | None,
+) -> tuple[float | None, object]:
+    if min_value is None and max_value is None:
+        return None, ""
+    if min_value is not None and abs(min_value) > abs(max_value or 0.0):
+        return min_value, row.get("min_contingency", "")
+    return max_value, row.get("max_contingency", "")
+
+
+def _line_rating(row: dict[str, object]) -> float | None:
+    rating = _positive_float(row.get("ratea")) or _positive_float(row.get("rate_a"))
+    if rating is not None:
+        return rating
+
+    limits = [
+        abs(value)
+        for value in (as_float(row.get("min_allowable")), as_float(row.get("max_allowable")))
+        if value is not None and value != 0
+    ]
+    return max(limits) if limits else None
+
+
+def _pct(numerator: float, denominator: float | None) -> float | None:
+    if denominator is None or denominator <= 0:
+        return None
+    return round(numerator / denominator * 100, 6)
+
+
+def _positive_float(value: object) -> float | None:
+    parsed = as_float(value)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
+def _table_index(table: ParsedTable | None) -> dict[tuple[object, object, str], dict[str, object]]:
+    if not table:
+        return {}
+    indexed: dict[tuple[object, object, str], dict[str, object]] = {}
+    for row in table.rows:
+        indexed.setdefault(_branch_key(row), row)
+    return indexed
+
+
+def _branch_key(row: dict[str, object]) -> tuple[object, object, str]:
+    return (_integer_key(row.get("from_bus")), _integer_key(row.get("to_bus")), str(row.get("line_id") or "").strip())
+
+
+def _integer_key(value: object) -> object:
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return value
+
+
+def _merge_rows(*rows: dict[str, object]) -> dict[str, object]:
+    merged: dict[str, object] = {}
+    for row in rows:
+        for key, value in row.items():
+            if value not in (None, ""):
+                merged[key] = value
+    return merged
 
 
 def _add_voltage_margin_columns(table: ParsedTable | None, input_settings: ParsedTable | None) -> None:

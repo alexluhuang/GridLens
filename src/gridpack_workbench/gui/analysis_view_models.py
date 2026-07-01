@@ -30,6 +30,7 @@ THERMAL_TABLE_COLUMNS = [
     "area",
     "base_utilization_pct",
     "max_utilization_pct",
+    "max_utilization_contingency",
     "max_contingency",
 ]
 VOLTAGE_TABLE_COLUMNS = [
@@ -146,51 +147,56 @@ def max_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[st
     """Maximum observed utilization rows for branch lines, sorted from lowest to highest."""
     duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
     branches = _table_index(tables.get("branch_metadata"))
-    pflow_mm = _table_index(tables.get("pflow_mm"))
     rows: list[dict[str, object]] = []
 
-    for row in _table_rows(tables, "perf_mm"):
+    for row in _table_rows(tables, "pflow_mm"):
         key = _branch_key(row)
-        context = _merge_rows(branches.get(key, {}), pflow_mm.get(key, {}), row)
-        utilization = _max_utilization_pct(context)
+        context = _merge_rows(branches.get(key, {}), row)
+        utilization = _pflow_mm_max_utilization_pct(context)
         if utilization is None:
             continue
-        voltage_group = str(context.get("voltage_class") or voltage_class(_line_voltage_kv(context)) or "unknown")
-        rows.append(
-            {
-                "line_label": _line_label(context),
-                "from_bus": context.get("from_bus", ""),
-                "to_bus": context.get("to_bus", ""),
-                "line_id": context.get("line_id", ""),
-                "from_bus_name": context.get("from_bus_name", ""),
-                "to_bus_name": context.get("to_bus_name", ""),
-                "from_base_kv": context.get("from_base_kv", ""),
-                "to_base_kv": context.get("to_base_kv", ""),
-                "control_area": context.get("control_area") or context.get("area") or "unknown",
-                "control_areas": _endpoint_control_area_labels(context, duplicate_area_names),
-                "voltage_group": voltage_group,
-                "max_contingency": context.get("max_contingency", ""),
-                "max_utilization_pct": round(utilization, 6),
-            }
-        )
+        rows.append(_line_utilization_row(context, utilization, duplicate_area_names, "pflow_mm"))
 
     rows.sort(key=lambda item: numeric_value(item.get("max_utilization_pct")))
     return rows
 
 
+def _line_utilization_row(
+    context: Mapping[str, object],
+    utilization: float,
+    duplicate_area_names: set[str],
+    utilization_source: str,
+) -> dict[str, object]:
+    voltage_group = str(context.get("voltage_class") or voltage_class(_line_voltage_kv(context)) or "unknown")
+    return {
+        "line_label": _line_label(context),
+        "from_bus": context.get("from_bus", ""),
+        "to_bus": context.get("to_bus", ""),
+        "line_id": context.get("line_id", ""),
+        "from_bus_name": context.get("from_bus_name", ""),
+        "to_bus_name": context.get("to_bus_name", ""),
+        "from_base_kv": context.get("from_base_kv", ""),
+        "to_base_kv": context.get("to_base_kv", ""),
+        "control_area": context.get("control_area") or context.get("area") or "unknown",
+        "control_areas": _endpoint_control_area_labels(context, duplicate_area_names),
+        "voltage_group": voltage_group,
+        "max_contingency": _max_flow_contingency(context),
+        "max_utilization_pct": round(utilization, 6),
+        "utilization_source": utilization_source,
+    }
+
+
 def _average_n1_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
     branches = _table_index(tables.get("branch_metadata"))
-    qflow = _table_index(tables.get("qflow"))
     pflow_mm = _table_index(tables.get("pflow_mm"))
     rows: list[dict[str, object]] = []
 
     for row in _table_rows(tables, "pflow"):
         key = _branch_key(row)
         context = _merge_rows(branches.get(key, {}), pflow_mm.get(key, {}), row)
-        rate_a = _positive_float(context.get("ratea")) or _positive_float(context.get("max_allowable"))
+        rate_a = _line_rating(context)
         real_flow = _finite_float(row.get("average"))
-        reactive_flow = _finite_float(qflow.get(key, {}).get("average"))
-        utilization = _flow_utilization_pct(real_flow, reactive_flow, rate_a)
+        utilization = _pflow_utilization_pct(real_flow, rate_a)
         if utilization is None:
             continue
         context["utilization_pct"] = round(utilization, 6)
@@ -304,27 +310,44 @@ def _merge_rows(*rows: Mapping[str, object]) -> dict[str, object]:
     return merged
 
 
-def _flow_utilization_pct(real_flow: float | None, reactive_flow: float | None, rate_a: float | None) -> float | None:
+def _pflow_utilization_pct(real_flow: float | None, rate_a: float | None) -> float | None:
     if real_flow is None or rate_a is None or rate_a <= 0:
         return None
-    reactive = reactive_flow if reactive_flow is not None else 0.0
-    return math.hypot(real_flow, reactive) / rate_a * 100
+    return abs(real_flow) / rate_a * 100
 
 
 def _max_utilization_pct(row: Mapping[str, object]) -> float | None:
-    utilization = _finite_float(row.get("max_utilization_pct"))
-    if utilization is not None:
-        return utilization
-    performance_index = _finite_float(row.get("max_value"))
-    if performance_index is not None:
-        return math.sqrt(max(performance_index, 0.0)) * 100
+    return _pflow_mm_max_utilization_pct(row)
 
-    rate_a = _positive_float(row.get("ratea")) or _positive_float(row.get("max_allowable"))
+
+def _pflow_mm_max_utilization_pct(row: Mapping[str, object]) -> float | None:
+    rate_a = _line_rating(row)
     min_flow = _finite_float(row.get("min_value"))
     max_flow = _finite_float(row.get("max_value"))
     if rate_a is None or (min_flow is None and max_flow is None):
         return None
     return max(abs(min_flow or 0.0), abs(max_flow or 0.0)) / rate_a * 100
+
+
+def _line_rating(row: Mapping[str, object]) -> float | None:
+    raw_rating = _positive_float(row.get("ratea")) or _positive_float(row.get("rate_a"))
+    if raw_rating is not None:
+        return raw_rating
+
+    limits = [
+        abs(value)
+        for value in (_finite_float(row.get("min_allowable")), _finite_float(row.get("max_allowable")))
+        if value is not None and value != 0
+    ]
+    return max(limits) if limits else None
+
+
+def _max_flow_contingency(row: Mapping[str, object]) -> object:
+    min_flow = _finite_float(row.get("min_value"))
+    max_flow = _finite_float(row.get("max_value"))
+    if min_flow is not None and abs(min_flow) > abs(max_flow or 0.0):
+        return row.get("min_contingency", "")
+    return row.get("max_contingency", "")
 
 
 def _line_voltage_kv(row: Mapping[str, object]) -> float:

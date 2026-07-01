@@ -52,12 +52,14 @@ class AnalysisTests(unittest.TestCase):
             self.assertTrue((run_dir / "reports" / "tables" / "perf_mm.csv").exists())
 
             perf_rows = dataset.tables["perf_mm"].rows
+            pflow_mm_rows = dataset.tables["pflow_mm"].rows
             self.assertEqual(perf_rows[0]["voltage_class"], "230-344 kV")
-            self.assertAlmostEqual(float(perf_rows[0]["max_utilization_pct"]), 120.0)
+            self.assertNotIn("max_utilization_pct", perf_rows[0])
+            self.assertAlmostEqual(float(pflow_mm_rows[0]["max_utilization_pct"]), 120.0)
 
             thermal = dataset.metrics["thermal"]
             self.assertEqual(thermal["facility_count"], 2)
-            self.assertEqual(thermal["facilities_over_100_pct"], 1)
+            self.assertEqual(thermal["facilities_over_100_pct"], 2)
             self.assertGreater(thermal["gini_worst_utilization"], 0)
 
             voltage = dataset.metrics["voltage"]

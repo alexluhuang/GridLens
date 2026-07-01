@@ -21,9 +21,9 @@ def test_metric_field_sets_are_unique() -> None:
 
 
 def test_thermal_bottleneck_rows_follow_configured_field_order() -> None:
-    perf_mm = ParsedTable(
-        name="perf_mm",
-        source_file="perf_mm.txt",
+    pflow_mm = ParsedTable(
+        name="pflow_mm",
+        source_file="pflow_mm.txt",
         columns=[
             "row_index",
             "from_bus",
@@ -36,6 +36,9 @@ def test_thermal_bottleneck_rows_follow_configured_field_order() -> None:
             "base_value",
             "min_value",
             "max_value",
+            "min_allowable",
+            "max_allowable",
+            "min_contingency",
             "max_contingency",
         ],
         rows=[
@@ -48,18 +51,23 @@ def test_thermal_bottleneck_rows_follow_configured_field_order() -> None:
                 "to_bus_name": "TO",
                 "voltage_class": "230-344 kV",
                 "area": "1-2",
-                "base_value": 0.25,
-                "min_value": 0.04,
-                "max_value": 1.44,
+                "base_value": 50.0,
+                "min_value": -120.0,
+                "max_value": 80.0,
+                "min_allowable": -100.0,
+                "max_allowable": 100.0,
+                "min_contingency": 6,
                 "max_contingency": 7,
                 "extra_column": "not exported",
             }
         ],
     )
 
-    metrics = compute_metrics({"perf_mm": perf_mm})
+    metrics = compute_metrics({"pflow_mm": pflow_mm})
     thermal = metrics["thermal"]
     bottleneck = thermal["top_bottlenecks"][0]
 
     assert list(bottleneck) == THERMAL_BOTTLENECK_FIELDS
+    assert bottleneck["max_utilization_pct"] == 120.0
+    assert bottleneck["max_utilization_contingency"] == 6
     assert "extra_column" not in bottleneck

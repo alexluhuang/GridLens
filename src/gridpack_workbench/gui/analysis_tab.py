@@ -642,9 +642,10 @@ class AnalysisTab(QWidget):
     def _line_hover_text(self, row: dict[str, object]) -> str:
         voltage = f"{row.get('from_base_kv', '')} / {row.get('to_base_kv', '')} kV"
         contingency = row.get("max_contingency") or "n/a"
+        source = row.get("utilization_source") or "pflow_mm"
         return (
             f"{row.get('line_label', '')}\n"
-            f"Worst observed (perf_mm): {numeric_value(row.get('max_utilization_pct')):.1f}%\n"
+            f"Worst observed ({source}): {numeric_value(row.get('max_utilization_pct')):.1f}%\n"
             f"Contingency: {contingency}\n"
             f"Voltage group: {row.get('voltage_group', 'unknown')}\n"
             f"Control area: {row.get('control_area', 'unknown')}\n"

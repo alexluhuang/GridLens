@@ -56,6 +56,6 @@ exports/outliers.csv
 exports/distributions/
 ```
 
-The branch master files merge available branch data from the RAW file and branch-related GridPACK TXT outputs. `master_cleaned.csv` removes utilization outliers and is used for subsequent distribution analysis.
+The branch master files merge available branch data from the RAW file and branch-related GridPACK TXT outputs. `master_cleaned.csv` removes utilization outliers and is used for subsequent distribution analysis. Utilization metrics use real-power flow from `pflow.txt` and `pflow_mm.txt` divided by the line rating; performance-index outputs are reported separately and are not used as utilization metrics.
 
 Use the Analysis tab's Distributions view to select independent variables and generate layered violin plus box-and-whisker plots of transmission utilization. Each generated plot has a companion CSV table and displays the source code path used to produce it.

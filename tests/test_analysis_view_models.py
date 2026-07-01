@@ -125,7 +125,12 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
             name="pflow_mm",
             source_file="pflow_mm.txt",
             columns=[],
-            rows=[],
+            rows=[
+                _pflow_mm(101, 102, "1", 0.0, 50.0, -100.0, 100.0, 1, 3),
+                _pflow_mm(201, 202, "1", 0.0, 180.0, -200.0, 200.0, 1, 4),
+                _pflow_mm(301, 302, "1", 0.0, 80.0, -100.0, 100.0, 1, 5),
+                _pflow_mm(401, 402, "1", 0.0, 20.0, -50.0, 50.0, 1, 6),
+            ],
         ),
         "perf_mm": ParsedTable(
             name="perf_mm",
@@ -160,6 +165,75 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
     assert [row["max_utilization_pct"] for row in line_rows] == [40.0, 90.0]
     assert [row["max_contingency"] for row in line_rows] == [6, 4]
     assert [row["voltage_group"] for row in all_line_rows] == ["345-499 kV", "100-229 kV", "<100 kV", "230-344 kV"]
+
+
+def test_average_utilization_ignores_qflow() -> None:
+    tables = {
+        "branch_metadata": ParsedTable(
+            name="branch_metadata",
+            source_file="training.raw",
+            columns=[],
+            rows=[_branch(101, 102, "1", 230.0, 230.0, 100.0, "North", "230-344 kV")],
+        ),
+        "pflow": ParsedTable(
+            name="pflow",
+            source_file="pflow.txt",
+            columns=[],
+            rows=[_flow(101, 102, "1", 60.0)],
+        ),
+        "qflow": ParsedTable(
+            name="qflow",
+            source_file="qflow.txt",
+            columns=[],
+            rows=[_flow(101, 102, "1", 800.0)],
+        ),
+    }
+
+    rows = average_n1_utilization_rows(tables)
+
+    assert rows[0]["utilization_pct"] == 60.0
+
+
+def test_max_line_utilization_ignores_perf_mm() -> None:
+    tables = {
+        "branch_metadata": ParsedTable(
+            name="branch_metadata",
+            source_file="training.raw",
+            columns=[],
+            rows=[_branch(101, 102, "1", 230.0, 230.0, 0.0, "North", "230-344 kV")],
+        ),
+        "pflow_mm": ParsedTable(
+            name="pflow_mm",
+            source_file="pflow_mm.txt",
+            columns=[],
+            rows=[
+                {
+                    "from_bus": 101,
+                    "to_bus": 102,
+                    "line_id": "1",
+                    "min_value": -120.0,
+                    "max_value": 80.0,
+                    "min_allowable": -50.0,
+                    "max_allowable": 50.0,
+                    "min_contingency": 8,
+                    "max_contingency": 9,
+                }
+            ],
+        ),
+        "perf_mm": ParsedTable(
+            name="perf_mm",
+            source_file="perf_mm.txt",
+            columns=[],
+            rows=[_perf(101, 102, "1", 8100.0, 10)],
+        ),
+    }
+
+    rows = max_line_utilization_rows(tables)
+
+    assert len(rows) == 1
+    assert rows[0]["max_utilization_pct"] == 240.0
+    assert rows[0]["max_contingency"] == 8
+    assert rows[0]["utilization_source"] == "pflow_mm"
 
 
 def test_metric_helpers_tolerate_unexpected_shapes() -> None:
@@ -241,6 +315,30 @@ def _flow(from_bus: int, to_bus: int, line_id: str, average: float) -> dict[str,
         "to_bus": to_bus,
         "line_id": line_id,
         "average": average,
+    }
+
+
+def _pflow_mm(
+    from_bus: int,
+    to_bus: int,
+    line_id: str,
+    min_value: float,
+    max_value: float,
+    min_allowable: float,
+    max_allowable: float,
+    min_contingency: int,
+    max_contingency: int,
+) -> dict[str, object]:
+    return {
+        "from_bus": from_bus,
+        "to_bus": to_bus,
+        "line_id": line_id,
+        "min_value": min_value,
+        "max_value": max_value,
+        "min_allowable": min_allowable,
+        "max_allowable": max_allowable,
+        "min_contingency": min_contingency,
+        "max_contingency": max_contingency,
     }
 
 
