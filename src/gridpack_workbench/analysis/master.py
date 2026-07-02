@@ -8,6 +8,11 @@ from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_an
 from gridpack_workbench.analysis.gpu_pandas import get_pandas
 from gridpack_workbench.analysis.parser_models import ParsedTable
 from gridpack_workbench.analysis.parsers import parse_all_output_tables
+from gridpack_workbench.analysis.utilization import (
+    DEFAULT_UTILIZATION_BRANCH_OPTIONS,
+    UtilizationBranchOptions,
+    selected_utilization_branch_types,
+)
 
 
 MASTER_DATASET_VERSION = "2026.06.16"
@@ -110,6 +115,7 @@ def build_branch_master_exports(
     run_dir: str | Path,
     dataset: RunAnalysisDataset | None = None,
     outlier_threshold_pct: float = 1000.0,
+    branch_options: UtilizationBranchOptions | None = None,
 ) -> MasterExportResult:
     pd = get_pandas()
     run_path = Path(run_dir).expanduser().resolve()
@@ -125,7 +131,7 @@ def build_branch_master_exports(
             master = master.merge(frame, how="outer", on=BRANCH_KEYS)
 
     master = _normalize_master_columns(pd, master)
-    master = _add_utilization_columns(pd, master)
+    master = _add_utilization_columns(pd, master, branch_options)
     master = _add_outlier_reasons(master, outlier_threshold_pct)
 
     outlier_mask = master["outlier_reason"].fillna("").astype(str) != ""
@@ -149,10 +155,11 @@ def ensure_branch_master_exports(
     run_dir: str | Path,
     dataset: RunAnalysisDataset | None = None,
     outlier_threshold_pct: float = 1000.0,
+    branch_options: UtilizationBranchOptions | None = None,
 ) -> MasterExportResult:
     run_path = Path(run_dir).expanduser().resolve()
     paths = MasterExportPaths.for_run(run_path)
-    if paths.all_exist():
+    if paths.all_exist() and (branch_options is None or branch_options == DEFAULT_UTILIZATION_BRANCH_OPTIONS):
         pd = get_pandas()
         master = pd.read_csv(paths.master_csv)
         cleaned = pd.read_csv(paths.master_cleaned_csv)
@@ -166,7 +173,12 @@ def ensure_branch_master_exports(
         )
     if dataset is None and (run_path / "reports" / "tables").exists():
         dataset = _dataset_from_existing_report_tables(run_path)
-    return build_branch_master_exports(run_path, dataset=dataset, outlier_threshold_pct=outlier_threshold_pct)
+    return build_branch_master_exports(
+        run_path,
+        dataset=dataset,
+        outlier_threshold_pct=outlier_threshold_pct,
+        branch_options=branch_options,
+    )
 
 
 def read_master_cleaned(run_dir: str | Path):
@@ -272,9 +284,9 @@ def _fill_canonical_column(master, column: str, candidates: list[str]):
     return master
 
 
-def _add_utilization_columns(pd, master):
+def _add_utilization_columns(pd, master, branch_options: UtilizationBranchOptions | None = None):
     rate_c = _numeric_column(pd, master, RATE_C_COLUMN)
-    eligible = _utilization_eligible_mask(master)
+    eligible = _utilization_eligible_mask(master, branch_options)
     base_flow = _numeric_column(pd, master, BASE_FLOW_SOURCE_COLUMN)
     mean_flow = _numeric_column(pd, master, MEAN_N1_FLOW_SOURCE_COLUMN)
     min_flow = _numeric_column(pd, master, MIN_N1_FLOW_SOURCE_COLUMN)
@@ -297,11 +309,12 @@ def _numeric_column(pd, frame, column: str):
     return pd.Series([None] * len(frame), index=frame.index, dtype="float64")
 
 
-def _utilization_eligible_mask(master):
+def _utilization_eligible_mask(master, branch_options: UtilizationBranchOptions | None = None):
     branch_type = master.get("raw_branch_type")
     if branch_type is None:
         return False
-    return branch_type.fillna("").astype(str).eq("nontransformer_branch")
+    eligible_types = selected_utilization_branch_types(branch_options)
+    return branch_type.fillna("").astype(str).isin(eligible_types)
 
 
 def _safe_pct(numerator, denominator, eligible):

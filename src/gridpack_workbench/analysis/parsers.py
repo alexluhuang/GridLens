@@ -213,8 +213,21 @@ def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
             raw_file = Path(candidate).name
     tables["bus_metadata"] = parse_raw_bus_metadata(run_dir, raw_file)
     tables["area_metadata"] = parse_raw_area_metadata(run_dir, raw_file)
-    tables["branch_metadata"] = parse_raw_branch_metadata(run_dir, raw_file)
+    tables["branch_metadata"] = parse_raw_branch_metadata(
+        run_dir,
+        raw_file,
+        branch_rows=_observed_branch_rows(tables),
+    )
     return tables
+
+
+def _observed_branch_rows(tables: dict[str, ParsedTable]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for table_name in ("pflow", "pflow_mm", "qflow", "qflow_mm", "perf_mm", "line_flt_cnt"):
+        table = tables.get(table_name)
+        if table:
+            rows.extend(table.rows)
+    return rows
 
 
 def sniff_table(path: str | Path, max_rows: int = 20) -> list[list[str]]:

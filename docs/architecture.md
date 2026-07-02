@@ -82,7 +82,7 @@ Analysis responsibilities are split by module:
 - `parser_models.py`: defines shared parser data objects such as `ParsedTable`.
 - `parsers.py`: converts GridPACK output files into normalized `ParsedTable` objects.
 - `table_schemas.py`: defines the expected columns and types for whitespace-delimited GridPACK TXT outputs.
-- `raw_parsers.py`: parses RAW bus and non-transformer branch metadata.
+- `raw_parsers.py`: parses RAW bus metadata and branch-like RAW metadata, including non-transformer branches and transformer-derived branch rows.
 - `enrichment.py`: adds RAW-derived bus names, areas, zones, and voltage classes to parsed tables.
 - `metrics.py`: computes decision-support metrics from already-parsed tables.
 - `dataset.py`: orchestrates parsing, enrichment, metrics, table exports, and the analysis manifest.

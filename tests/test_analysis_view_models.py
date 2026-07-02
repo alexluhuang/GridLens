@@ -4,6 +4,7 @@ from gridpack_workbench.analysis.distributions import DistributionExport
 from gridpack_workbench.analysis.parser_models import ParsedTable
 from gridpack_workbench.gui.analysis_view_models import (
     DISTRIBUTION_OUTPUT_COLUMNS,
+    UtilizationBranchOptions,
     average_n1_utilization_rows,
     control_area_utilization_rows,
     distribution_output_rows,
@@ -275,6 +276,86 @@ def test_line_utilization_excludes_transformer_equivalent_branches() -> None:
 
     assert average_n1_utilization_rows(tables) == []
     assert max_line_utilization_rows(tables) == []
+
+
+def test_line_utilization_can_include_transformer_derived_branches() -> None:
+    tables = {
+        "branch_metadata": ParsedTable(
+            name="branch_metadata",
+            source_file="training.raw",
+            columns=[],
+            rows=[
+                _branch(
+                    101,
+                    102,
+                    "1",
+                    230.0,
+                    230.0,
+                    100.0,
+                    "North",
+                    "230-344 kV",
+                    ratec=100.0,
+                    raw_branch_type="two_winding_transformer_branch",
+                ),
+                _branch(
+                    201,
+                    90001,
+                    "A",
+                    230.0,
+                    0.0,
+                    200.0,
+                    "North",
+                    "230-344 kV",
+                    ratec=200.0,
+                    raw_branch_type="three_winding_transformer_branch",
+                ),
+            ],
+        ),
+        "pflow": ParsedTable(
+            name="pflow",
+            source_file="pflow.txt",
+            columns=[],
+            rows=[
+                _flow(101, 102, "1", 50.0),
+                _flow(201, 90001, "A", 80.0),
+            ],
+        ),
+        "pflow_mm": ParsedTable(
+            name="pflow_mm",
+            source_file="pflow_mm.txt",
+            columns=[],
+            rows=[
+                _pflow_mm(101, 102, "1", -90.0, 75.0, -100.0, 100.0, 1, 2),
+                _pflow_mm(201, 90001, "A", -120.0, 100.0, -200.0, 200.0, 3, 4),
+            ],
+        ),
+    }
+
+    assert average_n1_utilization_rows(tables) == []
+    assert max_line_utilization_rows(tables) == []
+
+    two_winding_rows = max_line_utilization_rows(
+        tables,
+        UtilizationBranchOptions(include_two_winding_transformers=True),
+    )
+    all_transformer_rows = max_line_utilization_rows(
+        tables,
+        UtilizationBranchOptions(
+            include_two_winding_transformers=True,
+            include_three_winding_transformers=True,
+        ),
+    )
+    average_rows = average_n1_utilization_rows(
+        tables,
+        UtilizationBranchOptions(
+            include_two_winding_transformers=True,
+            include_three_winding_transformers=True,
+        ),
+    )
+
+    assert [row["raw_branch_type"] for row in two_winding_rows] == ["two_winding_transformer_branch"]
+    assert [row["max_utilization_pct"] for row in all_transformer_rows] == [60.0, 90.0]
+    assert [row["utilization_pct"] for row in average_rows] == [50.0, 40.0]
 
 
 def test_metric_helpers_tolerate_unexpected_shapes() -> None:

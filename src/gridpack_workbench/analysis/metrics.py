@@ -6,6 +6,7 @@ from statistics import mean, median
 
 from gridpack_workbench.analysis.parser_models import ParsedTable
 from gridpack_workbench.analysis.table_helpers import append_missing_columns, as_float, pct, take_fields
+from gridpack_workbench.analysis.utilization import UtilizationBranchOptions, is_utilizable_branch
 
 
 THERMAL_BOTTLENECK_FIELDS = [
@@ -77,9 +78,17 @@ __all__ = [
 ]
 
 
-def compute_metrics(tables: dict[str, ParsedTable]) -> dict[str, object]:
+def compute_metrics(
+    tables: dict[str, ParsedTable],
+    branch_options: UtilizationBranchOptions | None = None,
+) -> dict[str, object]:
     """Compute decision-support metrics from parsed GridPACK output tables."""
-    _add_pflow_utilization_columns(tables.get("pflow"), tables.get("pflow_mm"), tables.get("branch_metadata"))
+    _add_pflow_utilization_columns(
+        tables.get("pflow"),
+        tables.get("pflow_mm"),
+        tables.get("branch_metadata"),
+        branch_options,
+    )
     _add_voltage_margin_columns(tables.get("vmag_mm"), tables.get("input_settings"))
     _add_generator_deviation_columns(tables.get("pgen_mm"))
     _add_generator_deviation_columns(tables.get("qgen_mm"))
@@ -97,6 +106,7 @@ def compute_metrics(tables: dict[str, ParsedTable]) -> dict[str, object]:
         },
         "notes": [
             "Thermal utilization is computed from pflow.txt and pflow_mm.txt real-power flow divided by RAW branch Rate C.",
+            "Non-transformer branches are included by default; transformer-derived branches are included only when enabled.",
             (
                 "Performance-index outputs remain available for contingency ranking, but are "
                 "not used as utilization metrics."
@@ -286,6 +296,7 @@ def _add_pflow_utilization_columns(
     pflow: ParsedTable | None,
     pflow_mm: ParsedTable | None,
     branch_metadata: ParsedTable | None,
+    branch_options: UtilizationBranchOptions | None = None,
 ) -> None:
     branches = _table_index(branch_metadata)
     pflow_mm_index = _table_index(pflow_mm)
@@ -294,7 +305,7 @@ def _add_pflow_utilization_columns(
         for row in pflow.rows:
             key = _branch_key(row)
             branch = branches.get(key)
-            if not _is_utilizable_branch(branch):
+            if not _is_utilizable_branch(branch, branch_options):
                 row["average_utilization_pct"] = None
                 continue
             rating = _line_rating(_merge_rows(branch, pflow_mm_index.get(key, {}), row))
@@ -308,7 +319,7 @@ def _add_pflow_utilization_columns(
     for row in pflow_mm.rows:
         key = _branch_key(row)
         branch = branches.get(key)
-        if not _is_utilizable_branch(branch):
+        if not _is_utilizable_branch(branch, branch_options):
             row["base_utilization_pct"] = None
             row["min_utilization_pct"] = None
             row["max_utilization_pct"] = None
@@ -358,11 +369,11 @@ def _line_rating(row: dict[str, object]) -> float | None:
     return _positive_float(row.get("ratec")) or _positive_float(row.get("rate_c"))
 
 
-def _is_utilizable_branch(row: dict[str, object] | None) -> bool:
-    if not row:
-        return False
-    branch_type = str(row.get("raw_branch_type") or "nontransformer_branch")
-    return branch_type == "nontransformer_branch"
+def _is_utilizable_branch(
+    row: dict[str, object] | None,
+    branch_options: UtilizationBranchOptions | None = None,
+) -> bool:
+    return is_utilizable_branch(row, branch_options)
 
 
 def _pct(numerator: float, denominator: float | None) -> float | None:

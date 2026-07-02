@@ -5,6 +5,7 @@ import textwrap
 from typing import Callable
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -28,6 +29,7 @@ except Exception:  # pragma: no cover - exercised only on systems without matplo
     Figure = None  # type: ignore[assignment]
 
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
+from gridpack_workbench.analysis.utilization import UtilizationBranchOptions
 from gridpack_workbench.core.project import Project
 from gridpack_workbench.gui.analysis_view_models import (
     average_n1_utilization_rows,
@@ -84,6 +86,23 @@ class AnalysisTab(QWidget):
         run_row.addWidget(analyze)
         layout.addLayout(run_row)
 
+        transformer_row = QHBoxLayout()
+        self.include_two_winding_transformers = QCheckBox("Include two-winding transformer branches")
+        self.include_two_winding_transformers.setToolTip(
+            "Include pflow rows created from two-winding transformer records in utilization charts."
+        )
+        self.include_three_winding_transformers = QCheckBox("Include three-winding transformer branches")
+        self.include_three_winding_transformers.setToolTip(
+            "Include synthetic pflow legs created from three-winding transformer records in utilization charts."
+        )
+        self.include_two_winding_transformers.toggled.connect(self._on_utilization_scope_changed)
+        self.include_three_winding_transformers.toggled.connect(self._on_utilization_scope_changed)
+        transformer_row.addWidget(QLabel("Utilization"))
+        transformer_row.addWidget(self.include_two_winding_transformers)
+        transformer_row.addWidget(self.include_three_winding_transformers)
+        transformer_row.addStretch()
+        layout.addLayout(transformer_row)
+
         self.status_label = QLabel("Select a completed run and generate the three analysis graphs.")
         self.status_label.setObjectName("mutedLabel")
         layout.addWidget(self.status_label)
@@ -132,20 +151,14 @@ class AnalysisTab(QWidget):
         try:
             self.status_label.setText("Parsing GridPACK outputs and RAW metadata...")
             self.current_dataset = build_run_analysis(run_dir)
-            self.average_branch_rows = average_n1_utilization_rows(self.current_dataset.tables)
-            self.max_line_rows = max_line_utilization_rows(self.current_dataset.tables)
+            self._rebuild_utilization_rows()
             self.selected_control_areas.clear()
             self.selected_voltage_groups.clear()
             self._refresh_filtered_rows()
             if hasattr(self, "chart_grid"):
                 self._arrange_charts()
             self._render_charts()
-            self.status_label.setText(
-                "Generated "
-                f"{len(self.control_area_rows)} control-area groups, "
-                f"{len(self.voltage_group_rows)} voltage groups, and "
-                f"{len(self.line_rows)} line points."
-            )
+            self._update_generated_status()
         except Exception as exc:
             QMessageBox.critical(self, "Analysis failed", str(exc))
             self.status_label.setText("Analysis failed.")
@@ -307,6 +320,40 @@ class AnalysisTab(QWidget):
         self._render_control_area_chart()
         self._render_voltage_group_chart()
         self._render_line_chart()
+
+    def _on_utilization_scope_changed(self) -> None:
+        if not self.current_dataset:
+            return
+        self._rebuild_utilization_rows()
+        self._refresh_filtered_rows()
+        if hasattr(self, "chart_grid"):
+            self._arrange_charts()
+        self._render_charts()
+        self._update_generated_status()
+
+    def _rebuild_utilization_rows(self) -> None:
+        if not self.current_dataset:
+            self.average_branch_rows = []
+            self.max_line_rows = []
+            return
+        branch_options = self._utilization_branch_options()
+        self.average_branch_rows = average_n1_utilization_rows(self.current_dataset.tables, branch_options)
+        self.max_line_rows = max_line_utilization_rows(self.current_dataset.tables, branch_options)
+
+    def _utilization_branch_options(self) -> UtilizationBranchOptions:
+        return UtilizationBranchOptions(
+            include_two_winding_transformers=self.include_two_winding_transformers.isChecked(),
+            include_three_winding_transformers=self.include_three_winding_transformers.isChecked(),
+        )
+
+    def _update_generated_status(self) -> None:
+        self.status_label.setText(
+            "Generated "
+            f"{len(self.control_area_rows)} control-area groups, "
+            f"{len(self.voltage_group_rows)} voltage groups, and "
+            f"{len(self.line_rows)} line points "
+            f"({self._utilization_scope_label()})."
+        )
 
     def _refresh_filtered_rows(self) -> None:
         self.control_area_rows = summarize_control_area_utilization(self.average_branch_rows)
@@ -604,6 +651,14 @@ class AnalysisTab(QWidget):
         if self.selected_voltage_groups:
             return "Lines in selected voltage groups, sorted lowest to highest"
         return "Lines in visible voltage groups, sorted lowest to highest"
+
+    def _utilization_scope_label(self) -> str:
+        included = ["non-transformer branches"]
+        if self.include_two_winding_transformers.isChecked():
+            included.append("two-winding transformers")
+        if self.include_three_winding_transformers.isChecked():
+            included.append("three-winding transformers")
+        return "including " + ", ".join(included)
 
     def _area_scope_label(self) -> str:
         if not self.selected_control_areas:

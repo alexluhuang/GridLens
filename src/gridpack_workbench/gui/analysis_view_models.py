@@ -8,6 +8,7 @@ from typing import Protocol
 
 from gridpack_workbench.analysis.enrichment import voltage_class
 from gridpack_workbench.analysis.parser_models import ParsedTable
+from gridpack_workbench.analysis.utilization import UtilizationBranchOptions, is_utilizable_branch
 
 
 DEFAULT_DISTRIBUTION_VARIABLES = frozenset(
@@ -86,16 +87,22 @@ def distribution_output_rows(results: Iterable[DistributionExportLike]) -> list[
     return [distribution_output_row(result) for result in results]
 
 
-def control_area_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+def control_area_utilization_rows(
+    tables: Mapping[str, ParsedTable],
+    branch_options: UtilizationBranchOptions | None = None,
+) -> list[dict[str, object]]:
     """Average N-1 branch utilization by control area for lines at or above 100 kV."""
-    return summarize_control_area_utilization(average_n1_utilization_rows(tables))
+    return summarize_control_area_utilization(average_n1_utilization_rows(tables, branch_options))
 
 
-def average_n1_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+def average_n1_utilization_rows(
+    tables: Mapping[str, ParsedTable],
+    branch_options: UtilizationBranchOptions | None = None,
+) -> list[dict[str, object]]:
     """Average N-1 branch utilization rows with area and voltage labels attached."""
     duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
     rows = []
-    for row in _average_n1_utilization_rows(tables):
+    for row in _average_n1_utilization_rows(tables, branch_options):
         area_labels = _endpoint_control_area_labels(row, duplicate_area_names)
         group = str(row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
         enriched = dict(row)
@@ -119,9 +126,12 @@ def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> 
     return summaries
 
 
-def voltage_group_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+def voltage_group_utilization_rows(
+    tables: Mapping[str, ParsedTable],
+    branch_options: UtilizationBranchOptions | None = None,
+) -> list[dict[str, object]]:
     """Average N-1 branch utilization by voltage group."""
-    return summarize_voltage_group_utilization(average_n1_utilization_rows(tables))
+    return summarize_voltage_group_utilization(average_n1_utilization_rows(tables, branch_options))
 
 
 def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
@@ -136,14 +146,20 @@ def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) ->
     return summaries
 
 
-def max_230kv_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+def max_230kv_line_utilization_rows(
+    tables: Mapping[str, ParsedTable],
+    branch_options: UtilizationBranchOptions | None = None,
+) -> list[dict[str, object]]:
     """Maximum observed utilization for 230 kV lines, sorted from lowest to highest."""
-    rows = [row for row in max_line_utilization_rows(tables) if _is_230kv_line(row)]
+    rows = [row for row in max_line_utilization_rows(tables, branch_options) if _is_230kv_line(row)]
     rows.sort(key=lambda item: numeric_value(item.get("max_utilization_pct")))
     return rows
 
 
-def max_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+def max_line_utilization_rows(
+    tables: Mapping[str, ParsedTable],
+    branch_options: UtilizationBranchOptions | None = None,
+) -> list[dict[str, object]]:
     """Maximum observed utilization rows for branch lines, sorted from lowest to highest."""
     duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
     branches = _table_index(tables.get("branch_metadata"))
@@ -152,7 +168,7 @@ def max_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[st
     for row in _table_rows(tables, "pflow_mm"):
         key = _branch_key(row)
         branch = branches.get(key)
-        if not _is_utilizable_branch(branch):
+        if not _is_utilizable_branch(branch, branch_options):
             continue
         context = _merge_rows(branch, row)
         utilization = _pflow_mm_max_utilization_pct(context)
@@ -186,10 +202,14 @@ def _line_utilization_row(
         "max_contingency": _max_flow_contingency(context),
         "max_utilization_pct": round(utilization, 6),
         "utilization_source": utilization_source,
+        "raw_branch_type": context.get("raw_branch_type", ""),
     }
 
 
-def _average_n1_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[str, object]]:
+def _average_n1_utilization_rows(
+    tables: Mapping[str, ParsedTable],
+    branch_options: UtilizationBranchOptions | None = None,
+) -> list[dict[str, object]]:
     branches = _table_index(tables.get("branch_metadata"))
     pflow_mm = _table_index(tables.get("pflow_mm"))
     rows: list[dict[str, object]] = []
@@ -197,7 +217,7 @@ def _average_n1_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict
     for row in _table_rows(tables, "pflow"):
         key = _branch_key(row)
         branch = branches.get(key)
-        if not _is_utilizable_branch(branch):
+        if not _is_utilizable_branch(branch, branch_options):
             continue
         context = _merge_rows(branch, pflow_mm.get(key, {}), row)
         rating = _line_rating(context)
@@ -339,11 +359,11 @@ def _line_rating(row: Mapping[str, object]) -> float | None:
     return _positive_float(row.get("ratec")) or _positive_float(row.get("rate_c"))
 
 
-def _is_utilizable_branch(row: Mapping[str, object] | None) -> bool:
-    if not row:
-        return False
-    branch_type = str(row.get("raw_branch_type") or "nontransformer_branch")
-    return branch_type == "nontransformer_branch"
+def _is_utilizable_branch(
+    row: Mapping[str, object] | None,
+    branch_options: UtilizationBranchOptions | None = None,
+) -> bool:
+    return is_utilizable_branch(row, branch_options)
 
 
 def _max_flow_contingency(row: Mapping[str, object]) -> object:
@@ -496,6 +516,7 @@ __all__ = [
     "DISTRIBUTION_OUTPUT_COLUMNS",
     "DistributionExportLike",
     "THERMAL_TABLE_COLUMNS",
+    "UtilizationBranchOptions",
     "VOLTAGE_TABLE_COLUMNS",
     "average_n1_utilization_rows",
     "control_area_utilization_rows",
