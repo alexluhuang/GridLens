@@ -10,7 +10,7 @@ from gridpack_workbench.analysis.master import (
     MAX_N1_FLOW_SOURCE_COLUMN,
     MEAN_N1_FLOW_SOURCE_COLUMN,
     MIN_N1_FLOW_SOURCE_COLUMN,
-    RATE_A_COLUMN,
+    RATE_C_COLUMN,
     MasterExportPaths,
     MasterExportResult,
     _add_utilization_columns,
@@ -64,14 +64,16 @@ def test_add_utilization_columns_uses_named_master_source_columns() -> None:
     master = pd.DataFrame(
         [
             {
-                RATE_A_COLUMN: 100,
+                RATE_C_COLUMN: 200,
+                "raw_branch_type": "nontransformer_branch",
                 BASE_FLOW_SOURCE_COLUMN: 50,
                 MEAN_N1_FLOW_SOURCE_COLUMN: -70,
                 MIN_N1_FLOW_SOURCE_COLUMN: -120,
                 MAX_N1_FLOW_SOURCE_COLUMN: 80,
             },
             {
-                RATE_A_COLUMN: 0,
+                RATE_C_COLUMN: 100,
+                "raw_branch_type": "transformer_equivalent_branch",
                 BASE_FLOW_SOURCE_COLUMN: 50,
                 MEAN_N1_FLOW_SOURCE_COLUMN: 70,
                 MIN_N1_FLOW_SOURCE_COLUMN: -120,
@@ -82,7 +84,7 @@ def test_add_utilization_columns_uses_named_master_source_columns() -> None:
 
     result = _add_utilization_columns(pd, master)
 
-    assert result.loc[0, "base_case_utilization_pct"] == 50
-    assert result.loc[0, "mean_contingency_utilization_pct"] == 70
-    assert result.loc[0, "max_contingency_utilization_pct"] == 120
+    assert result.loc[0, "base_case_utilization_pct"] == 25
+    assert result.loc[0, "mean_contingency_utilization_pct"] == 35
+    assert result.loc[0, "max_contingency_utilization_pct"] == 60
     assert math.isnan(result.loc[1, "base_case_utilization_pct"])

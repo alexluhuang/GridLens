@@ -18,9 +18,8 @@ UTILIZATION_COLUMNS = [
     "mean_contingency_utilization_pct",
     "max_contingency_utilization_pct",
 ]
-RAW_RATE_A_COLUMN = "ratea"
-RATE_A_COLUMN = "rate_a"
-ALLOWABLE_FLOW_FALLBACK_COLUMN = "pflow_mm_max_allowable"
+RAW_RATE_C_COLUMN = "ratec"
+RATE_C_COLUMN = "rate_c"
 BASE_FLOW_SOURCE_COLUMN = "pflow_mm_base_value"
 MEAN_N1_FLOW_SOURCE_COLUMN = "pflow_average"
 MIN_N1_FLOW_SOURCE_COLUMN = "pflow_mm_min_value"
@@ -253,14 +252,11 @@ def _normalize_master_columns(pd, master):
         if key not in master.columns:
             master[key] = ""
 
-    if RAW_RATE_A_COLUMN not in master.columns:
-        master[RAW_RATE_A_COLUMN] = None
-    if ALLOWABLE_FLOW_FALLBACK_COLUMN in master.columns:
-        fallback = pd.to_numeric(master[ALLOWABLE_FLOW_FALLBACK_COLUMN], errors="coerce").abs()
-        ratea = pd.to_numeric(master[RAW_RATE_A_COLUMN], errors="coerce")
-        master[RATE_A_COLUMN] = ratea.where(ratea > 0, fallback)
-    else:
-        master[RATE_A_COLUMN] = pd.to_numeric(master[RAW_RATE_A_COLUMN], errors="coerce")
+    if RAW_RATE_C_COLUMN not in master.columns:
+        master[RAW_RATE_C_COLUMN] = None
+    if "raw_branch_type" not in master.columns:
+        master["raw_branch_type"] = None
+    master[RATE_C_COLUMN] = pd.to_numeric(master[RAW_RATE_C_COLUMN], errors="coerce")
     master = _fill_canonical_column(master, "area", AREA_CANDIDATE_COLUMNS)
     master = _fill_canonical_column(master, "voltage_class", VOLTAGE_CLASS_CANDIDATE_COLUMNS)
     return master
@@ -277,7 +273,8 @@ def _fill_canonical_column(master, column: str, candidates: list[str]):
 
 
 def _add_utilization_columns(pd, master):
-    rate_a = _numeric_column(pd, master, RATE_A_COLUMN)
+    rate_c = _numeric_column(pd, master, RATE_C_COLUMN)
+    eligible = _utilization_eligible_mask(master)
     base_flow = _numeric_column(pd, master, BASE_FLOW_SOURCE_COLUMN)
     mean_flow = _numeric_column(pd, master, MEAN_N1_FLOW_SOURCE_COLUMN)
     min_flow = _numeric_column(pd, master, MIN_N1_FLOW_SOURCE_COLUMN)
@@ -288,9 +285,9 @@ def _add_utilization_columns(pd, master):
     master["base_flow_for_utilization"] = base_flow
     master["mean_n1_flow_for_utilization"] = mean_flow
     master["max_n1_flow_for_utilization"] = worst_flow
-    master["base_case_utilization_pct"] = _safe_pct(base_flow.abs(), rate_a)
-    master["mean_contingency_utilization_pct"] = _safe_pct(mean_flow.abs(), rate_a)
-    master["max_contingency_utilization_pct"] = _safe_pct(worst_flow, rate_a)
+    master["base_case_utilization_pct"] = _safe_pct(base_flow.abs(), rate_c, eligible)
+    master["mean_contingency_utilization_pct"] = _safe_pct(mean_flow.abs(), rate_c, eligible)
+    master["max_contingency_utilization_pct"] = _safe_pct(worst_flow, rate_c, eligible)
     return master
 
 
@@ -300,9 +297,16 @@ def _numeric_column(pd, frame, column: str):
     return pd.Series([None] * len(frame), index=frame.index, dtype="float64")
 
 
-def _safe_pct(numerator, denominator):
+def _utilization_eligible_mask(master):
+    branch_type = master.get("raw_branch_type")
+    if branch_type is None:
+        return False
+    return branch_type.fillna("").astype(str).eq("nontransformer_branch")
+
+
+def _safe_pct(numerator, denominator, eligible):
     result = numerator / denominator * 100
-    return result.where((denominator.notna()) & (denominator > 0))
+    return result.where(eligible & (denominator.notna()) & (denominator > 0))
 
 
 def _add_outlier_reasons(master, threshold_pct: float):

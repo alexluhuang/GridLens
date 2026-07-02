@@ -54,6 +54,8 @@ def test_numeric_value_uses_default_for_invalid_values() -> None:
 def test_distribution_variable_defaults_are_centralized() -> None:
     assert should_select_distribution_variable("area")
     assert should_select_distribution_variable("voltage_class")
+    assert should_select_distribution_variable("rate_c")
+    assert not should_select_distribution_variable("rate_a")
     assert not should_select_distribution_variable("owner_1_fraction")
 
 
@@ -173,7 +175,7 @@ def test_average_utilization_ignores_qflow() -> None:
             name="branch_metadata",
             source_file="training.raw",
             columns=[],
-            rows=[_branch(101, 102, "1", 230.0, 230.0, 100.0, "North", "230-344 kV")],
+            rows=[_branch(101, 102, "1", 230.0, 230.0, 10.0, "North", "230-344 kV", ratec=100.0)],
         ),
         "pflow": ParsedTable(
             name="pflow",
@@ -200,7 +202,7 @@ def test_max_line_utilization_ignores_perf_mm() -> None:
             name="branch_metadata",
             source_file="training.raw",
             columns=[],
-            rows=[_branch(101, 102, "1", 230.0, 230.0, 0.0, "North", "230-344 kV")],
+            rows=[_branch(101, 102, "1", 230.0, 230.0, 5.0, "North", "230-344 kV", ratec=50.0)],
         ),
         "pflow_mm": ParsedTable(
             name="pflow_mm",
@@ -234,6 +236,45 @@ def test_max_line_utilization_ignores_perf_mm() -> None:
     assert rows[0]["max_utilization_pct"] == 240.0
     assert rows[0]["max_contingency"] == 8
     assert rows[0]["utilization_source"] == "pflow_mm"
+
+
+def test_line_utilization_excludes_transformer_equivalent_branches() -> None:
+    tables = {
+        "branch_metadata": ParsedTable(
+            name="branch_metadata",
+            source_file="training.raw",
+            columns=[],
+            rows=[
+                _branch(
+                    101,
+                    102,
+                    "1",
+                    230.0,
+                    230.0,
+                    100.0,
+                    "North",
+                    "230-344 kV",
+                    ratec=100.0,
+                    raw_branch_type="transformer_equivalent_branch",
+                )
+            ],
+        ),
+        "pflow": ParsedTable(
+            name="pflow",
+            source_file="pflow.txt",
+            columns=[],
+            rows=[_flow(101, 102, "1", 60.0)],
+        ),
+        "pflow_mm": ParsedTable(
+            name="pflow_mm",
+            source_file="pflow_mm.txt",
+            columns=[],
+            rows=[_pflow_mm(101, 102, "1", -120.0, 80.0, -100.0, 100.0, 1, 2)],
+        ),
+    }
+
+    assert average_n1_utilization_rows(tables) == []
+    assert max_line_utilization_rows(tables) == []
 
 
 def test_metric_helpers_tolerate_unexpected_shapes() -> None:
@@ -290,6 +331,8 @@ def _branch(
     from_area_name: str = "",
     to_area: int | None = None,
     to_area_name: str = "",
+    ratec: float | None = None,
+    raw_branch_type: str = "nontransformer_branch",
 ) -> dict[str, object]:
     return {
         "from_bus": from_bus,
@@ -300,12 +343,14 @@ def _branch(
         "from_base_kv": from_base_kv,
         "to_base_kv": to_base_kv,
         "ratea": ratea,
+        "ratec": ratea if ratec is None else ratec,
         "control_area": control_area,
         "from_area": from_area,
         "from_area_name": from_area_name,
         "to_area": to_area,
         "to_area_name": to_area_name,
         "voltage_class": voltage_class,
+        "raw_branch_type": raw_branch_type,
     }
 
 

@@ -96,7 +96,7 @@ def compute_metrics(tables: dict[str, ParsedTable]) -> dict[str, object]:
             "qgen": _generator_metrics(tables.get("qgen_mm")),
         },
         "notes": [
-            "Thermal utilization is computed from pflow.txt and pflow_mm.txt real-power flow divided by line rating.",
+            "Thermal utilization is computed from pflow.txt and pflow_mm.txt real-power flow divided by RAW branch Rate C.",
             (
                 "Performance-index outputs remain available for contingency ranking, but are "
                 "not used as utilization metrics."
@@ -293,7 +293,11 @@ def _add_pflow_utilization_columns(
     if pflow:
         for row in pflow.rows:
             key = _branch_key(row)
-            rating = _line_rating(_merge_rows(branches.get(key, {}), pflow_mm_index.get(key, {}), row))
+            branch = branches.get(key)
+            if not _is_utilizable_branch(branch):
+                row["average_utilization_pct"] = None
+                continue
+            rating = _line_rating(_merge_rows(branch, pflow_mm_index.get(key, {}), row))
             average = as_float(row.get("average"))
             row["average_utilization_pct"] = _pct(abs(average), rating) if average is not None else None
         append_missing_columns(pflow, ["average_utilization_pct"])
@@ -303,7 +307,15 @@ def _add_pflow_utilization_columns(
 
     for row in pflow_mm.rows:
         key = _branch_key(row)
-        context = _merge_rows(branches.get(key, {}), row)
+        branch = branches.get(key)
+        if not _is_utilizable_branch(branch):
+            row["base_utilization_pct"] = None
+            row["min_utilization_pct"] = None
+            row["max_utilization_pct"] = None
+            row["worst_headroom_pct"] = None
+            row["max_utilization_contingency"] = ""
+            continue
+        context = _merge_rows(branch, row)
         rating = _line_rating(context)
         base_value = as_float(row.get("base_value"))
         min_value = as_float(row.get("min_value"))
@@ -343,16 +355,14 @@ def _worst_pflow_value_and_contingency(
 
 
 def _line_rating(row: dict[str, object]) -> float | None:
-    rating = _positive_float(row.get("ratea")) or _positive_float(row.get("rate_a"))
-    if rating is not None:
-        return rating
+    return _positive_float(row.get("ratec")) or _positive_float(row.get("rate_c"))
 
-    limits = [
-        abs(value)
-        for value in (as_float(row.get("min_allowable")), as_float(row.get("max_allowable")))
-        if value is not None and value != 0
-    ]
-    return max(limits) if limits else None
+
+def _is_utilizable_branch(row: dict[str, object] | None) -> bool:
+    if not row:
+        return False
+    branch_type = str(row.get("raw_branch_type") or "nontransformer_branch")
+    return branch_type == "nontransformer_branch"
 
 
 def _pct(numerator: float, denominator: float | None) -> float | None:

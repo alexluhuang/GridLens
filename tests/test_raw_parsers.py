@@ -45,6 +45,7 @@ def test_parse_raw_bus_and_branch_metadata(tmp_path: Path) -> None:
     assert branches.rows[0]["to_bus"] == 102
     assert branches.rows[0]["line_id"] == "1"
     assert branches.rows[0]["ratea"] == 100.0
+    assert branches.rows[0]["ratec"] == 120.0
 
 
 def test_parse_raw_metadata_returns_notes_for_missing_file(tmp_path: Path) -> None:

@@ -16,7 +16,7 @@ DEFAULT_DISTRIBUTION_VARIABLES = frozenset(
         "voltage_class",
         "from_area",
         "to_area",
-        "rate_a",
+        "rate_c",
         "raw_branch_type",
     }
 )
@@ -151,7 +151,10 @@ def max_line_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict[st
 
     for row in _table_rows(tables, "pflow_mm"):
         key = _branch_key(row)
-        context = _merge_rows(branches.get(key, {}), row)
+        branch = branches.get(key)
+        if not _is_utilizable_branch(branch):
+            continue
+        context = _merge_rows(branch, row)
         utilization = _pflow_mm_max_utilization_pct(context)
         if utilization is None:
             continue
@@ -193,10 +196,13 @@ def _average_n1_utilization_rows(tables: Mapping[str, ParsedTable]) -> list[dict
 
     for row in _table_rows(tables, "pflow"):
         key = _branch_key(row)
-        context = _merge_rows(branches.get(key, {}), pflow_mm.get(key, {}), row)
-        rate_a = _line_rating(context)
+        branch = branches.get(key)
+        if not _is_utilizable_branch(branch):
+            continue
+        context = _merge_rows(branch, pflow_mm.get(key, {}), row)
+        rating = _line_rating(context)
         real_flow = _finite_float(row.get("average"))
-        utilization = _pflow_utilization_pct(real_flow, rate_a)
+        utilization = _pflow_utilization_pct(real_flow, rating)
         if utilization is None:
             continue
         context["utilization_pct"] = round(utilization, 6)
@@ -310,10 +316,10 @@ def _merge_rows(*rows: Mapping[str, object]) -> dict[str, object]:
     return merged
 
 
-def _pflow_utilization_pct(real_flow: float | None, rate_a: float | None) -> float | None:
-    if real_flow is None or rate_a is None or rate_a <= 0:
+def _pflow_utilization_pct(real_flow: float | None, rating: float | None) -> float | None:
+    if real_flow is None or rating is None or rating <= 0:
         return None
-    return abs(real_flow) / rate_a * 100
+    return abs(real_flow) / rating * 100
 
 
 def _max_utilization_pct(row: Mapping[str, object]) -> float | None:
@@ -321,25 +327,23 @@ def _max_utilization_pct(row: Mapping[str, object]) -> float | None:
 
 
 def _pflow_mm_max_utilization_pct(row: Mapping[str, object]) -> float | None:
-    rate_a = _line_rating(row)
+    rating = _line_rating(row)
     min_flow = _finite_float(row.get("min_value"))
     max_flow = _finite_float(row.get("max_value"))
-    if rate_a is None or (min_flow is None and max_flow is None):
+    if rating is None or (min_flow is None and max_flow is None):
         return None
-    return max(abs(min_flow or 0.0), abs(max_flow or 0.0)) / rate_a * 100
+    return max(abs(min_flow or 0.0), abs(max_flow or 0.0)) / rating * 100
 
 
 def _line_rating(row: Mapping[str, object]) -> float | None:
-    raw_rating = _positive_float(row.get("ratea")) or _positive_float(row.get("rate_a"))
-    if raw_rating is not None:
-        return raw_rating
+    return _positive_float(row.get("ratec")) or _positive_float(row.get("rate_c"))
 
-    limits = [
-        abs(value)
-        for value in (_finite_float(row.get("min_allowable")), _finite_float(row.get("max_allowable")))
-        if value is not None and value != 0
-    ]
-    return max(limits) if limits else None
+
+def _is_utilizable_branch(row: Mapping[str, object] | None) -> bool:
+    if not row:
+        return False
+    branch_type = str(row.get("raw_branch_type") or "nontransformer_branch")
+    return branch_type == "nontransformer_branch"
 
 
 def _max_flow_contingency(row: Mapping[str, object]) -> object:

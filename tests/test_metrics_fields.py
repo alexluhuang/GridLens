@@ -21,6 +21,21 @@ def test_metric_field_sets_are_unique() -> None:
 
 
 def test_thermal_bottleneck_rows_follow_configured_field_order() -> None:
+    branch_metadata = ParsedTable(
+        name="branch_metadata",
+        source_file="training.raw",
+        columns=["from_bus", "to_bus", "line_id", "ratea", "ratec", "raw_branch_type"],
+        rows=[
+            {
+                "from_bus": 101,
+                "to_bus": 102,
+                "line_id": "1",
+                "ratea": 10.0,
+                "ratec": 100.0,
+                "raw_branch_type": "nontransformer_branch",
+            }
+        ],
+    )
     pflow_mm = ParsedTable(
         name="pflow_mm",
         source_file="pflow_mm.txt",
@@ -63,7 +78,7 @@ def test_thermal_bottleneck_rows_follow_configured_field_order() -> None:
         ],
     )
 
-    metrics = compute_metrics({"pflow_mm": pflow_mm})
+    metrics = compute_metrics({"branch_metadata": branch_metadata, "pflow_mm": pflow_mm})
     thermal = metrics["thermal"]
     bottleneck = thermal["top_bottlenecks"][0]
 
