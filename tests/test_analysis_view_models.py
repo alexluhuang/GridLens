@@ -149,7 +149,7 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
     }
 
     area_rows = control_area_utilization_rows(tables)
-    branch_rows = average_n1_utilization_rows(tables)
+    branch_rows = max_line_utilization_rows(tables)
     voltage_rows = voltage_group_utilization_rows(tables)
     north_voltage_rows = summarize_voltage_group_utilization(
         [row for row in branch_rows if "North" in row["control_areas"]]
@@ -158,12 +158,13 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
     all_line_rows = max_line_utilization_rows(tables)
 
     assert [row["control_area"] for row in area_rows] == ["South", "North"]
-    assert area_rows[0]["average_utilization_pct"] == 55.0
-    assert area_rows[1]["average_utilization_pct"] == 50.0
+    assert area_rows[0]["average_utilization_pct"] == 65.0
+    assert area_rows[1]["average_utilization_pct"] == 45.0
     assert all(row["control_area"] != "Low" for row in area_rows)
     assert all(" / " not in row["control_area"] for row in area_rows)
-    assert branch_rows[3]["control_areas"] == ["North", "South"]
+    assert next(row for row in branch_rows if row["from_bus"] == 401)["control_areas"] == ["North", "South"]
     assert [row["voltage_group"] for row in voltage_rows] == ["<100 kV", "100-229 kV", "230-344 kV", "345-499 kV"]
+    assert [row["average_utilization_pct"] for row in voltage_rows] == [80.0, 50.0, 90.0, 40.0]
     assert [row["voltage_group"] for row in north_voltage_rows] == ["100-229 kV", "345-499 kV"]
     assert [row["max_utilization_pct"] for row in line_rows] == [40.0, 90.0]
     assert [row["max_contingency"] for row in line_rows] == [6, 4]

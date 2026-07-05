@@ -81,6 +81,7 @@ Analysis responsibilities are split by module:
 
 - `parser_models.py`: defines shared parser data objects such as `ParsedTable`.
 - `parsers.py`: converts GridPACK output files into normalized `ParsedTable` objects.
+- `csv_flat.py`: detects `ca-scalability-v2` CSV flat outputs, streams branch-contingency rows into branch summaries, parses convergence and bus metadata CSVs, and prepares parquet conversion for the full branch result CSV.
 - `table_schemas.py`: defines the expected columns and types for whitespace-delimited GridPACK TXT outputs.
 - `raw_parsers.py`: parses RAW bus metadata and branch-like RAW metadata, including non-transformer branches and transformer-derived branch rows.
 - `enrichment.py`: adds RAW-derived bus names, areas, zones, and voltage classes to parsed tables.
@@ -92,3 +93,6 @@ Analysis responsibilities are split by module:
 
 The branch master and distribution exporters use `cuDF.pandas` when RAPIDS cuDF is available, then import pandas through
 that accelerated layer. Development systems without cuDF fall back to pandas so the code remains testable.
+
+See `docs/csv_flat_ca_scalability_v2.md` for a plain-language walkthrough of the `pnnl/gridpack:ca-scalability-v2`
+CSV flat workflow.

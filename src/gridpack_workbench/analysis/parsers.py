@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 
+from gridpack_workbench.analysis.csv_flat import (
+    CSV_FLAT_BRANCH_TABLE,
+    merge_csv_flat_branch_metadata,
+    parse_csv_flat_outputs,
+    parse_csv_flat_success,
+)
 from gridpack_workbench.analysis.parser_models import OutputFile, PARSER_VERSION, ParsedTable, SuccessSummary
 from gridpack_workbench.analysis.raw_parsers import (
     parse_raw_area_metadata,
@@ -52,6 +59,9 @@ def parse_success_file(run_dir: str | Path) -> ParsedTable:
     success_file = find_success_file(run_dir)
     columns = ["contingency_index", "success", "violation", "isolated_warning", "raw_line"]
     if not success_file:
+        csv_flat_success = parse_csv_flat_success(run_dir)
+        if csv_flat_success:
+            return csv_flat_success
         return ParsedTable("success", "success.txt", columns, notes=["No success file was found."])
 
     rows: list[dict[str, object]] = []
@@ -84,22 +94,22 @@ def parse_success_file(run_dir: str | Path) -> ParsedTable:
 
 def summarize_success_file(run_dir: str | Path) -> SuccessSummary:
     success_file = find_success_file(run_dir)
-    if not success_file:
-        return SuccessSummary(False, "", note="No success file was found in the run work directory.")
-
     table = parse_success_file(run_dir)
     if table.rows:
         success_count = sum(1 for row in table.rows if row["success"] is True)
         failure_count = sum(1 for row in table.rows if row["success"] is False)
         return SuccessSummary(
             exists=True,
-            file_name=success_file.name,
+            file_name=success_file.name if success_file else table.source_file,
             success_count=success_count,
             failure_count=failure_count,
             unknown_count=0,
             total_count=len(table.rows),
-            note="Counts are schema-based from success.txt contingency records.",
+            note=f"Counts are schema-based from {table.source_file} contingency records.",
         )
+
+    if not success_file:
+        return SuccessSummary(False, "", note="No success.txt or csv_flat convergence file was found in the run work directory.")
 
     text = success_file.read_text(encoding="utf-8", errors="replace")
     tokens = re.findall(r"\b(true|false|success|failed|fail|pass|passed|0|1)\b", text, flags=re.IGNORECASE)
@@ -165,7 +175,8 @@ def parse_gridpack_table(run_dir: str | Path, table_name: str) -> ParsedTable:
 
 
 def parse_input_xml(run_dir: str | Path) -> ParsedTable:
-    path = Path(run_dir) / "work" / "input.xml"
+    run_path = Path(run_dir)
+    path = _find_input_xml(run_path)
     columns = [
         "input_file",
         "network_configuration",
@@ -177,17 +188,25 @@ def parse_input_xml(run_dir: str | Path) -> ParsedTable:
         "group_size",
         "output_format",
     ]
-    if not path.exists():
-        return ParsedTable("input_settings", "input.xml", columns, notes=["input.xml was not found."])
+    if not path:
+        return ParsedTable("input_settings", "input.xml", columns, notes=["No input XML file was found."])
 
     try:
         root = ET.fromstring(path.read_text(encoding="utf-8", errors="replace"))
     except ET.ParseError as exc:
-        return ParsedTable("input_settings", "input.xml", columns, notes=[f"input.xml parse failed: {exc}"])
+        return ParsedTable("input_settings", path.name, columns, notes=[f"{path.name} parse failed: {exc}"])
 
     row = {
-        "input_file": "input.xml",
-        "network_configuration": _xml_text(root, ".//networkConfiguration_v33", ""),
+        "input_file": path.name,
+        "network_configuration": _xml_first_text(
+            root,
+            [
+                ".//networkConfiguration_v33",
+                ".//networkConfiguration_v34",
+                ".//networkConfiguration",
+            ],
+            "",
+        ),
         "min_voltage": _xml_float(root, ".//Contingency_analysis/minVoltage"),
         "max_voltage": _xml_float(root, ".//Contingency_analysis/maxVoltage"),
         "qlim": _xml_bool(root, ".//Contingency_analysis/qlim"),
@@ -196,13 +215,69 @@ def parse_input_xml(run_dir: str | Path) -> ParsedTable:
         "group_size": _xml_int(root, ".//Contingency_analysis/groupSize"),
         "output_format": _xml_text(root, ".//Contingency_analysis/outputFormat", ""),
     }
-    return ParsedTable("input_settings", "input.xml", columns, [row])
+    return ParsedTable("input_settings", path.name, columns, [row])
+
+
+def _find_input_xml(run_path: Path) -> Path | None:
+    work_dir = run_path / "work"
+    if not work_dir.exists():
+        return None
+
+    for file_name in _manifest_input_xml_names(run_path / "manifest.json"):
+        candidate = work_dir / Path(file_name).name
+        if candidate.exists():
+            return candidate
+
+    default = work_dir / "input.xml"
+    if default.exists():
+        return default
+
+    xml_files = sorted(path for path in work_dir.glob("*.xml") if path.is_file())
+    for path in xml_files:
+        if _looks_like_gridpack_input_xml(path):
+            return path
+    return xml_files[0] if xml_files else None
+
+
+def _manifest_input_xml_names(manifest_path: Path) -> list[str]:
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    names = []
+    xml_file = str(manifest.get("xml_file") or "").strip()
+    if xml_file:
+        names.append(xml_file)
+    for item in manifest.get("input_files") or []:
+        if not isinstance(item, dict):
+            continue
+        file_name = str(item.get("file_name") or "").strip()
+        if file_name.lower().endswith(".xml"):
+            names.append(file_name)
+    return names
+
+
+def _looks_like_gridpack_input_xml(path: Path) -> bool:
+    try:
+        root = ET.fromstring(path.read_text(encoding="utf-8", errors="replace"))
+    except (ET.ParseError, OSError):
+        return False
+    return bool(_xml_first_text(root, [".//networkConfiguration_v33", ".//networkConfiguration_v34", ".//networkConfiguration"], ""))
 
 
 def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
     tables = {"success": parse_success_file(run_dir)}
     for table_name in TABLE_SCHEMAS:
         tables[table_name] = parse_gridpack_table(run_dir, table_name)
+
+    csv_flat_tables = parse_csv_flat_outputs(run_dir)
+    for table_name, table in csv_flat_tables.items():
+        if table_name == "success" and tables["success"].rows:
+            continue
+        tables[table_name] = table
 
     input_settings = parse_input_xml(run_dir)
     tables["input_settings"] = input_settings
@@ -211,19 +286,41 @@ def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
         candidate = str(input_settings.rows[0].get("network_configuration") or "").strip()
         if candidate:
             raw_file = Path(candidate).name
-    tables["bus_metadata"] = parse_raw_bus_metadata(run_dir, raw_file)
-    tables["area_metadata"] = parse_raw_area_metadata(run_dir, raw_file)
-    tables["branch_metadata"] = parse_raw_branch_metadata(
+
+    raw_bus_metadata = parse_raw_bus_metadata(run_dir, raw_file)
+    raw_area_metadata = parse_raw_area_metadata(run_dir, raw_file)
+    if raw_bus_metadata.rows:
+        tables["bus_metadata"] = raw_bus_metadata
+    else:
+        tables.setdefault("bus_metadata", raw_bus_metadata)
+    if raw_area_metadata.rows:
+        tables["area_metadata"] = raw_area_metadata
+    else:
+        tables.setdefault("area_metadata", raw_area_metadata)
+
+    raw_branch_metadata = parse_raw_branch_metadata(
         run_dir,
         raw_file,
         branch_rows=_observed_branch_rows(tables),
+    )
+    tables["branch_metadata"] = merge_csv_flat_branch_metadata(
+        raw_branch_metadata,
+        tables.get(CSV_FLAT_BRANCH_TABLE),
     )
     return tables
 
 
 def _observed_branch_rows(tables: dict[str, ParsedTable]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for table_name in ("pflow", "pflow_mm", "qflow", "qflow_mm", "perf_mm", "line_flt_cnt"):
+    for table_name in (
+        "pflow",
+        "pflow_mm",
+        "qflow",
+        "qflow_mm",
+        "perf_mm",
+        "line_flt_cnt",
+        CSV_FLAT_BRANCH_TABLE,
+    ):
         table = tables.get(table_name)
         if table:
             rows.extend(table.rows)
@@ -268,6 +365,14 @@ def _convert_value(value: str, column: str, int_columns: set[str], string_column
     if column in int_columns:
         return int(float(value))
     return float(value)
+
+
+def _xml_first_text(root: ET.Element, paths: list[str], default: str) -> str:
+    for path in paths:
+        value = _xml_text(root, path, "")
+        if value:
+            return value
+    return default
 
 
 def _xml_text(root: ET.Element, path: str, default: str) -> str:

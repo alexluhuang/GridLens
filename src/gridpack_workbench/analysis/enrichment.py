@@ -138,7 +138,7 @@ def _area_names(table: ParsedTable | None) -> dict[int, str]:
 def _enrich_bus_metadata_with_area_names(table: ParsedTable, areas: dict[int, str]) -> None:
     for row in table.rows:
         area_id = _bus_id(row, "area")
-        row["area_name"] = areas.get(area_id, "")
+        row["area_name"] = str(row.get("area_name") or "").strip() or areas.get(area_id, "")
     append_missing_columns(table, ["area_name"])
 
 

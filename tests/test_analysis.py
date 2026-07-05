@@ -9,7 +9,7 @@ import unittest
 from gridpack_workbench.analysis.distributions import generate_distribution_exports
 from gridpack_workbench.analysis.dataset import build_run_analysis, gini, top_share
 from gridpack_workbench.analysis.master import ensure_branch_master_exports
-from gridpack_workbench.analysis.parsers import parse_success_file, summarize_success_file
+from gridpack_workbench.analysis.parsers import parse_input_xml, parse_success_file, summarize_success_file
 from gridpack_workbench.analysis.summary import generate_run_report
 
 
@@ -69,6 +69,38 @@ class AnalysisTests(unittest.TestCase):
     def test_metric_helpers(self) -> None:
         self.assertAlmostEqual(gini([1, 1, 1]), 0.0)
         self.assertAlmostEqual(top_share([1, 1, 8], 1 / 3), 0.8)
+
+    def test_input_xml_parser_uses_manifest_xml_and_generic_network_configuration(self) -> None:
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "runs" / "2026-07-01_19-47-56"
+            work_dir = run_dir / "work"
+            work_dir.mkdir(parents=True)
+            (run_dir / "manifest.json").write_text(
+                json.dumps({"xml_file": "input_training_nottiny_nofilter_texas7k.xml"}),
+                encoding="utf-8",
+            )
+            (work_dir / "input_training_nottiny_nofilter_texas7k.xml").write_text(
+                """<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <Contingency_analysis>
+    <FullBranchN1>true</FullBranchN1>
+    <minVoltage>0.9</minVoltage>
+    <maxVoltage>1.1</maxVoltage>
+  </Contingency_analysis>
+  <Powerflow>
+    <networkConfiguration>Texas7k_20210804.raw</networkConfiguration>
+  </Powerflow>
+</Configuration>
+""",
+                encoding="utf-8",
+            )
+
+            table = parse_input_xml(run_dir)
+
+            self.assertEqual(table.source_file, "input_training_nottiny_nofilter_texas7k.xml")
+            self.assertEqual(table.rows[0]["input_file"], "input_training_nottiny_nofilter_texas7k.xml")
+            self.assertEqual(table.rows[0]["network_configuration"], "Texas7k_20210804.raw")
+            self.assertTrue(table.rows[0]["full_branch_n1"])
 
     @unittest.skipUnless(
         importlib.util.find_spec("pandas") and importlib.util.find_spec("matplotlib"),

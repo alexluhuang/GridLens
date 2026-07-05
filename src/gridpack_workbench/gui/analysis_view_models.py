@@ -60,7 +60,7 @@ VOLTAGE_GROUP_ORDER = {
     "500+ kV": 4,
     "unknown": 99,
 }
-BRANCH_KEY_COLUMNS = ("from_bus", "to_bus", "line_id")
+BRANCH_KEY_COLUMNS = ("from_bus", "to_bus", "line_id", "section")
 
 
 class DistributionExportLike(Protocol):
@@ -91,8 +91,8 @@ def control_area_utilization_rows(
     tables: Mapping[str, ParsedTable],
     branch_options: UtilizationBranchOptions | None = None,
 ) -> list[dict[str, object]]:
-    """Average N-1 branch utilization by control area for lines at or above 100 kV."""
-    return summarize_control_area_utilization(average_n1_utilization_rows(tables, branch_options))
+    """Mean maximum branch utilization by control area for lines at or above 100 kV."""
+    return summarize_control_area_utilization(max_line_utilization_rows(tables, branch_options))
 
 
 def average_n1_utilization_rows(
@@ -113,7 +113,7 @@ def average_n1_utilization_rows(
 
 
 def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
-    """Summarize average N-1 branch utilization by actual endpoint control area."""
+    """Summarize mean maximum branch utilization by actual endpoint control area."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
         if _line_voltage_kv(row) < 100:
@@ -130,12 +130,12 @@ def voltage_group_utilization_rows(
     tables: Mapping[str, ParsedTable],
     branch_options: UtilizationBranchOptions | None = None,
 ) -> list[dict[str, object]]:
-    """Average N-1 branch utilization by voltage group."""
-    return summarize_voltage_group_utilization(average_n1_utilization_rows(tables, branch_options))
+    """Mean maximum branch utilization by voltage group."""
+    return summarize_voltage_group_utilization(max_line_utilization_rows(tables, branch_options))
 
 
 def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
-    """Summarize average N-1 branch utilization by voltage group."""
+    """Summarize mean maximum branch utilization by voltage group."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
         group = str(row.get("voltage_group") or row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
@@ -192,6 +192,7 @@ def _line_utilization_row(
         "from_bus": context.get("from_bus", ""),
         "to_bus": context.get("to_bus", ""),
         "line_id": context.get("line_id", ""),
+        "section": context.get("section", ""),
         "from_bus_name": context.get("from_bus_name", ""),
         "to_bus_name": context.get("to_bus_name", ""),
         "from_base_kv": context.get("from_base_kv", ""),
@@ -201,6 +202,7 @@ def _line_utilization_row(
         "voltage_group": voltage_group,
         "max_contingency": _max_flow_contingency(context),
         "max_utilization_pct": round(utilization, 6),
+        "utilization_pct": round(utilization, 6),
         "utilization_source": utilization_source,
         "raw_branch_type": context.get("raw_branch_type", ""),
     }
@@ -220,9 +222,11 @@ def _average_n1_utilization_rows(
         if not _is_utilizable_branch(branch, branch_options):
             continue
         context = _merge_rows(branch, pflow_mm.get(key, {}), row)
-        rating = _line_rating(context)
-        real_flow = _finite_float(row.get("average"))
-        utilization = _pflow_utilization_pct(real_flow, rating)
+        utilization = _finite_float(row.get("average_utilization_pct"))
+        if utilization is None:
+            rating = _line_rating(context)
+            real_flow = _finite_float(row.get("average"))
+            utilization = _pflow_utilization_pct(real_flow, rating)
         if utilization is None:
             continue
         context["utilization_pct"] = round(utilization, 6)
@@ -307,17 +311,22 @@ def _table_rows(tables: Mapping[str, ParsedTable], table_name: str) -> list[dict
     return list(table.rows) if table else []
 
 
-def _table_index(table: ParsedTable | None) -> dict[tuple[object, object, str], dict[str, object]]:
+def _table_index(table: ParsedTable | None) -> dict[tuple[object, object, str, str], dict[str, object]]:
     if not table:
         return {}
-    indexed: dict[tuple[object, object, str], dict[str, object]] = {}
+    indexed: dict[tuple[object, object, str, str], dict[str, object]] = {}
     for row in table.rows:
         indexed.setdefault(_branch_key(row), row)
     return indexed
 
 
-def _branch_key(row: Mapping[str, object]) -> tuple[object, object, str]:
-    return (_integer_key(row.get("from_bus")), _integer_key(row.get("to_bus")), str(row.get("line_id") or "").strip())
+def _branch_key(row: Mapping[str, object]) -> tuple[object, object, str, str]:
+    return (
+        _integer_key(row.get("from_bus")),
+        _integer_key(row.get("to_bus")),
+        str(row.get("line_id") or "").strip(),
+        str(row.get("section") or "").strip(),
+    )
 
 
 def _integer_key(value: object) -> object:
@@ -347,6 +356,9 @@ def _max_utilization_pct(row: Mapping[str, object]) -> float | None:
 
 
 def _pflow_mm_max_utilization_pct(row: Mapping[str, object]) -> float | None:
+    direct_utilization = _finite_float(row.get("max_utilization_pct"))
+    if direct_utilization is not None:
+        return direct_utilization
     rating = _line_rating(row)
     min_flow = _finite_float(row.get("min_value"))
     max_flow = _finite_float(row.get("max_value"))
@@ -367,6 +379,9 @@ def _is_utilizable_branch(
 
 
 def _max_flow_contingency(row: Mapping[str, object]) -> object:
+    direct_contingency = row.get("max_utilization_contingency")
+    if direct_contingency not in (None, ""):
+        return direct_contingency
     min_flow = _finite_float(row.get("min_value"))
     max_flow = _finite_float(row.get("max_value"))
     if min_flow is not None and abs(min_flow) > abs(max_flow or 0.0):

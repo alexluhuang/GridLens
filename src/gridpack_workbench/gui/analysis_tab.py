@@ -32,7 +32,6 @@ from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_an
 from gridpack_workbench.analysis.utilization import UtilizationBranchOptions
 from gridpack_workbench.core.project import Project
 from gridpack_workbench.gui.analysis_view_models import (
-    average_n1_utilization_rows,
     max_line_utilization_rows,
     numeric_value,
     summarize_control_area_utilization,
@@ -53,7 +52,7 @@ class AnalysisTab(QWidget):
         super().__init__()
         self.project: Project | None = None
         self.current_dataset: RunAnalysisDataset | None = None
-        self.average_branch_rows: list[dict[str, object]] = []
+        self.group_branch_rows: list[dict[str, object]] = []
         self.max_line_rows: list[dict[str, object]] = []
         self.control_area_rows: list[dict[str, object]] = []
         self.voltage_group_rows: list[dict[str, object]] = []
@@ -175,8 +174,8 @@ class AnalysisTab(QWidget):
     def _build_chart_area(self, parent_layout: QVBoxLayout) -> None:
         self.control_area_sort = self._sort_combo(
             [
-                ("Highest average", "value_desc"),
-                ("Lowest average", "value_asc"),
+                ("Highest mean max", "value_desc"),
+                ("Lowest mean max", "value_asc"),
                 ("Area name", "label"),
             ],
             self._render_control_area_chart,
@@ -184,8 +183,8 @@ class AnalysisTab(QWidget):
         self.voltage_group_sort = self._sort_combo(
             [
                 ("Voltage order", "voltage_order"),
-                ("Highest average", "value_desc"),
-                ("Lowest average", "value_asc"),
+                ("Highest mean max", "value_desc"),
+                ("Lowest mean max", "value_asc"),
             ],
             self._render_voltage_group_chart,
         )
@@ -199,11 +198,11 @@ class AnalysisTab(QWidget):
         )
 
         self.control_area_panel, self.control_area_figure, self.control_area_canvas = self._chart_panel(
-            "Average Line Utilization by Control Area (100 kV and Above)",
+            "Mean Max Line Utilization by Control Area (100 kV and Above)",
             self.control_area_sort,
         )
         self.voltage_group_panel, self.voltage_group_figure, self.voltage_group_canvas = self._chart_panel(
-            "Average Utilization by Voltage Group Under N-1 Contingencies",
+            "Mean Max Utilization by Voltage Group Under N-1 Contingencies",
             self.voltage_group_sort,
         )
         self.line_panel, self.line_figure, self.line_canvas = self._chart_panel(
@@ -298,13 +297,13 @@ class AnalysisTab(QWidget):
         self._draw_empty_chart(
             self.control_area_figure,
             self.control_area_canvas,
-            "Average Line Utilization by Control Area",
+            "Mean Max Line Utilization by Control Area",
             "Generate graphs to view control-area utilization.",
         )
         self._draw_empty_chart(
             self.voltage_group_figure,
             self.voltage_group_canvas,
-            "Average Utilization by Voltage Group",
+            "Mean Max Utilization by Voltage Group",
             "Generate graphs to view N-1 voltage-group utilization.",
         )
         self._draw_empty_chart(
@@ -333,12 +332,12 @@ class AnalysisTab(QWidget):
 
     def _rebuild_utilization_rows(self) -> None:
         if not self.current_dataset:
-            self.average_branch_rows = []
+            self.group_branch_rows = []
             self.max_line_rows = []
             return
         branch_options = self._utilization_branch_options()
-        self.average_branch_rows = average_n1_utilization_rows(self.current_dataset.tables, branch_options)
         self.max_line_rows = max_line_utilization_rows(self.current_dataset.tables, branch_options)
+        self.group_branch_rows = list(self.max_line_rows)
 
     def _utilization_branch_options(self) -> UtilizationBranchOptions:
         return UtilizationBranchOptions(
@@ -356,9 +355,9 @@ class AnalysisTab(QWidget):
         )
 
     def _refresh_filtered_rows(self) -> None:
-        self.control_area_rows = summarize_control_area_utilization(self.average_branch_rows)
+        self.control_area_rows = summarize_control_area_utilization(self.group_branch_rows)
         selected_area_rows = [
-            row for row in self.average_branch_rows
+            row for row in self.group_branch_rows
             if self._row_matches_selected_areas(row)
         ]
         self.voltage_group_rows = summarize_voltage_group_utilization(selected_area_rows)
@@ -457,7 +456,7 @@ class AnalysisTab(QWidget):
         max_value = max(values) if values else 0
         axis.set_xlim(0, max(35, max_value * 1.22))
         axis.axvline(30, color="#d83b3b", linestyle="--", linewidth=1, label="30% threshold")
-        axis.set_xlabel("Average line utilization (%)")
+        axis.set_xlabel("Mean max line utilization (%)")
         axis.set_ylabel("Control area")
         axis.set_title(self._control_area_title())
         axis.margins(y=0.01)
@@ -629,20 +628,20 @@ class AnalysisTab(QWidget):
 
     def _control_area_title(self) -> str:
         if not self.selected_control_areas:
-            return "Average Line Utilization by Control Area"
+            return "Mean Max Line Utilization by Control Area"
         return (
-            "Average Line Utilization by Control Area "
+            "Mean Max Line Utilization by Control Area "
             f"({self._selection_phrase(self.selected_control_areas, 'areas')} selected)"
         )
 
     def _voltage_group_title(self) -> str:
-        return f"Average N-1 Branch Loading by Voltage Group ({self._area_scope_label()})"
+        return f"Mean Max Branch Loading by Voltage Group ({self._area_scope_label()})"
 
     def _voltage_group_x_label(self) -> str:
         return "Voltage groups for selected control areas" if self.selected_control_areas else "Voltage groups"
 
     def _voltage_group_y_label(self) -> str:
-        return "Average loading in selected areas (%)" if self.selected_control_areas else "Average loading (%)"
+        return "Mean max loading in selected areas (%)" if self.selected_control_areas else "Mean max loading (%)"
 
     def _line_title(self) -> str:
         return f"Maximum Observed Utilization ({self._voltage_scope_label()}, {self._area_scope_label()})"
@@ -679,18 +678,18 @@ class AnalysisTab(QWidget):
     def _control_area_hover_text(self, row: dict[str, object]) -> str:
         return (
             f"{row.get('control_area', 'unknown')}\n"
-            f"Group average: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
+            f"Group mean max: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
             f"Lines: {row.get('line_count', 0)}\n"
-            f"Line average range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
+            f"Line max range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
             f"{numeric_value(row.get('max_utilization_pct')):.1f}%"
         )
 
     def _voltage_group_hover_text(self, row: dict[str, object]) -> str:
         return (
             f"{row.get('voltage_group', 'unknown')}\n"
-            f"Group average: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
+            f"Group mean max: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
             f"Lines: {row.get('line_count', 0)}\n"
-            f"Line average range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
+            f"Line max range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
             f"{numeric_value(row.get('max_utilization_pct')):.1f}%"
         )
 

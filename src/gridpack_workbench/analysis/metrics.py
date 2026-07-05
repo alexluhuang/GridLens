@@ -308,6 +308,10 @@ def _add_pflow_utilization_columns(
             if not _is_utilizable_branch(branch, branch_options):
                 row["average_utilization_pct"] = None
                 continue
+            direct_average = as_float(row.get("average_utilization_pct"))
+            if direct_average is not None:
+                row["average_utilization_pct"] = direct_average
+                continue
             rating = _line_rating(_merge_rows(branch, pflow_mm_index.get(key, {}), row))
             average = as_float(row.get("average"))
             row["average_utilization_pct"] = _pct(abs(average), rating) if average is not None else None
@@ -332,15 +336,27 @@ def _add_pflow_utilization_columns(
         min_value = as_float(row.get("min_value"))
         max_value = as_float(row.get("max_value"))
         worst_value, worst_contingency = _worst_pflow_value_and_contingency(row, min_value, max_value)
-        row["base_utilization_pct"] = _pct(abs(base_value), rating) if base_value is not None else None
-        row["min_utilization_pct"] = _pct(abs(min_value), rating) if min_value is not None else None
-        row["max_utilization_pct"] = _pct(abs(worst_value), rating) if worst_value is not None else None
+        row["base_utilization_pct"] = _direct_or_calculated_pct(
+            row.get("base_utilization_pct"),
+            abs(base_value) if base_value is not None else None,
+            rating,
+        )
+        row["min_utilization_pct"] = _direct_or_calculated_pct(
+            row.get("min_utilization_pct"),
+            abs(min_value) if min_value is not None else None,
+            rating,
+        )
+        row["max_utilization_pct"] = _direct_or_calculated_pct(
+            row.get("max_utilization_pct"),
+            abs(worst_value) if worst_value is not None else None,
+            rating,
+        )
         row["worst_headroom_pct"] = (
             round(100 - float(row["max_utilization_pct"]), 6)
             if row["max_utilization_pct"] is not None
             else None
         )
-        row["max_utilization_contingency"] = worst_contingency
+        row["max_utilization_contingency"] = row.get("max_utilization_contingency") or worst_contingency
     append_missing_columns(
         pflow_mm,
         [
@@ -369,6 +385,13 @@ def _line_rating(row: dict[str, object]) -> float | None:
     return _positive_float(row.get("ratec")) or _positive_float(row.get("rate_c"))
 
 
+def _direct_or_calculated_pct(direct_value: object, numerator: float | None, denominator: float | None) -> float | None:
+    direct = as_float(direct_value)
+    if direct is not None:
+        return direct
+    return _pct(numerator, denominator) if numerator is not None else None
+
+
 def _is_utilizable_branch(
     row: dict[str, object] | None,
     branch_options: UtilizationBranchOptions | None = None,
@@ -387,17 +410,22 @@ def _positive_float(value: object) -> float | None:
     return parsed if parsed is not None and parsed > 0 else None
 
 
-def _table_index(table: ParsedTable | None) -> dict[tuple[object, object, str], dict[str, object]]:
+def _table_index(table: ParsedTable | None) -> dict[tuple[object, object, str, str], dict[str, object]]:
     if not table:
         return {}
-    indexed: dict[tuple[object, object, str], dict[str, object]] = {}
+    indexed: dict[tuple[object, object, str, str], dict[str, object]] = {}
     for row in table.rows:
         indexed.setdefault(_branch_key(row), row)
     return indexed
 
 
-def _branch_key(row: dict[str, object]) -> tuple[object, object, str]:
-    return (_integer_key(row.get("from_bus")), _integer_key(row.get("to_bus")), str(row.get("line_id") or "").strip())
+def _branch_key(row: dict[str, object]) -> tuple[object, object, str, str]:
+    return (
+        _integer_key(row.get("from_bus")),
+        _integer_key(row.get("to_bus")),
+        str(row.get("line_id") or "").strip(),
+        str(row.get("section") or "").strip(),
+    )
 
 
 def _integer_key(value: object) -> object:

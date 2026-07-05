@@ -15,8 +15,8 @@ from gridpack_workbench.analysis.utilization import (
 )
 
 
-MASTER_DATASET_VERSION = "2026.06.16"
-BRANCH_KEYS = ["from_bus", "to_bus", "line_id"]
+MASTER_DATASET_VERSION = "2026.07.05"
+BRANCH_KEYS = ["from_bus", "to_bus", "line_id", "section"]
 BRANCH_OUTPUT_TABLES = ["pflow", "pflow_mm", "qflow", "qflow_mm", "perf_mm", "line_flt_cnt"]
 UTILIZATION_COLUMNS = [
     "base_case_utilization_pct",
@@ -29,6 +29,9 @@ BASE_FLOW_SOURCE_COLUMN = "pflow_mm_base_value"
 MEAN_N1_FLOW_SOURCE_COLUMN = "pflow_average"
 MIN_N1_FLOW_SOURCE_COLUMN = "pflow_mm_min_value"
 MAX_N1_FLOW_SOURCE_COLUMN = "pflow_mm_max_value"
+BASE_UTILIZATION_SOURCE_COLUMN = "pflow_mm_base_utilization_pct"
+MEAN_UTILIZATION_SOURCE_COLUMNS = ["pflow_average_utilization_pct", "pflow_mm_mean_utilization_pct"]
+MAX_UTILIZATION_SOURCE_COLUMN = "pflow_mm_max_utilization_pct"
 AREA_CANDIDATE_COLUMNS = ["perf_mm_area", "pflow_area", "pflow_mm_area", "line_flt_cnt_area"]
 VOLTAGE_CLASS_CANDIDATE_COLUMNS = [
     "perf_mm_voltage_class",
@@ -251,11 +254,15 @@ def _table_to_frame(pd, table: ParsedTable | None):
 
 
 def _coerce_keys(frame):
+    if "section" not in frame.columns:
+        frame["section"] = ""
     for column in ("from_bus", "to_bus"):
         if column in frame.columns:
             frame[column] = frame[column].astype("Int64")
     if "line_id" in frame.columns:
         frame["line_id"] = frame["line_id"].astype(str).str.strip().str.strip("'").str.strip('"')
+    if "section" in frame.columns:
+        frame["section"] = frame["section"].fillna("").astype(str).str.strip().str.strip("'").str.strip('"')
     return frame
 
 
@@ -291,15 +298,33 @@ def _add_utilization_columns(pd, master, branch_options: UtilizationBranchOption
     mean_flow = _numeric_column(pd, master, MEAN_N1_FLOW_SOURCE_COLUMN)
     min_flow = _numeric_column(pd, master, MIN_N1_FLOW_SOURCE_COLUMN)
     max_flow = _numeric_column(pd, master, MAX_N1_FLOW_SOURCE_COLUMN)
+    direct_base_utilization = _numeric_column(pd, master, BASE_UTILIZATION_SOURCE_COLUMN)
+    direct_mean_utilization = _first_numeric_column(pd, master, MEAN_UTILIZATION_SOURCE_COLUMNS)
+    direct_max_utilization = _numeric_column(pd, master, MAX_UTILIZATION_SOURCE_COLUMN)
 
     worst_flow = pd.concat([min_flow.abs(), max_flow.abs()], axis=1).max(axis=1)
+    calculated_base_utilization = _safe_pct(base_flow.abs(), rate_c, eligible)
+    calculated_mean_utilization = _safe_pct(mean_flow.abs(), rate_c, eligible)
+    calculated_max_utilization = _safe_pct(worst_flow, rate_c, eligible)
 
     master["base_flow_for_utilization"] = base_flow
     master["mean_n1_flow_for_utilization"] = mean_flow
     master["max_n1_flow_for_utilization"] = worst_flow
-    master["base_case_utilization_pct"] = _safe_pct(base_flow.abs(), rate_c, eligible)
-    master["mean_contingency_utilization_pct"] = _safe_pct(mean_flow.abs(), rate_c, eligible)
-    master["max_contingency_utilization_pct"] = _safe_pct(worst_flow, rate_c, eligible)
+    master["base_case_utilization_pct"] = _prefer_direct_utilization(
+        direct_base_utilization,
+        calculated_base_utilization,
+        eligible,
+    )
+    master["mean_contingency_utilization_pct"] = _prefer_direct_utilization(
+        direct_mean_utilization,
+        calculated_mean_utilization,
+        eligible,
+    )
+    master["max_contingency_utilization_pct"] = _prefer_direct_utilization(
+        direct_max_utilization,
+        calculated_max_utilization,
+        eligible,
+    )
     return master
 
 
@@ -307,6 +332,19 @@ def _numeric_column(pd, frame, column: str):
     if column in frame.columns:
         return pd.to_numeric(frame[column], errors="coerce")
     return pd.Series([None] * len(frame), index=frame.index, dtype="float64")
+
+
+def _first_numeric_column(pd, frame, columns: list[str]):
+    result = pd.Series([None] * len(frame), index=frame.index, dtype="float64")
+    for column in columns:
+        values = _numeric_column(pd, frame, column)
+        result = result.where(result.notna(), values)
+    return result
+
+
+def _prefer_direct_utilization(direct, calculated, eligible):
+    direct = direct.where(eligible)
+    return direct.where(direct.notna(), calculated)
 
 
 def _utilization_eligible_mask(master, branch_options: UtilizationBranchOptions | None = None):

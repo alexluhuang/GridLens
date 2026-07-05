@@ -7,8 +7,11 @@ import pytest
 
 from gridpack_workbench.analysis.master import (
     BASE_FLOW_SOURCE_COLUMN,
+    BASE_UTILIZATION_SOURCE_COLUMN,
     MAX_N1_FLOW_SOURCE_COLUMN,
+    MAX_UTILIZATION_SOURCE_COLUMN,
     MEAN_N1_FLOW_SOURCE_COLUMN,
+    MEAN_UTILIZATION_SOURCE_COLUMNS,
     MIN_N1_FLOW_SOURCE_COLUMN,
     RATE_C_COLUMN,
     MasterExportPaths,
@@ -88,3 +91,28 @@ def test_add_utilization_columns_uses_named_master_source_columns() -> None:
     assert result.loc[0, "mean_contingency_utilization_pct"] == 35
     assert result.loc[0, "max_contingency_utilization_pct"] == 60
     assert math.isnan(result.loc[1, "base_case_utilization_pct"])
+
+
+def test_add_utilization_columns_prefers_csv_flat_direct_percentages() -> None:
+    pd = pytest.importorskip("pandas")
+    master = pd.DataFrame(
+        [
+            {
+                RATE_C_COLUMN: 10,
+                "raw_branch_type": "nontransformer_branch",
+                BASE_FLOW_SOURCE_COLUMN: 50,
+                MEAN_N1_FLOW_SOURCE_COLUMN: 70,
+                MIN_N1_FLOW_SOURCE_COLUMN: -120,
+                MAX_N1_FLOW_SOURCE_COLUMN: 80,
+                BASE_UTILIZATION_SOURCE_COLUMN: 12.5,
+                MEAN_UTILIZATION_SOURCE_COLUMNS[0]: 65.0,
+                MAX_UTILIZATION_SOURCE_COLUMN: 125.0,
+            }
+        ]
+    )
+
+    result = _add_utilization_columns(pd, master)
+
+    assert result.loc[0, "base_case_utilization_pct"] == 12.5
+    assert result.loc[0, "mean_contingency_utilization_pct"] == 65.0
+    assert result.loc[0, "max_contingency_utilization_pct"] == 125.0

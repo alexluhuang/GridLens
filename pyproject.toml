@@ -33,7 +33,9 @@ dependencies = [
 [project.optional-dependencies]
 analysis = [
   "matplotlib>=3.8",
-  "pandas>=2.2"
+  "pandas>=2.2",
+  "dask[dataframe]>=2024.1",
+  "pyarrow>=15"
 ]
 dev = [
   "tomli>=2; python_version < '3.11'",

@@ -6,6 +6,7 @@ import csv
 import json
 from pathlib import Path
 
+from gridpack_workbench.analysis.csv_flat import ensure_csv_flat_parquet
 from gridpack_workbench.analysis.enrichment import enrich_with_bus_metadata, voltage_class
 from gridpack_workbench.analysis.metrics import compute_metrics, gini, top_share
 from gridpack_workbench.analysis.parser_models import PARSER_VERSION, ParsedTable
@@ -13,7 +14,7 @@ from gridpack_workbench.analysis.parsers import parse_all_output_tables
 from gridpack_workbench.analysis.table_helpers import cell_value
 
 
-ANALYSIS_DATASET_VERSION = "2026.06.13"
+ANALYSIS_DATASET_VERSION = "2026.07.05"
 
 __all__ = [
     "ANALYSIS_DATASET_VERSION",
@@ -53,6 +54,7 @@ class RunAnalysisDataset:
                     **table.schema_dict(),
                     "csv_path": self.table_files.get(name, {}).get("csv", ""),
                     "json_path": self.table_files.get(name, {}).get("json", ""),
+                    "parquet_path": self.table_files.get(name, {}).get("parquet", ""),
                 }
                 for name, table in self.tables.items()
             },
@@ -71,7 +73,10 @@ def build_run_analysis(run_dir: str | Path) -> RunAnalysisDataset:
     tables = parse_all_output_tables(run_path)
     enrich_with_bus_metadata(tables)
     metrics = compute_metrics(tables)
+    parquet_files = ensure_csv_flat_parquet(run_path, tables)
     table_files = _write_tables(table_dir, tables)
+    for name, paths in parquet_files.items():
+        table_files.setdefault(name, {}).update(paths)
 
     dataset = RunAnalysisDataset(
         run_dir=run_path,

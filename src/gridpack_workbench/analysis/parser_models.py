@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-PARSER_VERSION = "2026.06.13"
+PARSER_VERSION = "2026.07.05"
 
 
 @dataclass(slots=True)
