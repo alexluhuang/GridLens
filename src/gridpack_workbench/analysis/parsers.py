@@ -21,6 +21,9 @@ from gridpack_workbench.analysis.raw_parsers import (
 from gridpack_workbench.analysis.table_schemas import TABLE_SCHEMAS
 
 
+SUCCESS_COLUMNS = ["contingency_index", "success", "violation", "isolated_warning", "raw_line"]
+
+
 def list_output_files(run_dir: str | Path) -> list[OutputFile]:
     run_path = Path(run_dir)
     work_dir = run_path / "work"
@@ -57,12 +60,11 @@ def find_success_file(run_dir: str | Path) -> Path | None:
 
 def parse_success_file(run_dir: str | Path) -> ParsedTable:
     success_file = find_success_file(run_dir)
-    columns = ["contingency_index", "success", "violation", "isolated_warning", "raw_line"]
     if not success_file:
         csv_flat_success = parse_csv_flat_success(run_dir)
         if csv_flat_success:
             return csv_flat_success
-        return ParsedTable("success", "success.txt", columns, notes=["No success file was found."])
+        return _empty_success_table()
 
     rows: list[dict[str, object]] = []
     pattern = re.compile(
@@ -89,7 +91,7 @@ def parse_success_file(run_dir: str | Path) -> ParsedTable:
     notes = []
     if not rows:
         notes.append("No schema-matching success records were found; token summary fallback is used elsewhere.")
-    return ParsedTable("success", success_file.name, columns, rows, notes)
+    return ParsedTable("success", success_file.name, list(SUCCESS_COLUMNS), rows, notes)
 
 
 def summarize_success_file(run_dir: str | Path) -> SuccessSummary:
@@ -269,7 +271,10 @@ def _looks_like_gridpack_input_xml(path: Path) -> bool:
 
 
 def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
-    tables = {"success": parse_success_file(run_dir)}
+    success_file = find_success_file(run_dir)
+    tables = {
+        "success": parse_success_file(run_dir) if success_file else _empty_success_table()
+    }
     for table_name in TABLE_SCHEMAS:
         tables[table_name] = parse_gridpack_table(run_dir, table_name)
 
@@ -308,6 +313,10 @@ def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
         tables.get(CSV_FLAT_BRANCH_TABLE),
     )
     return tables
+
+
+def _empty_success_table() -> ParsedTable:
+    return ParsedTable("success", "success.txt", list(SUCCESS_COLUMNS), notes=["No success file was found."])
 
 
 def _observed_branch_rows(tables: dict[str, ParsedTable]) -> list[dict[str, object]]:

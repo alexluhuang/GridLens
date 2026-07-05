@@ -61,7 +61,7 @@ class RunAnalysisDataset:
         }
 
 
-def build_run_analysis(run_dir: str | Path) -> RunAnalysisDataset:
+def build_run_analysis(run_dir: str | Path, *, convert_csv_flat_parquet: bool = True) -> RunAnalysisDataset:
     """Parse a run directory and write reusable CSV/JSON analysis artifacts."""
 
     run_path = Path(run_dir).expanduser().resolve()
@@ -73,7 +73,7 @@ def build_run_analysis(run_dir: str | Path) -> RunAnalysisDataset:
     tables = parse_all_output_tables(run_path)
     enrich_with_bus_metadata(tables)
     metrics = compute_metrics(tables)
-    parquet_files = ensure_csv_flat_parquet(run_path, tables)
+    parquet_files = ensure_csv_flat_parquet(run_path, tables) if convert_csv_flat_parquet else {}
     table_files = _write_tables(table_dir, tables)
     for name, paths in parquet_files.items():
         table_files.setdefault(name, {}).update(paths)

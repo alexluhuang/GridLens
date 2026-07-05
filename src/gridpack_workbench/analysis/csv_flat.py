@@ -20,7 +20,7 @@ CSV_FLAT_BUS_TABLE = "csv_flat_bus_metadata"
 CSV_FLAT_BRANCH_TABLE = "csv_flat_branch_metadata"
 CSV_FLAT_DEFAULT_BACKEND = "auto"
 CSV_FLAT_DEFAULT_BLOCKSIZE = "256MB"
-CSV_FLAT_DEFAULT_SCHEDULER = "single-threaded"
+CSV_FLAT_DEFAULT_SCHEDULER = "threads"
 CSV_FLAT_MEMORY_TARGET = "160GB"
 
 _EVENT_ALIASES = ("event_idx", "event_index", "contingency_index")
@@ -137,25 +137,6 @@ class _ExtremeLabels:
     max_event_idx: object = ""
     max_abs_event_idx: object = ""
     max_abs_contingency: str = ""
-    min_loading: float | None = None
-    max_loading: float | None = None
-    max_abs_loading: float | None = None
-
-    def update(self, row: dict[str, object]) -> None:
-        loading = _float_value(row.get("loading_percent"))
-        if loading is None:
-            return
-        if self.min_loading is None or loading < self.min_loading:
-            self.min_loading = loading
-            self.min_event_idx = row.get("event_idx", "")
-        if self.max_loading is None or loading > self.max_loading:
-            self.max_loading = loading
-            self.max_event_idx = row.get("event_idx", "")
-        abs_loading = abs(loading)
-        if self.max_abs_loading is None or abs_loading > self.max_abs_loading:
-            self.max_abs_loading = abs_loading
-            self.max_abs_event_idx = row.get("event_idx", "")
-            self.max_abs_contingency = str(row.get("contingency") or "")
 
 
 @dataclass(slots=True)
@@ -409,23 +390,30 @@ def _parse_flat_results_accelerated(path: Path, lookup: dict[str, str]) -> tuple
     try:
         backend = _lazy_backend()
     except Exception as exc:
+        if _gpu_backend_required():
+            raise RuntimeError(f"GPU csv_flat aggregation was required but dask-cudf could not be used: {exc}") from exc
         return None, f"Accelerated csv_flat aggregation was skipped: {exc}"
 
     try:
-        preview_rows, labels, rejected = _preview_and_extreme_labels(path, lookup)
         data = _normalized_lazy_flat_frame(path, lookup, backend)
+        preview_rows = _preview_rows(path, lookup)
         keys = ["from_bus", "to_bus", "line_id", "section"]
         grouped = data.groupby(keys).agg(
             {
                 "loading_percent": ["count", "sum", "min", "max"],
+                "abs_loading": "max",
                 "base_loading": "max",
                 "overloaded": "sum",
                 "rate_mva": "first",
             }
         )
-        grouped = grouped.compute(scheduler=_dask_scheduler())
+        label_frame = _lazy_extreme_label_frame(data, keys)
+        grouped, label_frame = _compute_lazy_frames(grouped, label_frame)
+        labels = _extreme_labels_from_frame(label_frame)
         aggregates = _aggregates_from_frame(grouped, labels)
     except Exception as exc:
+        if _gpu_backend_required():
+            raise RuntimeError(f"GPU csv_flat aggregation with dask-cudf failed: {exc}") from exc
         return None, (
             f"Accelerated csv_flat aggregation with {_requested_backend()} failed and Python streaming was used: {exc}"
         )
@@ -434,10 +422,9 @@ def _parse_flat_results_accelerated(path: Path, lookup: dict[str, str]) -> tuple
         (
             f"{path.name} was aggregated with {backend.name}; partitions are bounded by "
             f"{_dask_blocksize()} and the memory target is {_memory_target()}."
-        )
+        ),
+        _backend_runtime_note(backend),
     ]
-    if rejected:
-        notes.append(f"Rejected {rejected} csv_flat rows with missing branch keys or loading_percent.")
     return _flat_tables_from_aggregates(path, preview_rows, aggregates, notes), ""
 
 
@@ -467,24 +454,21 @@ def _flat_tables_from_aggregates(
     }
 
 
-def _preview_and_extreme_labels(
+def _preview_rows(
     path: Path,
     lookup: dict[str, str],
-) -> tuple[list[dict[str, object]], dict[tuple[object, object, str, str], _ExtremeLabels], int]:
+) -> list[dict[str, object]]:
     preview_rows: list[dict[str, object]] = []
-    labels: dict[tuple[object, object, str, str], _ExtremeLabels] = {}
-    rejected = 0
 
     for raw_row in _dict_rows(path):
         row = _normalize_flat_result_row(raw_row, lookup)
         if row is None:
-            rejected += 1
             continue
         if len(preview_rows) < CSV_FLAT_PREVIEW_LIMIT:
             preview_rows.append(row)
-        key = _flat_row_key(row)
-        labels.setdefault(key, _ExtremeLabels()).update(row)
-    return preview_rows, labels, rejected
+        else:
+            break
+    return preview_rows
 
 
 def _normalized_lazy_flat_frame(path: Path, lookup: dict[str, str], backend: _LazyBackend):
@@ -527,7 +511,55 @@ def _normalized_lazy_flat_frame(path: Path, lookup: dict[str, str], backend: _La
     data["viol"] = data["viol"].fillna(0).astype("float64")
     data["overloaded"] = ((data["viol"] != 0) | (data["loading_percent"] >= 100.0)).astype("int64")
     data["base_loading"] = data["loading_percent"].where(data["event_idx"] == 0)
+    data["abs_loading"] = data["loading_percent"].abs()
     return data
+
+
+def _lazy_extreme_label_frame(data, keys: list[str]):
+    max_values = data.groupby(keys)["abs_loading"].max().reset_index().rename(
+        columns={"abs_loading": "max_abs_loading"}
+    )
+    candidates = data.merge(max_values, on=keys, how="inner")
+    candidates = candidates[candidates["abs_loading"] == candidates["max_abs_loading"]]
+    return candidates.groupby(keys).agg({"event_idx": "first", "contingency": "first"})
+
+
+def _compute_lazy_frames(*frames):
+    try:
+        import dask
+
+        return dask.compute(*frames, scheduler=_dask_scheduler())
+    except Exception:
+        return tuple(frame.compute(scheduler=_dask_scheduler()) for frame in frames)
+
+
+def _extreme_labels_from_frame(frame) -> dict[tuple[object, object, str, str], _ExtremeLabels]:
+    records = _records_from_frame(frame.reset_index())
+
+    labels = {}
+    for row in records:
+        key = (
+            _int_value(row.get("from_bus")),
+            _int_value(row.get("to_bus")),
+            _clean_text(row.get("line_id")),
+            _clean_text(row.get("section")),
+        )
+        labels[key] = _ExtremeLabels(
+            max_abs_event_idx=_event_value(row.get("event_idx")),
+            max_abs_contingency=_clean_text(row.get("contingency")),
+        )
+    return labels
+
+
+def _backend_runtime_note(backend: _LazyBackend) -> str:
+    if backend.name == "dask_cudf":
+        return "RAPIDS dask-cudf GPU backend was used for csv_flat aggregation."
+    if backend.name == "dask":
+        return (
+            "CPU Dask backend was used for csv_flat aggregation. Install RAPIDS dask-cudf/dask-cuda "
+            "and set GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=dask_cudf to require GPU execution."
+        )
+    return f"{backend.name} backend was used for csv_flat aggregation."
 
 
 def _flat_lazy_columns(lookup: dict[str, str]) -> dict[str, str]:
@@ -578,7 +610,7 @@ def _aggregates_from_frame(
             sum_loading=sum_loading,
             min_loading=_float_value(row.get("min_loading")),
             max_loading=_float_value(row.get("max_loading")),
-            max_abs_loading=_float_value(row.get("max_loading")),
+            max_abs_loading=_float_value(row.get("max_abs_loading")),
             base_loading=_float_value(row.get("base_loading")),
             min_event_idx=label.min_event_idx,
             max_event_idx=label.max_event_idx,
@@ -608,6 +640,7 @@ def _flatten_aggregate_frame(frame):
         "loading_percent_sum": "sum_loading",
         "loading_percent_min": "min_loading",
         "loading_percent_max": "max_loading",
+        "abs_loading_max": "max_abs_loading",
         "base_loading_max": "base_loading",
         "overloaded_sum": "overload_count",
         "rate_mva_first": "rate_mva",
@@ -799,6 +832,10 @@ def _requested_backend() -> str:
     if value in {"auto", "dask_cudf", "dask", "python"}:
         return value
     return CSV_FLAT_DEFAULT_BACKEND
+
+
+def _gpu_backend_required() -> bool:
+    return _requested_backend() == "dask_cudf"
 
 
 def _dask_blocksize() -> str:

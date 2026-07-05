@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import os
 from pathlib import Path
 import textwrap
+import traceback
 from typing import Callable
 
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/gridpack-workbench-matplotlib")
+
 try:  # Matplotlib is an optional analysis dependency.
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
@@ -28,6 +34,7 @@ except Exception:  # pragma: no cover - exercised only on systems without matplo
     NavigationToolbar = None  # type: ignore[assignment]
     Figure = None  # type: ignore[assignment]
 
+from gridpack_workbench.analysis.csv_flat import CSV_FLAT_RESULTS_TABLE
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridpack_workbench.analysis.utilization import UtilizationBranchOptions
 from gridpack_workbench.core.project import Project
@@ -45,6 +52,74 @@ CONTROL_AREA_MIN_HEIGHT = 360
 CONTROL_AREA_TOP_BOTTOM_PADDING = 150
 CONTROL_AREA_ROW_PIXELS = 26
 CONTROL_AREA_LABEL_LIMIT = 46
+LINE_CHART_MAX_POINTS = 5000
+
+
+def _line_chart_display_points(rows: list[dict[str, object]]) -> list[tuple[int, dict[str, object]]]:
+    if len(rows) <= LINE_CHART_MAX_POINTS:
+        return [(index, row) for index, row in enumerate(rows, start=1)]
+    last_index = len(rows) - 1
+    sampled_indices = [
+        min(last_index, index * last_index // (LINE_CHART_MAX_POINTS - 1))
+        for index in range(LINE_CHART_MAX_POINTS)
+    ]
+    return [(index + 1, rows[index]) for index in sampled_indices]
+
+
+def _csv_flat_runtime_status(dataset: RunAnalysisDataset | None) -> str:
+    if not dataset:
+        return ""
+    table = dataset.tables.get(CSV_FLAT_RESULTS_TABLE)
+    if not table:
+        return ""
+    for note in table.notes:
+        if note.startswith("RAPIDS dask-cudf GPU backend was used"):
+            return "RAPIDS dask-cudf GPU backend used."
+        if note.startswith("CPU Dask backend was used"):
+            return "CPU Dask backend used; RAPIDS was not active."
+        if "Python streaming" in note or "streamed from the full file" in note:
+            return "Python streaming fallback used for csv-flat aggregation."
+    return ""
+
+
+@dataclass(slots=True)
+class AnalysisBuildResult:
+    dataset: RunAnalysisDataset
+    max_line_rows: list[dict[str, object]]
+    group_branch_rows: list[dict[str, object]]
+    control_area_rows: list[dict[str, object]]
+    voltage_group_rows: list[dict[str, object]]
+    line_rows: list[dict[str, object]]
+
+
+class AnalysisWorker(QThread):
+    finished_analysis = Signal(object)
+    failed_analysis = Signal(str)
+
+    def __init__(self, run_dir: Path, branch_options: UtilizationBranchOptions) -> None:
+        super().__init__()
+        self.run_dir = run_dir
+        self.branch_options = branch_options
+
+    def run(self) -> None:
+        try:
+            dataset = build_run_analysis(self.run_dir, convert_csv_flat_parquet=False)
+            max_line_rows = max_line_utilization_rows(dataset.tables, self.branch_options)
+            group_branch_rows = list(max_line_rows)
+            control_area_rows = summarize_control_area_utilization(group_branch_rows)
+            voltage_group_rows = summarize_voltage_group_utilization(group_branch_rows)
+            self.finished_analysis.emit(
+                AnalysisBuildResult(
+                    dataset=dataset,
+                    max_line_rows=max_line_rows,
+                    group_branch_rows=group_branch_rows,
+                    control_area_rows=control_area_rows,
+                    voltage_group_rows=voltage_group_rows,
+                    line_rows=list(max_line_rows),
+                )
+            )
+        except Exception:
+            self.failed_analysis.emit(traceback.format_exc())
 
 
 class AnalysisTab(QWidget):
@@ -61,6 +136,7 @@ class AnalysisTab(QWidget):
         self.selected_voltage_groups: set[str] = set()
         self.control_area_click_items: list[tuple[object, dict[str, object]]] = []
         self.voltage_group_click_items: list[tuple[object, dict[str, object]]] = []
+        self.analysis_worker: AnalysisWorker | None = None
         self._wide_layout: bool | None = None
         self._dense_control_area_layout: bool | None = None
 
@@ -73,16 +149,16 @@ class AnalysisTab(QWidget):
 
         run_row = QHBoxLayout()
         self.run_combo = QComboBox()
-        refresh = QPushButton("Refresh Runs")
-        set_button_role(refresh, "secondary")
-        refresh.clicked.connect(lambda: self.refresh_runs())
-        analyze = QPushButton("Generate Graphs")
-        set_button_role(analyze, "primary")
-        analyze.clicked.connect(self.generate_graphs)
+        self.refresh_button = QPushButton("Refresh Runs")
+        set_button_role(self.refresh_button, "secondary")
+        self.refresh_button.clicked.connect(lambda: self.refresh_runs())
+        self.analyze_button = QPushButton("Generate Graphs")
+        set_button_role(self.analyze_button, "primary")
+        self.analyze_button.clicked.connect(self.generate_graphs)
         run_row.addWidget(QLabel("Run"))
         run_row.addWidget(self.run_combo, stretch=1)
-        run_row.addWidget(refresh)
-        run_row.addWidget(analyze)
+        run_row.addWidget(self.refresh_button)
+        run_row.addWidget(self.analyze_button)
         layout.addLayout(run_row)
 
         transformer_row = QHBoxLayout()
@@ -143,24 +219,20 @@ class AnalysisTab(QWidget):
         return Path(value) if value else None
 
     def generate_graphs(self) -> None:
+        if self.analysis_worker and self.analysis_worker.isRunning():
+            self.status_label.setText("Analysis is already running...")
+            return
         run_dir = self.selected_run_dir()
         if not run_dir:
             QMessageBox.warning(self, "No run selected", "Select a completed run first.")
             return
-        try:
-            self.status_label.setText("Parsing GridPACK outputs and RAW metadata...")
-            self.current_dataset = build_run_analysis(run_dir)
-            self._rebuild_utilization_rows()
-            self.selected_control_areas.clear()
-            self.selected_voltage_groups.clear()
-            self._refresh_filtered_rows()
-            if hasattr(self, "chart_grid"):
-                self._arrange_charts()
-            self._render_charts()
-            self._update_generated_status()
-        except Exception as exc:
-            QMessageBox.critical(self, "Analysis failed", str(exc))
-            self.status_label.setText("Analysis failed.")
+        self.status_label.setText("Parsing GridPACK outputs and RAW metadata in the background...")
+        self._set_analysis_controls_enabled(False)
+        self.analysis_worker = AnalysisWorker(run_dir, self._utilization_branch_options())
+        self.analysis_worker.finished_analysis.connect(self._on_analysis_ready)
+        self.analysis_worker.failed_analysis.connect(self._on_analysis_failed)
+        self.analysis_worker.finished.connect(self._on_analysis_worker_finished)
+        self.analysis_worker.start()
 
     def generate_report(self) -> None:
         """Backward-compatible slot name for older signal connections."""
@@ -170,6 +242,38 @@ class AnalysisTab(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "chart_grid"):
             self._arrange_charts()
+
+    def _on_analysis_ready(self, result: AnalysisBuildResult) -> None:
+        self.current_dataset = result.dataset
+        self.max_line_rows = result.max_line_rows
+        self.group_branch_rows = result.group_branch_rows
+        self.control_area_rows = result.control_area_rows
+        self.voltage_group_rows = result.voltage_group_rows
+        self.line_rows = result.line_rows
+        self.selected_control_areas.clear()
+        self.selected_voltage_groups.clear()
+        if hasattr(self, "chart_grid"):
+            self._arrange_charts()
+        self._render_charts()
+        self._update_generated_status()
+
+    def _on_analysis_failed(self, error_text: str) -> None:
+        QMessageBox.critical(self, "Analysis failed", error_text)
+        self.status_label.setText("Analysis failed.")
+
+    def _on_analysis_worker_finished(self) -> None:
+        worker = self.analysis_worker
+        self.analysis_worker = None
+        self._set_analysis_controls_enabled(True)
+        if worker:
+            worker.deleteLater()
+
+    def _set_analysis_controls_enabled(self, enabled: bool) -> None:
+        self.run_combo.setEnabled(enabled)
+        self.refresh_button.setEnabled(enabled)
+        self.analyze_button.setEnabled(enabled)
+        self.include_two_winding_transformers.setEnabled(enabled)
+        self.include_three_winding_transformers.setEnabled(enabled)
 
     def _build_chart_area(self, parent_layout: QVBoxLayout) -> None:
         self.control_area_sort = self._sort_combo(
@@ -346,12 +450,15 @@ class AnalysisTab(QWidget):
         )
 
     def _update_generated_status(self) -> None:
+        runtime_status = _csv_flat_runtime_status(self.current_dataset)
+        runtime_suffix = f" {runtime_status}" if runtime_status else ""
         self.status_label.setText(
             "Generated "
             f"{len(self.control_area_rows)} control-area groups, "
             f"{len(self.voltage_group_rows)} voltage groups, and "
             f"{len(self.line_rows)} line points "
             f"({self._utilization_scope_label()})."
+            f"{runtime_suffix}"
         )
 
     def _refresh_filtered_rows(self) -> None:
@@ -531,8 +638,10 @@ class AnalysisTab(QWidget):
             canvas.draw_idle()
             return
 
-        x_values = list(range(1, len(rows) + 1))
-        values = [numeric_value(row.get("max_utilization_pct")) for row in rows]
+        display_points = _line_chart_display_points(rows)
+        x_values = [point[0] for point in display_points]
+        display_rows = [point[1] for point in display_points]
+        values = [numeric_value(row.get("max_utilization_pct")) for row in display_rows]
         max_value = max(values) if values else 0
         axis.axhspan(0, 100, color="#dff2dd", alpha=0.75, label="Capability")
         axis.fill_between(x_values, values, color="#92d0c8", alpha=0.55, label="Utilization")
@@ -548,8 +657,19 @@ class AnalysisTab(QWidget):
         axis.set_title(self._line_title())
         self._style_axis(axis)
         axis.legend(loc="upper left", fontsize=8)
+        if len(display_rows) < len(rows):
+            axis.text(
+                0.99,
+                0.03,
+                f"Showing {len(display_rows):,} of {len(rows):,} lines",
+                ha="right",
+                va="bottom",
+                fontsize=8,
+                color="#5b667a",
+                transform=axis.transAxes,
+            )
         canvas.setMinimumHeight(390)
-        self.line_hover.bind_curve(axis, x_values, values, rows, self._line_hover_text)
+        self.line_hover.bind_curve(axis, x_values, values, display_rows, self._line_hover_text)
         canvas.draw_idle()
 
     def _sorted_group_rows(

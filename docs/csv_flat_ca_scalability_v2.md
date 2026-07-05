@@ -42,13 +42,18 @@ default memory target for the csv-flat path is `160GB`, leaving headroom below a
 ```bash
 export GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=auto
 export GRIDPACK_WORKBENCH_CSV_FLAT_BLOCKSIZE=256MB
-export GRIDPACK_WORKBENCH_CSV_FLAT_SCHEDULER=single-threaded
+export GRIDPACK_WORKBENCH_CSV_FLAT_SCHEDULER=threads
 export GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET=160GB
 ```
 
 Use `GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=dask_cudf` on DGX Spark when you want
 analysis to fail loudly instead of falling back if RAPIDS is missing. Use
 `python` only for debugging.
+
+The Analysis tab runs this parsing and summarization work in a background Qt
+worker so the desktop event loop stays responsive while Dask/cuDF does the heavy
+lifting. The generated status text and table notes record which backend was
+used; if they say `CPU Dask backend`, RAPIDS was not active for that run.
 
 For the user-facing analysis, Workbench groups the branch-contingency rows back
 to branch-level summaries:
@@ -86,6 +91,11 @@ large csv-flat result file to:
 ```text
 run/reports/parquet/<csv-file-name>/
 ```
+
+Interactive graph generation skips parquet conversion so the user can see the
+charts as soon as the reduced branch summaries are ready. The default
+`build_run_analysis()` path still writes parquet for report/export workflows
+unless a caller explicitly opts out.
 
 The conversion also uses the GPU-first backend. On DGX Spark with RAPIDS
 installed, `dask-cudf` reads the CSV in bounded partitions and writes parquet

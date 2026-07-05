@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import builtins
 import json
+import sys
+import types
 
+import pytest
+
+from gridpack_workbench.analysis import csv_flat
+from gridpack_workbench.analysis import parsers
 from gridpack_workbench.analysis.dataset import build_run_analysis
 from gridpack_workbench.analysis.enrichment import enrich_with_bus_metadata
 from gridpack_workbench.analysis.metrics import compute_metrics
@@ -45,6 +52,20 @@ def test_csv_flat_outputs_parse_into_existing_analysis_tables(tmp_path) -> None:
     assert line_rows[1]["voltage_group"] == "230-344 kV"
 
 
+def test_parse_all_output_tables_parses_csv_flat_success_once(tmp_path, monkeypatch) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+
+    def fail_if_called(run_dir):
+        raise AssertionError("parse_all_output_tables should get csv_flat success from parse_csv_flat_outputs")
+
+    monkeypatch.setattr(parsers, "parse_csv_flat_success", fail_if_called)
+
+    tables = parse_all_output_tables(run_dir)
+
+    assert tables["success"].source_file == "training_tiny_convergence.csv"
+    assert tables["success"].row_count == 4
+
+
 def test_build_run_analysis_records_csv_flat_parquet_note_without_optional_stack(tmp_path) -> None:
     run_dir = _csv_flat_run(tmp_path)
 
@@ -53,6 +74,18 @@ def test_build_run_analysis_records_csv_flat_parquet_note_without_optional_stack
 
     assert manifest["tables"]["csv_flat_results"]["row_count"] == 5
     assert "parquet_path" in manifest["tables"]["csv_flat_results"]
+    assert (run_dir / "reports" / "tables" / "pflow_mm.csv").exists()
+
+
+def test_build_run_analysis_can_skip_csv_flat_parquet_for_interactive_graphs(tmp_path) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+
+    dataset = build_run_analysis(run_dir, convert_csv_flat_parquet=False)
+    manifest = json.loads(dataset.manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["tables"]["csv_flat_results"]["row_count"] == 5
+    assert manifest["tables"]["csv_flat_results"]["parquet_path"] == ""
+    assert not (run_dir / "reports" / "parquet").exists()
     assert (run_dir / "reports" / "tables" / "pflow_mm.csv").exists()
 
 
@@ -65,6 +98,73 @@ def test_csv_flat_python_backend_can_be_forced(tmp_path, monkeypatch) -> None:
     first_branch = next(row for row in tables["pflow_mm"].rows if row["from_bus"] == 101)
     assert first_branch["max_utilization_pct"] == 125.0
     assert first_branch["max_utilization_contingency"] == 1
+
+
+def test_csv_flat_accelerated_backend_uses_absolute_max_loading(tmp_path, monkeypatch) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+    flat_path = run_dir / "work" / "training_tiny_flat1.csv"
+    flat_path.write_text(
+        "\n".join(
+            [
+                "event_idx,contingency,from_bus,to_bus,circuit_id,rate_mva,loading_percent,viol",
+                "0,base_case,101,102,1,100,10,0",
+                "1,POSITIVE,101,102,1,100,80,0",
+                "2,NEGATIVE,101,102,1,100,-130,1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask")
+
+    tables = parse_all_output_tables(run_dir)
+
+    branch = next(row for row in tables["pflow_mm"].rows if row["from_bus"] == 101)
+    assert branch["max_utilization_pct"] == 130.0
+    assert branch["max_utilization_contingency"] == 2
+    assert branch["max_contingency_label"] == "NEGATIVE"
+    assert any("CPU Dask backend" in note for note in tables["csv_flat_results"].notes)
+
+
+def test_csv_flat_auto_prefers_dask_cudf_when_available(monkeypatch) -> None:
+    fake_dask_cudf = types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "dask_cudf", fake_dask_cudf)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+
+    backend = csv_flat._lazy_backend()
+
+    assert backend.name == "dask_cudf"
+    assert backend.module is fake_dask_cudf
+
+
+def test_csv_flat_forced_dask_cudf_does_not_silently_use_cpu_dask(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "dask_cudf":
+            raise ModuleNotFoundError("No module named 'dask_cudf'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask_cudf")
+
+    with pytest.raises(RuntimeError, match="dask_cudf"):
+        csv_flat._lazy_backend()
+
+
+def test_csv_flat_forced_dask_cudf_parse_fails_loudly(tmp_path, monkeypatch) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "dask_cudf":
+            raise ModuleNotFoundError("No module named 'dask_cudf'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask_cudf")
+
+    with pytest.raises(RuntimeError, match="GPU csv_flat aggregation was required"):
+        parse_all_output_tables(run_dir)
 
 
 def _csv_flat_run(root) -> object:
