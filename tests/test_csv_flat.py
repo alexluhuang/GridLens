@@ -56,6 +56,17 @@ def test_build_run_analysis_records_csv_flat_parquet_note_without_optional_stack
     assert (run_dir / "reports" / "tables" / "pflow_mm.csv").exists()
 
 
+def test_csv_flat_python_backend_can_be_forced(tmp_path, monkeypatch) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "python")
+
+    tables = parse_all_output_tables(run_dir)
+
+    first_branch = next(row for row in tables["pflow_mm"].rows if row["from_bus"] == 101)
+    assert first_branch["max_utilization_pct"] == 125.0
+    assert first_branch["max_utilization_contingency"] == 1
+
+
 def _csv_flat_run(root) -> object:
     run_dir = root / "runs" / "2026-07-05_12-00-00"
     work = run_dir / "work"

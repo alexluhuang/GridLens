@@ -4,3 +4,5 @@ dask[dataframe]>=2024.1
 pyarrow>=15
 # On DGX systems with RAPIDS, install/provide cuDF so `import cudf.pandas`
 # succeeds and pandas calls are accelerated on the GPU.
+# For ca-scalability-v2 csv_flat GPU acceleration, also install RAPIDS
+# dask-cudf/dask-cuda packages that match the DGX Spark Python/CUDA stack.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 import math
+import os
 from pathlib import Path
 import re
 from typing import Iterable
@@ -17,6 +18,10 @@ CSV_FLAT_RESULTS_TABLE = "csv_flat_results"
 CSV_FLAT_CONVERGENCE_TABLE = "csv_flat_convergence"
 CSV_FLAT_BUS_TABLE = "csv_flat_bus_metadata"
 CSV_FLAT_BRANCH_TABLE = "csv_flat_branch_metadata"
+CSV_FLAT_DEFAULT_BACKEND = "auto"
+CSV_FLAT_DEFAULT_BLOCKSIZE = "256MB"
+CSV_FLAT_DEFAULT_SCHEDULER = "single-threaded"
+CSV_FLAT_MEMORY_TARGET = "160GB"
 
 _EVENT_ALIASES = ("event_idx", "event_index", "contingency_index")
 _CONTINGENCY_ALIASES = ("contingency", "contingency_name", "event")
@@ -113,10 +118,44 @@ _BRANCH_COLUMNS = [
 class ConversionResult:
     parquet_path: Path | None
     note: str = ""
+    backend: str = ""
 
     @property
     def ok(self) -> bool:
         return self.parquet_path is not None
+
+
+@dataclass(slots=True)
+class _LazyBackend:
+    name: str
+    module: object
+
+
+@dataclass(slots=True)
+class _ExtremeLabels:
+    min_event_idx: object = ""
+    max_event_idx: object = ""
+    max_abs_event_idx: object = ""
+    max_abs_contingency: str = ""
+    min_loading: float | None = None
+    max_loading: float | None = None
+    max_abs_loading: float | None = None
+
+    def update(self, row: dict[str, object]) -> None:
+        loading = _float_value(row.get("loading_percent"))
+        if loading is None:
+            return
+        if self.min_loading is None or loading < self.min_loading:
+            self.min_loading = loading
+            self.min_event_idx = row.get("event_idx", "")
+        if self.max_loading is None or loading > self.max_loading:
+            self.max_loading = loading
+            self.max_event_idx = row.get("event_idx", "")
+        abs_loading = abs(loading)
+        if self.max_abs_loading is None or abs_loading > self.max_abs_loading:
+            self.max_abs_loading = abs_loading
+            self.max_abs_event_idx = row.get("event_idx", "")
+            self.max_abs_contingency = str(row.get("contingency") or "")
 
 
 @dataclass(slots=True)
@@ -278,36 +317,49 @@ def ensure_csv_flat_parquet(run_dir: str | Path, tables: dict[str, ParsedTable])
     return {}
 
 
-def convert_csv_to_parquet(csv_path: str | Path, output_dir: str | Path, blocksize: str = "256MB") -> ConversionResult:
-    """Use the same Dask-to-PyArrow parquet conversion approach as the referenced helper script."""
+def convert_csv_to_parquet(csv_path: str | Path, output_dir: str | Path, blocksize: str = "") -> ConversionResult:
+    """Convert csv_flat output to parquet, preferring RAPIDS dask-cudf when available."""
 
     source = Path(csv_path).expanduser().resolve()
     destination = Path(output_dir).expanduser().resolve()
+    blocksize = blocksize or _dask_blocksize()
     if destination.exists() and any(destination.rglob("*.parquet")):
-        return ConversionResult(destination)
+        return ConversionResult(destination, backend="existing")
 
     try:
-        import dask.dataframe as dd  # type: ignore[import-not-found]
+        backend = _lazy_backend()
     except Exception as exc:  # pragma: no cover - depends on optional local install.
         return ConversionResult(
             None,
             (
-                "csv_flat parquet conversion was skipped because Dask/PyArrow analysis "
+                "csv_flat parquet conversion was skipped because Dask/RAPIDS analysis "
                 f"dependencies are not installed: {exc}"
             ),
         )
 
     try:
         destination.mkdir(parents=True, exist_ok=True)
-        data = dd.read_csv(source, blocksize=blocksize, assume_missing=True)
+        data = _read_lazy_csv(backend, source, blocksize=blocksize)
         data.to_parquet(destination, engine="pyarrow", compression="snappy", write_index=False)
     except Exception as exc:  # pragma: no cover - depends on local parquet stack and filesystem state.
-        return ConversionResult(None, f"csv_flat parquet conversion failed for {source.name}: {exc}")
-    return ConversionResult(destination)
+        return ConversionResult(None, f"csv_flat parquet conversion failed for {source.name}: {exc}", backend.name)
+    return ConversionResult(destination, backend=backend.name)
 
 
 def _parse_flat_results(path: Path) -> dict[str, ParsedTable]:
     lookup = _column_lookup(_header(path))
+    accelerated, fallback_note = _parse_flat_results_accelerated(path, lookup)
+    if accelerated:
+        return accelerated
+
+    return _parse_flat_results_streaming(path, lookup, fallback_note)
+
+
+def _parse_flat_results_streaming(
+    path: Path,
+    lookup: dict[str, str],
+    fallback_note: str = "",
+) -> dict[str, ParsedTable]:
     aggregates: dict[tuple[object, object, str, str], _BranchAggregate] = {}
     preview_rows: list[dict[str, object]] = []
     rejected = 0
@@ -345,13 +397,61 @@ def _parse_flat_results(path: Path) -> dict[str, ParsedTable]:
             "branch-level summaries are streamed from the full file."
         )
     ]
+    if fallback_note:
+        notes.append(fallback_note)
     if rejected:
         notes.append(f"Rejected {rejected} csv_flat rows with missing branch keys or loading_percent.")
 
+    return _flat_tables_from_aggregates(path, preview_rows, aggregates.values(), notes)
+
+
+def _parse_flat_results_accelerated(path: Path, lookup: dict[str, str]) -> tuple[dict[str, ParsedTable] | None, str]:
+    try:
+        backend = _lazy_backend()
+    except Exception as exc:
+        return None, f"Accelerated csv_flat aggregation was skipped: {exc}"
+
+    try:
+        preview_rows, labels, rejected = _preview_and_extreme_labels(path, lookup)
+        data = _normalized_lazy_flat_frame(path, lookup, backend)
+        keys = ["from_bus", "to_bus", "line_id", "section"]
+        grouped = data.groupby(keys).agg(
+            {
+                "loading_percent": ["count", "sum", "min", "max"],
+                "base_loading": "max",
+                "overloaded": "sum",
+                "rate_mva": "first",
+            }
+        )
+        grouped = grouped.compute(scheduler=_dask_scheduler())
+        aggregates = _aggregates_from_frame(grouped, labels)
+    except Exception as exc:
+        return None, (
+            f"Accelerated csv_flat aggregation with {_requested_backend()} failed and Python streaming was used: {exc}"
+        )
+
+    notes = [
+        (
+            f"{path.name} was aggregated with {backend.name}; partitions are bounded by "
+            f"{_dask_blocksize()} and the memory target is {_memory_target()}."
+        )
+    ]
+    if rejected:
+        notes.append(f"Rejected {rejected} csv_flat rows with missing branch keys or loading_percent.")
+    return _flat_tables_from_aggregates(path, preview_rows, aggregates, notes), ""
+
+
+def _flat_tables_from_aggregates(
+    path: Path,
+    preview_rows: list[dict[str, object]],
+    aggregates: Iterable[_BranchAggregate],
+    notes: list[str],
+) -> dict[str, ParsedTable]:
+    aggregate_list = list(aggregates)
     preview = ParsedTable(CSV_FLAT_RESULTS_TABLE, path.name, list(_FLAT_RESULT_COLUMNS), preview_rows, list(notes))
-    pflow_rows = [_aggregate_to_pflow_row(aggregate) for aggregate in aggregates.values()]
-    pflow_mm_rows = [_aggregate_to_pflow_mm_row(aggregate) for aggregate in aggregates.values()]
-    branch_rows = [_aggregate_to_branch_metadata_row(aggregate, path.name) for aggregate in aggregates.values()]
+    pflow_rows = [_aggregate_to_pflow_row(aggregate) for aggregate in aggregate_list]
+    pflow_mm_rows = [_aggregate_to_pflow_mm_row(aggregate) for aggregate in aggregate_list]
+    branch_rows = [_aggregate_to_branch_metadata_row(aggregate, path.name) for aggregate in aggregate_list]
 
     return {
         CSV_FLAT_RESULTS_TABLE: preview,
@@ -365,6 +465,160 @@ def _parse_flat_results(path: Path) -> dict[str, ParsedTable]:
             ["Branch keys were derived from csv_flat from_bus/to_bus/circuit_id/section columns."],
         ),
     }
+
+
+def _preview_and_extreme_labels(
+    path: Path,
+    lookup: dict[str, str],
+) -> tuple[list[dict[str, object]], dict[tuple[object, object, str, str], _ExtremeLabels], int]:
+    preview_rows: list[dict[str, object]] = []
+    labels: dict[tuple[object, object, str, str], _ExtremeLabels] = {}
+    rejected = 0
+
+    for raw_row in _dict_rows(path):
+        row = _normalize_flat_result_row(raw_row, lookup)
+        if row is None:
+            rejected += 1
+            continue
+        if len(preview_rows) < CSV_FLAT_PREVIEW_LIMIT:
+            preview_rows.append(row)
+        key = _flat_row_key(row)
+        labels.setdefault(key, _ExtremeLabels()).update(row)
+    return preview_rows, labels, rejected
+
+
+def _normalized_lazy_flat_frame(path: Path, lookup: dict[str, str], backend: _LazyBackend):
+    columns = _flat_lazy_columns(lookup)
+    data = _read_lazy_csv(backend, path, usecols=list(columns), blocksize=_dask_blocksize())
+    data = data.rename(columns=columns)
+    for optional_column, default_value in (
+        ("section", ""),
+        ("event_idx", None),
+        ("contingency", ""),
+        ("rate_mva", None),
+        ("viol", 0),
+    ):
+        if optional_column not in data.columns:
+            data[optional_column] = default_value
+
+    data = data.dropna(subset=["from_bus", "to_bus", "line_id", "loading_percent"])
+    data["from_bus"] = data["from_bus"].astype("int64")
+    data["to_bus"] = data["to_bus"].astype("int64")
+    data["line_id"] = (
+        data["line_id"]
+        .astype("str")
+        .str.strip()
+        .str.strip("'")
+        .str.strip('"')
+        .str.replace(r"\.0$", "", regex=True)
+    )
+    data["section"] = (
+        data["section"]
+        .fillna("")
+        .astype("str")
+        .str.strip()
+        .str.strip("'")
+        .str.strip('"')
+        .str.replace(r"\.0$", "", regex=True)
+    )
+    data["loading_percent"] = data["loading_percent"].astype("float64")
+    data["rate_mva"] = data["rate_mva"].astype("float64")
+    data["event_idx"] = data["event_idx"].fillna(-1).astype("float64")
+    data["viol"] = data["viol"].fillna(0).astype("float64")
+    data["overloaded"] = ((data["viol"] != 0) | (data["loading_percent"] >= 100.0)).astype("int64")
+    data["base_loading"] = data["loading_percent"].where(data["event_idx"] == 0)
+    return data
+
+
+def _flat_lazy_columns(lookup: dict[str, str]) -> dict[str, str]:
+    aliases = {
+        "event_idx": _EVENT_ALIASES,
+        "contingency": _CONTINGENCY_ALIASES,
+        "from_bus": _FROM_BUS_ALIASES,
+        "to_bus": _TO_BUS_ALIASES,
+        "line_id": _CIRCUIT_ALIASES,
+        "section": _SECTION_ALIASES,
+        "rate_mva": ("rate_mva", "rate", "ratec"),
+        "loading_percent": _LOADING_ALIASES,
+        "viol": ("viol", "violation"),
+    }
+    columns: dict[str, str] = {}
+    for canonical, column_aliases in aliases.items():
+        column = _column(lookup, column_aliases)
+        if column:
+            columns[column] = canonical
+    return columns
+
+
+def _aggregates_from_frame(
+    frame,
+    labels: dict[tuple[object, object, str, str], _ExtremeLabels],
+) -> list[_BranchAggregate]:
+    frame = _flatten_aggregate_frame(frame)
+    rows = _records_from_frame(frame)
+    aggregates = []
+    for index, row in enumerate(rows, start=1):
+        key = (
+            _int_value(row.get("from_bus")),
+            _int_value(row.get("to_bus")),
+            _clean_text(row.get("line_id")),
+            _clean_text(row.get("section")),
+        )
+        label = labels.get(key, _ExtremeLabels())
+        count = int(_float_value(row.get("contingency_count")) or 0)
+        sum_loading = _float_value(row.get("sum_loading")) or 0.0
+        aggregate = _BranchAggregate(
+            from_bus=key[0],
+            to_bus=key[1],
+            line_id=key[2],
+            section=key[3],
+            row_index=index,
+            count=count,
+            overload_count=int(_float_value(row.get("overload_count")) or 0),
+            sum_loading=sum_loading,
+            min_loading=_float_value(row.get("min_loading")),
+            max_loading=_float_value(row.get("max_loading")),
+            max_abs_loading=_float_value(row.get("max_loading")),
+            base_loading=_float_value(row.get("base_loading")),
+            min_event_idx=label.min_event_idx,
+            max_event_idx=label.max_event_idx,
+            max_abs_event_idx=label.max_abs_event_idx,
+            max_abs_contingency=label.max_abs_contingency,
+            rate_mva=_float_value(row.get("rate_mva")),
+        )
+        aggregates.append(aggregate)
+    return aggregates
+
+
+def _flatten_aggregate_frame(frame):
+    try:
+        import pandas as pd
+
+        is_multi_index = isinstance(frame.columns, pd.MultiIndex)
+    except Exception:
+        is_multi_index = False
+
+    if is_multi_index:
+        frame.columns = [
+            "_".join(str(part) for part in column if str(part))
+            for column in frame.columns
+        ]
+    rename = {
+        "loading_percent_count": "contingency_count",
+        "loading_percent_sum": "sum_loading",
+        "loading_percent_min": "min_loading",
+        "loading_percent_max": "max_loading",
+        "base_loading_max": "base_loading",
+        "overloaded_sum": "overload_count",
+        "rate_mva_first": "rate_mva",
+    }
+    return frame.reset_index().rename(columns=rename)
+
+
+def _records_from_frame(frame) -> list[dict[str, object]]:
+    if hasattr(frame, "to_pandas"):
+        frame = frame.to_pandas()
+    return frame.to_dict(orient="records")
 
 
 def _parse_convergence(path: Path) -> tuple[ParsedTable, ParsedTable]:
@@ -490,6 +744,73 @@ def _normalize_flat_result_row(raw_row: dict[str, str], lookup: dict[str, str]) 
         "ang_from_deg": _float_value(raw_row.get(_column(lookup, ("ang_from_deg",)))),
         "ang_to_deg": _float_value(raw_row.get(_column(lookup, ("ang_to_deg",)))),
     }
+
+
+def _lazy_backend() -> _LazyBackend:
+    requested = _requested_backend()
+    errors: list[str] = []
+    backend_order = ("dask_cudf", "dask") if requested == "auto" else (requested,)
+
+    for backend_name in backend_order:
+        if backend_name == "python":
+            break
+        try:
+            if backend_name == "dask_cudf":
+                import dask_cudf  # type: ignore[import-not-found]
+
+                return _LazyBackend("dask_cudf", dask_cudf)
+            if backend_name == "dask":
+                import dask.dataframe as dd  # type: ignore[import-not-found]
+
+                return _LazyBackend("dask", dd)
+        except Exception as exc:
+            errors.append(f"{backend_name}: {exc}")
+
+    detail = "; ".join(errors) if errors else "backend set to python"
+    raise RuntimeError(detail)
+
+
+def _read_lazy_csv(
+    backend: _LazyBackend,
+    path: Path,
+    *,
+    usecols: list[str] | None = None,
+    blocksize: str,
+):
+    kwargs = {
+        "blocksize": blocksize,
+    }
+    if usecols is not None:
+        kwargs["usecols"] = usecols
+    if backend.name == "dask":
+        kwargs["assume_missing"] = True
+
+    try:
+        return backend.module.read_csv(path, **kwargs)
+    except TypeError:
+        kwargs.pop("blocksize", None)
+        kwargs["chunksize"] = blocksize
+        return backend.module.read_csv(path, **kwargs)
+
+
+def _requested_backend() -> str:
+    value = os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", CSV_FLAT_DEFAULT_BACKEND)
+    value = value.strip().lower().replace("-", "_")
+    if value in {"auto", "dask_cudf", "dask", "python"}:
+        return value
+    return CSV_FLAT_DEFAULT_BACKEND
+
+
+def _dask_blocksize() -> str:
+    return os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_BLOCKSIZE", CSV_FLAT_DEFAULT_BLOCKSIZE).strip() or CSV_FLAT_DEFAULT_BLOCKSIZE
+
+
+def _dask_scheduler() -> str:
+    return os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_SCHEDULER", CSV_FLAT_DEFAULT_SCHEDULER).strip() or CSV_FLAT_DEFAULT_SCHEDULER
+
+
+def _memory_target() -> str:
+    return os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", CSV_FLAT_MEMORY_TARGET).strip() or CSV_FLAT_MEMORY_TARGET
 
 
 def _aggregate_to_pflow_row(aggregate: _BranchAggregate) -> dict[str, object]:
@@ -679,6 +1000,15 @@ def _round(value: float | None) -> float | None:
 
 def _metadata_key(row: dict[str, object]) -> tuple[object, object, str]:
     return (_int_value(row.get("from_bus")), _int_value(row.get("to_bus")), _clean_text(row.get("line_id")))
+
+
+def _flat_row_key(row: dict[str, object]) -> tuple[object, object, str, str]:
+    return (
+        _int_value(row.get("from_bus")),
+        _int_value(row.get("to_bus")),
+        _clean_text(row.get("line_id")),
+        _clean_text(row.get("section")),
+    )
 
 
 def _find_work_file(run_path: Path, file_name: str) -> Path | None:

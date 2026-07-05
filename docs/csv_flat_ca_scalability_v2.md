@@ -26,8 +26,29 @@ GridPACK Workbench now detects and reads these three CSV shapes:
 
 ## How Workbench Uses The Files
 
-The large branch result CSV is streamed. Workbench does not need to hold the
-whole file in memory to build the existing charts and tables.
+The large branch result CSV is processed with a GPU-first backend:
+
+1. Workbench tries `dask-cudf` first. This uses RAPIDS cuDF partitions and runs
+   dataframe operations on the NVIDIA GPU.
+2. If RAPIDS is not installed, Workbench falls back to CPU Dask.
+3. If Dask is not installed or the Dask path fails, Workbench falls back to a
+   Python streaming parser.
+
+Workbench does not hold the whole branch-contingency file in memory to build the
+existing charts and tables. The default CSV partition size is `256MB`, and the
+default memory target for the csv-flat path is `160GB`, leaving headroom below a
+192 GB DGX Spark unified-memory system. These defaults can be changed with:
+
+```bash
+export GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=auto
+export GRIDPACK_WORKBENCH_CSV_FLAT_BLOCKSIZE=256MB
+export GRIDPACK_WORKBENCH_CSV_FLAT_SCHEDULER=single-threaded
+export GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET=160GB
+```
+
+Use `GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=dask_cudf` on DGX Spark when you want
+analysis to fail loudly instead of falling back if RAPIDS is missing. Use
+`python` only for debugging.
 
 For the user-facing analysis, Workbench groups the branch-contingency rows back
 to branch-level summaries:
@@ -66,8 +87,10 @@ large csv-flat result file to:
 run/reports/parquet/<csv-file-name>/
 ```
 
-The conversion uses Dask plus PyArrow with Snappy compression. If those optional
-dependencies are not installed, Workbench still builds the normal charts from
+The conversion also uses the GPU-first backend. On DGX Spark with RAPIDS
+installed, `dask-cudf` reads the CSV in bounded partitions and writes parquet
+with Snappy compression. If RAPIDS is not installed, CPU Dask plus PyArrow is
+used. If Dask is not installed, Workbench still builds the normal charts from
 streamed summaries and records a note in the analysis manifest explaining that
 parquet conversion was skipped.
 
@@ -82,6 +105,11 @@ or install from:
 ```text
 requirements-analysis.txt
 ```
+
+For GPU acceleration on DGX Spark, install RAPIDS packages that match the
+machine's Python and CUDA environment, especially cuDF and dask-cuDF. The
+Workbench code imports them only when available, so non-DGX development machines
+can keep using pandas and CPU Dask.
 
 ## User Workflow
 
