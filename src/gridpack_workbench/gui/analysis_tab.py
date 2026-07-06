@@ -10,7 +10,6 @@ from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -101,8 +100,9 @@ class AnalysisWorker(QThread):
 
 
 class AnalysisTab(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, *, transformer_analysis: bool = False) -> None:
         super().__init__()
+        self.transformer_analysis = transformer_analysis
         self.project: Project | None = None
         self.current_dataset: RunAnalysisDataset | None = None
         self.group_branch_rows: list[dict[str, object]] = []
@@ -139,24 +139,7 @@ class AnalysisTab(QWidget):
         run_row.addWidget(self.analyze_button)
         layout.addLayout(run_row)
 
-        transformer_row = QHBoxLayout()
-        self.include_two_winding_transformers = QCheckBox("Include two-winding transformer branches")
-        self.include_two_winding_transformers.setToolTip(
-            "Include pflow rows created from two-winding transformer records in utilization charts."
-        )
-        self.include_three_winding_transformers = QCheckBox("Include three-winding transformer branches")
-        self.include_three_winding_transformers.setToolTip(
-            "Include synthetic pflow legs created from three-winding transformer records in utilization charts."
-        )
-        self.include_two_winding_transformers.toggled.connect(self._on_utilization_scope_changed)
-        self.include_three_winding_transformers.toggled.connect(self._on_utilization_scope_changed)
-        transformer_row.addWidget(QLabel("Utilization"))
-        transformer_row.addWidget(self.include_two_winding_transformers)
-        transformer_row.addWidget(self.include_three_winding_transformers)
-        transformer_row.addStretch()
-        layout.addLayout(transformer_row)
-
-        self.status_label = QLabel("Select a completed run and generate the three analysis graphs.")
+        self.status_label = QLabel(f"Select a completed run and generate the three {self._analysis_noun()} graphs.")
         self.status_label.setObjectName("mutedLabel")
         layout.addWidget(self.status_label)
 
@@ -254,8 +237,6 @@ class AnalysisTab(QWidget):
         self.run_combo.setEnabled(enabled)
         self.refresh_button.setEnabled(enabled)
         self.analyze_button.setEnabled(enabled)
-        self.include_two_winding_transformers.setEnabled(enabled)
-        self.include_three_winding_transformers.setEnabled(enabled)
 
     def _build_chart_area(self, parent_layout: QVBoxLayout) -> None:
         self.control_area_sort = self._sort_combo(
@@ -268,7 +249,7 @@ class AnalysisTab(QWidget):
         )
         self.voltage_group_sort = self._sort_combo(
             [
-                ("Voltage order", "voltage_order"),
+                (self._category_order_sort_label(), "voltage_order"),
                 ("Highest mean max", "value_desc"),
                 ("Lowest mean max", "value_asc"),
             ],
@@ -284,15 +265,15 @@ class AnalysisTab(QWidget):
         )
 
         self.control_area_panel, self.control_area_figure, self.control_area_canvas = self._chart_panel(
-            "Mean Max Line Utilization by Control Area (100 kV and Above)",
+            f"Mean Max {self._entity_title()} Utilization by Control Area (100 kV and Above)",
             self.control_area_sort,
         )
         self.voltage_group_panel, self.voltage_group_figure, self.voltage_group_canvas = self._chart_panel(
-            "Mean Max Utilization by Voltage Group Under N-1 Contingencies",
+            self._category_panel_title(),
             self.voltage_group_sort,
         )
         self.line_panel, self.line_figure, self.line_canvas = self._chart_panel(
-            "Maximum Observed Utilization by Voltage Group",
+            f"Maximum Observed {self._entity_title()} Utilization",
             self.line_sort,
         )
 
@@ -383,20 +364,20 @@ class AnalysisTab(QWidget):
         self._draw_empty_chart(
             self.control_area_figure,
             self.control_area_canvas,
-            "Mean Max Line Utilization by Control Area",
-            "Generate graphs to view control-area utilization.",
+            f"Mean Max {self._entity_title()} Utilization by Control Area",
+            f"Generate graphs to view control-area {self._entity_noun()} utilization.",
         )
         self._draw_empty_chart(
             self.voltage_group_figure,
             self.voltage_group_canvas,
-            "Mean Max Utilization by Voltage Group",
-            "Generate graphs to view N-1 voltage-group utilization.",
+            self._category_panel_title(),
+            f"Generate graphs to view N-1 {self._category_noun()} utilization.",
         )
         self._draw_empty_chart(
             self.line_figure,
             self.line_canvas,
-            "Maximum Observed Utilization by Voltage Group",
-            "Generate graphs to view sorted maximum line utilization.",
+            f"Maximum Observed {self._entity_title()} Utilization",
+            f"Generate graphs to view sorted maximum {self._entity_noun()} utilization.",
         )
 
     def _render_charts(self) -> None:
@@ -426,10 +407,14 @@ class AnalysisTab(QWidget):
         self.group_branch_rows = list(self.max_line_rows)
 
     def _utilization_branch_options(self) -> UtilizationBranchOptions:
-        return UtilizationBranchOptions(
-            include_two_winding_transformers=self.include_two_winding_transformers.isChecked(),
-            include_three_winding_transformers=self.include_three_winding_transformers.isChecked(),
-        )
+        if self.transformer_analysis:
+            return UtilizationBranchOptions(
+                include_nontransformer_branches=False,
+                include_two_winding_transformers=True,
+                include_three_winding_transformers=True,
+                include_transformer_equivalents=True,
+            )
+        return UtilizationBranchOptions()
 
     def _update_generated_status(self) -> None:
         runtime_status = _csv_flat_runtime_status(self.current_dataset)
@@ -437,8 +422,8 @@ class AnalysisTab(QWidget):
         self.status_label.setText(
             "Generated "
             f"{len(self.control_area_rows)} control-area groups, "
-            f"{len(self.voltage_group_rows)} voltage groups, and "
-            f"{len(self.line_rows)} line points "
+            f"{len(self.voltage_group_rows)} {self._category_plural()}, and "
+            f"{len(self.line_rows)} {self._entity_plural()} "
             f"({self._utilization_scope_label()})."
             f"{runtime_suffix}"
         )
@@ -520,7 +505,7 @@ class AnalysisTab(QWidget):
         axis = figure.add_subplot(111)
         if not rows:
             self.control_area_click_items = []
-            self._draw_empty_axis(axis, "No >=100 kV line utilization data was available.")
+            self._draw_empty_axis(axis, f"No >=100 kV {self._entity_noun()} utilization data was available.")
             canvas.draw_idle()
             return
 
@@ -545,7 +530,7 @@ class AnalysisTab(QWidget):
         max_value = max(values) if values else 0
         axis.set_xlim(0, max(35, max_value * 1.22))
         axis.axvline(30, color="#d83b3b", linestyle="--", linewidth=1, label="30% threshold")
-        axis.set_xlabel("Mean max line utilization (%)")
+        axis.set_xlabel(f"Mean max {self._entity_noun()} utilization (%)")
         axis.set_ylabel("Control area")
         axis.set_title(self._control_area_title())
         axis.margins(y=0.01)
@@ -583,7 +568,7 @@ class AnalysisTab(QWidget):
         axis = figure.add_subplot(111)
         if not rows:
             self.voltage_group_click_items = []
-            self._draw_empty_axis(axis, "No N-1 voltage-group utilization data matched the selected areas.")
+            self._draw_empty_axis(axis, f"No N-1 {self._category_noun()} utilization data matched the selected areas.")
             canvas.draw_idle()
             return
 
@@ -616,7 +601,7 @@ class AnalysisTab(QWidget):
         figure.clear()
         axis = figure.add_subplot(111)
         if not rows:
-            self._draw_empty_axis(axis, "No line maximum-utilization data matched the selected filters.")
+            self._draw_empty_axis(axis, f"No {self._entity_noun()} maximum-utilization data matched the selected filters.")
             canvas.draw_idle()
             return
 
@@ -717,36 +702,35 @@ class AnalysisTab(QWidget):
 
     def _control_area_title(self) -> str:
         if not self.selected_control_areas:
-            return "Mean Max Line Utilization by Control Area"
+            return f"Mean Max {self._entity_title()} Utilization by Control Area"
         return (
-            "Mean Max Line Utilization by Control Area "
+            f"Mean Max {self._entity_title()} Utilization by Control Area "
             f"({self._selection_phrase(self.selected_control_areas, 'areas')} selected)"
         )
 
     def _voltage_group_title(self) -> str:
-        return f"Mean Max Branch Loading by Voltage Group ({self._area_scope_label()})"
+        return f"Mean Max {self._entity_title()} Loading by {self._category_title()} ({self._area_scope_label()})"
 
     def _voltage_group_x_label(self) -> str:
-        return "Voltage groups for selected control areas" if self.selected_control_areas else "Voltage groups"
+        if self.selected_control_areas:
+            return f"{self._category_plural().capitalize()} for selected control areas"
+        return self._category_plural().capitalize()
 
     def _voltage_group_y_label(self) -> str:
         return "Mean max loading in selected areas (%)" if self.selected_control_areas else "Mean max loading (%)"
 
     def _line_title(self) -> str:
-        return f"Maximum Observed Utilization ({self._voltage_scope_label()}, {self._area_scope_label()})"
+        return f"Maximum Observed {self._entity_title()} Utilization ({self._voltage_scope_label()}, {self._area_scope_label()})"
 
     def _line_x_label(self) -> str:
         if self.selected_voltage_groups:
-            return "Lines in selected voltage groups, sorted lowest to highest"
-        return "Lines in visible voltage groups, sorted lowest to highest"
+            return f"{self._entity_plural().capitalize()} in selected {self._category_plural()}, sorted lowest to highest"
+        return f"{self._entity_plural().capitalize()} in visible {self._category_plural()}, sorted lowest to highest"
 
     def _utilization_scope_label(self) -> str:
-        included = ["non-transformer branches"]
-        if self.include_two_winding_transformers.isChecked():
-            included.append("two-winding transformers")
-        if self.include_three_winding_transformers.isChecked():
-            included.append("three-winding transformers")
-        return "including " + ", ".join(included)
+        if self.transformer_analysis:
+            return "transformers only"
+        return "non-transformer branches only"
 
     def _area_scope_label(self) -> str:
         if not self.selected_control_areas:
@@ -755,8 +739,35 @@ class AnalysisTab(QWidget):
 
     def _voltage_scope_label(self) -> str:
         if not self.selected_voltage_groups:
-            return "all visible voltage groups"
-        return self._selection_phrase(self.selected_voltage_groups, "voltage groups")
+            return f"all visible {self._category_plural()}"
+        return self._selection_phrase(self.selected_voltage_groups, self._category_plural())
+
+    def _analysis_noun(self) -> str:
+        return "transformer analysis" if self.transformer_analysis else "branch analysis"
+
+    def _entity_noun(self) -> str:
+        return "transformer" if self.transformer_analysis else "branch"
+
+    def _entity_plural(self) -> str:
+        return "transformers" if self.transformer_analysis else "branches"
+
+    def _entity_title(self) -> str:
+        return "Transformer" if self.transformer_analysis else "Branch"
+
+    def _category_noun(self) -> str:
+        return "step-direction" if self.transformer_analysis else "voltage-group"
+
+    def _category_plural(self) -> str:
+        return "step directions" if self.transformer_analysis else "voltage groups"
+
+    def _category_title(self) -> str:
+        return "Step Direction" if self.transformer_analysis else "Voltage Group"
+
+    def _category_panel_title(self) -> str:
+        return f"Mean Max Utilization by {self._category_title()} Under N-1 Contingencies"
+
+    def _category_order_sort_label(self) -> str:
+        return "Step direction" if self.transformer_analysis else "Voltage order"
 
     def _selection_phrase(self, values: set[str], plural_noun: str) -> str:
         ordered = sorted(values)
@@ -768,8 +779,8 @@ class AnalysisTab(QWidget):
         return (
             f"{row.get('control_area', 'unknown')}\n"
             f"Group mean max: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
-            f"Lines: {row.get('line_count', 0)}\n"
-            f"Line max range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
+            f"{self._entity_plural().capitalize()}: {row.get('line_count', 0)}\n"
+            f"{self._entity_title()} max range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
             f"{numeric_value(row.get('max_utilization_pct')):.1f}%"
         )
 
@@ -777,8 +788,8 @@ class AnalysisTab(QWidget):
         return (
             f"{row.get('voltage_group', 'unknown')}\n"
             f"Group mean max: {numeric_value(row.get('average_utilization_pct')):.1f}%\n"
-            f"Lines: {row.get('line_count', 0)}\n"
-            f"Line max range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
+            f"{self._entity_plural().capitalize()}: {row.get('line_count', 0)}\n"
+            f"{self._entity_title()} max range: {numeric_value(row.get('min_utilization_pct')):.1f}% - "
             f"{numeric_value(row.get('max_utilization_pct')):.1f}%"
         )
 
@@ -790,7 +801,7 @@ class AnalysisTab(QWidget):
             f"{row.get('line_label', '')}\n"
             f"Worst observed ({source}): {numeric_value(row.get('max_utilization_pct')):.1f}%\n"
             f"Contingency: {contingency}\n"
-            f"Voltage group: {row.get('voltage_group', 'unknown')}\n"
+            f"{self._category_title()}: {row.get('voltage_group', 'unknown')}\n"
             f"Control area: {row.get('control_area', 'unknown')}\n"
             f"Voltage: {voltage}"
         )

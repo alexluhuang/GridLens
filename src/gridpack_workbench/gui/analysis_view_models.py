@@ -8,7 +8,11 @@ from typing import Protocol
 
 from gridpack_workbench.analysis.enrichment import voltage_class
 from gridpack_workbench.analysis.parser_models import ParsedTable
-from gridpack_workbench.analysis.utilization import UtilizationBranchOptions, is_utilizable_branch
+from gridpack_workbench.analysis.utilization import (
+    UtilizationBranchOptions,
+    is_transformer_branch_type,
+    is_utilizable_branch,
+)
 
 
 DEFAULT_DISTRIBUTION_VARIABLES = frozenset(
@@ -59,6 +63,12 @@ VOLTAGE_GROUP_ORDER = {
     "345-499 kV": 3,
     "500+ kV": 4,
     "unknown": 99,
+}
+TRANSFORMER_STEP_ORDER = {
+    "Step-up transformer": 0,
+    "Step-down transformer": 1,
+    "Same-voltage transformer": 2,
+    "Transformer voltage unknown": 99,
 }
 BRANCH_KEY_COLUMNS = ("from_bus", "to_bus", "line_id", "section")
 
@@ -142,7 +152,7 @@ def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) ->
         buckets.setdefault(group, []).append(float(row["utilization_pct"]))
 
     summaries = _group_average_rows(buckets, "voltage_group")
-    summaries.sort(key=lambda row: (VOLTAGE_GROUP_ORDER.get(str(row["voltage_group"]), 98), str(row["voltage_group"])))
+    summaries.sort(key=lambda row: _voltage_group_sort_key(str(row["voltage_group"])))
     return summaries
 
 
@@ -186,7 +196,7 @@ def _line_utilization_row(
     duplicate_area_names: set[str],
     utilization_source: str,
 ) -> dict[str, object]:
-    voltage_group = str(context.get("voltage_class") or voltage_class(_line_voltage_kv(context)) or "unknown")
+    voltage_group = _utilization_voltage_group(context)
     return {
         "line_label": _line_label(context),
         "from_bus": context.get("from_bus", ""),
@@ -376,6 +386,28 @@ def _is_utilizable_branch(
     branch_options: UtilizationBranchOptions | None = None,
 ) -> bool:
     return is_utilizable_branch(row, branch_options)
+
+
+def _utilization_voltage_group(row: Mapping[str, object]) -> str:
+    if is_transformer_branch_type(row.get("raw_branch_type")):
+        return _transformer_step_group(row)
+    return str(row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
+
+
+def _transformer_step_group(row: Mapping[str, object]) -> str:
+    from_kv = _finite_float(row.get("from_base_kv"))
+    to_kv = _finite_float(row.get("to_base_kv"))
+    if from_kv is None or to_kv is None or from_kv <= 0 or to_kv <= 0:
+        return "Transformer voltage unknown"
+    if abs(from_kv - to_kv) <= 0.5:
+        return "Same-voltage transformer"
+    return "Step-up transformer" if to_kv > from_kv else "Step-down transformer"
+
+
+def _voltage_group_sort_key(group: str) -> tuple[int, str]:
+    if group in TRANSFORMER_STEP_ORDER:
+        return (TRANSFORMER_STEP_ORDER[group], group)
+    return (VOLTAGE_GROUP_ORDER.get(group, 98), group)
 
 
 def _max_flow_contingency(row: Mapping[str, object]) -> object:

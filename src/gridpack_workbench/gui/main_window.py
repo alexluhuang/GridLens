@@ -59,18 +59,22 @@ class MainWindow(QMainWindow):
         self.project_tab = ProjectTab(self.settings)
         self.run_tab = RunTab(self.settings)
         self.results_tab = ResultsTab()
-        self.analysis_tab = AnalysisTab()
+        self.branch_analysis_tab = AnalysisTab()
+        self.transformer_analysis_tab = AnalysisTab(transformer_analysis=True)
+        self.analysis_tab = self.branch_analysis_tab
         self.help_tab = HelpTab()
 
         self.tabs.addTab(self.project_tab, "Project")
         self.tabs.addTab(self.run_tab, "Run")
         self.tabs.addTab(self.results_tab, "Results")
-        self.tabs.addTab(self.analysis_tab, "Analysis")
+        self.tabs.addTab(self.branch_analysis_tab, "Branch Analysis")
+        self.tabs.addTab(self.transformer_analysis_tab, "Transformer Analysis")
         self.tabs.addTab(self.help_tab, "Help")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.run_tab.run_finished.connect(self.on_run_finished)
-        self.results_tab.run_selected.connect(self.analysis_tab.select_run)
+        self.results_tab.run_selected.connect(self.branch_analysis_tab.select_run)
+        self.results_tab.run_selected.connect(self.transformer_analysis_tab.select_run)
 
         self.statusBar().showMessage("Create or open a project to begin.")
 
@@ -79,14 +83,16 @@ class MainWindow(QMainWindow):
         self.project_data = project_data
         self.run_tab.set_project(project, project_data)
         self.results_tab.set_project(project)
-        self.analysis_tab.set_project(project)
+        self.branch_analysis_tab.set_project(project)
+        self.transformer_analysis_tab.set_project(project)
         self.context_label.setText(f"{project_data.name}")
         self.statusBar().showMessage(f"Project loaded: {project_data.name}")
 
     def on_run_finished(self, run_dir: object) -> None:
         path = Path(str(run_dir))
         self.results_tab.refresh_runs(select_run=path)
-        self.analysis_tab.refresh_runs(select_run=path)
+        self.branch_analysis_tab.refresh_runs(select_run=path)
+        self.transformer_analysis_tab.refresh_runs(select_run=path)
         self.tabs.setCurrentWidget(self.results_tab)
         project_name = self.project_data.name if self.project_data else "Project"
         self.context_label.setText(f"{project_name} · latest run {path.name}")

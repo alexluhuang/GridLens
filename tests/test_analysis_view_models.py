@@ -359,6 +359,66 @@ def test_line_utilization_can_include_transformer_derived_branches() -> None:
     assert [row["utilization_pct"] for row in average_rows] == [50.0, 40.0]
 
 
+def test_transformer_utilization_groups_by_step_direction() -> None:
+    tables = {
+        "branch_metadata": ParsedTable(
+            name="branch_metadata",
+            source_file="training.raw",
+            columns=[],
+            rows=[
+                _branch(
+                    101,
+                    102,
+                    "1",
+                    115.0,
+                    230.0,
+                    100.0,
+                    "North",
+                    "100-229 kV",
+                    ratec=100.0,
+                    raw_branch_type="two_winding_transformer_branch",
+                ),
+                _branch(
+                    201,
+                    202,
+                    "1",
+                    345.0,
+                    138.0,
+                    100.0,
+                    "South",
+                    "345-499 kV",
+                    ratec=100.0,
+                    raw_branch_type="two_winding_transformer_branch",
+                ),
+                _branch(301, 302, "1", 230.0, 230.0, 100.0, "Branch", "230-344 kV", ratec=100.0),
+            ],
+        ),
+        "pflow_mm": ParsedTable(
+            name="pflow_mm",
+            source_file="pflow_mm.txt",
+            columns=[],
+            rows=[
+                _pflow_mm(101, 102, "1", -60.0, 80.0, -100.0, 100.0, 1, 2),
+                _pflow_mm(201, 202, "1", -70.0, 90.0, -100.0, 100.0, 3, 4),
+                _pflow_mm(301, 302, "1", -95.0, 95.0, -100.0, 100.0, 5, 6),
+            ],
+        ),
+    }
+
+    rows = max_line_utilization_rows(
+        tables,
+        UtilizationBranchOptions(
+            include_nontransformer_branches=False,
+            include_two_winding_transformers=True,
+            include_three_winding_transformers=True,
+        ),
+    )
+    grouped = summarize_voltage_group_utilization(rows)
+
+    assert [row["voltage_group"] for row in rows] == ["Step-up transformer", "Step-down transformer"]
+    assert [row["voltage_group"] for row in grouped] == ["Step-up transformer", "Step-down transformer"]
+
+
 def test_metric_helpers_tolerate_unexpected_shapes() -> None:
     metrics = {
         "success": "not-a-dict",
