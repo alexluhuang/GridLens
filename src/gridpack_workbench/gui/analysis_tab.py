@@ -35,7 +35,11 @@ except Exception:  # pragma: no cover - exercised only on systems without matplo
     NavigationToolbar = None  # type: ignore[assignment]
     Figure = None  # type: ignore[assignment]
 
-from gridpack_workbench.analysis.csv_flat import CSV_FLAT_RESULTS_TABLE
+from gridpack_workbench.analysis.csv_flat import (
+    CSV_FLAT_ALLOW_CPU_DASK_ENV,
+    CSV_FLAT_RESULTS_TABLE,
+    cpu_dask_fallback_warning,
+)
 from gridpack_workbench.analysis.dataset import RunAnalysisDataset
 from gridpack_workbench.analysis.interactive import (
     AnalysisBuildResult,
@@ -212,6 +216,10 @@ class AnalysisTab(QWidget):
         if not run_dir:
             QMessageBox.warning(self, "No run selected", "Select a completed run first.")
             return
+        cpu_dask_warning = cpu_dask_fallback_warning(run_dir)
+        if cpu_dask_warning:
+            QMessageBox.warning(self, "CPU Dask fallback", cpu_dask_warning)
+            os.environ[CSV_FLAT_ALLOW_CPU_DASK_ENV] = "1"
         self.status_label.setText("Parsing GridPACK outputs and RAW metadata in the background...")
         self._set_analysis_controls_enabled(False)
         self.analysis_worker = AnalysisWorker(run_dir, self._utilization_branch_options())

@@ -26,7 +26,10 @@ CSV_FLAT_MEMORY_TARGET = "160GB"
 CSV_FLAT_DEFAULT_CLUSTER = "auto"
 CSV_FLAT_DEFAULT_DASK_TEMP_DIR = "/tmp/gridpack-workbench-dask"
 CSV_FLAT_DEFAULT_DEVICE_MEMORY_LIMIT = "auto"
+CSV_FLAT_ALLOW_CPU_DASK_ENV = "GRIDPACK_WORKBENCH_ALLOW_CPU_DASK"
+CSV_FLAT_CUDF_MEMORY_FRACTION = 0.75
 CSV_FLAT_MEMORY_HEADROOM = 0.95
+CSV_FLAT_MIN_BLOCKSIZE_BYTES = 64 * 1024**2
 
 _EVENT_ALIASES = ("event_idx", "event_index", "contingency_index")
 _CONTINGENCY_ALIASES = ("contingency", "contingency_name", "event")
@@ -219,10 +222,11 @@ def parse_csv_flat_outputs(run_dir: str | Path) -> dict[str, ParsedTable]:
     flat_path = _find_matching_csv(csv_files, _is_flat_results_header, preferred_terms=("flat", "result"))
     convergence_path = _find_matching_csv(csv_files, _is_convergence_header, preferred_terms=("convergence",))
     bus_path = _find_matching_csv(csv_files, _is_bus_metadata_header, preferred_terms=("bus",))
+    backend_decision_path = _largest_existing_path(path for path in (flat_path, convergence_path, bus_path) if path)
 
     tables: dict[str, ParsedTable] = {}
     if flat_path:
-        tables.update(_parse_flat_results(flat_path))
+        tables.update(_parse_flat_results(flat_path, backend_decision_path))
     if convergence_path:
         convergence, success = _parse_convergence(convergence_path)
         tables[CSV_FLAT_CONVERGENCE_TABLE] = convergence
@@ -252,6 +256,31 @@ def parse_csv_flat_success(run_dir: str | Path) -> ParsedTable | None:
     if not convergence_path:
         return None
     return _parse_convergence(convergence_path)[1]
+
+
+def cpu_dask_fallback_warning(run_dir: str | Path) -> str:
+    """Return the warning text required before the UI allows CPU Dask fallback."""
+
+    if _requested_backend() not in {"auto", "dask"}:
+        return ""
+    work_dir = Path(run_dir) / "work"
+    if not work_dir.exists():
+        return ""
+    csv_files = sorted(path for path in work_dir.rglob("*.csv") if path.is_file())
+    if not csv_files:
+        return ""
+    flat_path = _find_matching_csv(csv_files, _is_flat_results_header, preferred_terms=("flat", "result"))
+    if not flat_path:
+        return ""
+    if not _gpu_backends_unavailable() or not _backend_importable("dask"):
+        return ""
+    largest = _largest_existing_path(csv_files) or flat_path
+    size = _format_file_size(largest.stat().st_size)
+    return (
+        "RAPIDS cuDF and dask-cuDF are not available in this Python environment, so GridPACK Workbench "
+        f"will use CPU Dask for CSV-flat graph analysis. Largest CSV detected: {largest.name} ({size}). "
+        "GPU acceleration will not be used for this analysis run."
+    )
 
 
 def merge_csv_flat_branch_metadata(raw_table: ParsedTable, csv_flat_table: ParsedTable | None) -> ParsedTable:
@@ -314,12 +343,12 @@ def convert_csv_to_parquet(csv_path: str | Path, output_dir: str | Path, blocksi
 
     source = Path(csv_path).expanduser().resolve()
     destination = Path(output_dir).expanduser().resolve()
-    blocksize = blocksize or _dask_blocksize()
+    blocksize = blocksize or _dask_blocksize(source)
     if destination.exists() and any(destination.rglob("*.parquet")):
         return ConversionResult(destination, backend="existing")
 
     try:
-        backend = _lazy_backend()
+        backend = _lazy_backend(source)
     except Exception as exc:  # pragma: no cover - depends on optional local install.
         return ConversionResult(
             None,
@@ -344,9 +373,9 @@ def convert_csv_to_parquet(csv_path: str | Path, output_dir: str | Path, blocksi
     return ConversionResult(destination, backend=backend.name)
 
 
-def _parse_flat_results(path: Path) -> dict[str, ParsedTable]:
+def _parse_flat_results(path: Path, backend_decision_path: Path | None = None) -> dict[str, ParsedTable]:
     lookup = _column_lookup(_header(path))
-    accelerated, fallback_note = _parse_flat_results_accelerated(path, lookup)
+    accelerated, fallback_note = _parse_flat_results_accelerated(path, lookup, backend_decision_path or path)
     if accelerated:
         return accelerated
 
@@ -403,9 +432,13 @@ def _parse_flat_results_streaming(
     return _flat_tables_from_aggregates(path, preview_rows, aggregates.values(), notes)
 
 
-def _parse_flat_results_accelerated(path: Path, lookup: dict[str, str]) -> tuple[dict[str, ParsedTable] | None, str]:
+def _parse_flat_results_accelerated(
+    path: Path,
+    lookup: dict[str, str],
+    backend_decision_path: Path,
+) -> tuple[dict[str, ParsedTable] | None, str]:
     try:
-        backend = _lazy_backend()
+        backend = _lazy_backend(backend_decision_path)
     except Exception as exc:
         if _gpu_backend_required():
             raise RuntimeError(f"GPU csv_flat aggregation was required but {_requested_backend()} could not be used: {exc}") from exc
@@ -423,7 +456,7 @@ def _parse_flat_results_accelerated(path: Path, lookup: dict[str, str]) -> tuple
             runtime_note = ""
         else:
             with _dask_runtime(backend) as runtime:
-                data = _normalized_lazy_flat_frame(path, lookup, backend)
+                data = _normalized_lazy_flat_frame(path, lookup, backend, backend_decision_path)
                 preview_rows = _preview_rows(path, lookup)
                 keys = ["from_bus", "to_bus", "line_id", "section"]
                 grouped = _flat_grouped_frame(data, keys)
@@ -491,9 +524,14 @@ def _preview_rows(
     return preview_rows
 
 
-def _normalized_lazy_flat_frame(path: Path, lookup: dict[str, str], backend: _LazyBackend):
+def _normalized_lazy_flat_frame(
+    path: Path,
+    lookup: dict[str, str],
+    backend: _LazyBackend,
+    backend_decision_path: Path | None = None,
+):
     columns = _flat_lazy_columns(lookup)
-    data = _read_lazy_csv(backend, path, usecols=list(columns), blocksize=_dask_blocksize())
+    data = _read_lazy_csv(backend, path, usecols=list(columns), blocksize=_dask_blocksize(backend_decision_path or path))
     data = data.rename(columns=columns)
     return _normalize_flat_frame_columns(data)
 
@@ -704,7 +742,7 @@ def _backend_aggregation_note(path: Path, backend: _LazyBackend) -> str:
         return f"{path.name} was aggregated with cuDF on one GPU."
     return (
         f"{path.name} was aggregated with {backend.name}; partitions are bounded by "
-        f"{_dask_blocksize()} and the memory target is {_memory_target()}."
+        f"{_dask_blocksize(path)} and the memory target is {_memory_target()}."
     )
 
 
@@ -926,14 +964,21 @@ def _normalize_flat_result_row(raw_row: dict[str, str], lookup: dict[str, str]) 
     }
 
 
-def _lazy_backend() -> _LazyBackend:
+def _lazy_backend(csv_path: Path | None = None) -> _LazyBackend:
     requested = _requested_backend()
     errors: list[str] = []
-    backend_order = ("cudf", "dask_cudf", "dask") if requested == "auto" else (requested,)
+    backend_order = _auto_backend_order(csv_path) if requested == "auto" else (requested,)
 
     for backend_name in backend_order:
         if backend_name == "python":
             break
+        if backend_name == "dask":
+            if not _cpu_dask_allowed():
+                errors.append("dask: CPU Dask fallback requires user acknowledgement")
+                continue
+            if not _gpu_backends_unavailable():
+                errors.append("dask: CPU Dask fallback is used only when cuDF and dask-cuDF are unavailable")
+                continue
         try:
             if backend_name == "dask_cudf":
                 import dask_cudf  # type: ignore[import-not-found]
@@ -952,6 +997,61 @@ def _lazy_backend() -> _LazyBackend:
 
     detail = "; ".join(errors) if errors else "backend set to python"
     raise RuntimeError(detail)
+
+
+def _auto_backend_order(csv_path: Path | None = None) -> tuple[str, ...]:
+    if _should_partition_with_dask_cudf(csv_path):
+        return ("dask_cudf", "dask")
+    return ("cudf", "dask_cudf", "dask")
+
+
+def _largest_existing_path(paths: Iterable[Path]) -> Path | None:
+    largest_path = None
+    largest_size = -1
+    for path in paths:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > largest_size:
+            largest_path = path
+            largest_size = size
+    return largest_path
+
+
+def _should_partition_with_dask_cudf(csv_path: Path | None) -> bool:
+    available = _available_memory_limit()
+    if csv_path is None or available is None:
+        return False
+    try:
+        size = csv_path.stat().st_size
+    except OSError:
+        return False
+    return size > int(available * CSV_FLAT_CUDF_MEMORY_FRACTION)
+
+
+def _cpu_dask_allowed() -> bool:
+    value = os.environ.get(CSV_FLAT_ALLOW_CPU_DASK_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _gpu_backends_unavailable() -> bool:
+    return not _backend_importable("cudf") and not _backend_importable("dask_cudf")
+
+
+def _backend_importable(backend_name: str) -> bool:
+    try:
+        if backend_name == "cudf":
+            import cudf  # type: ignore[import-not-found]  # noqa: F401
+        elif backend_name == "dask_cudf":
+            import dask_cudf  # type: ignore[import-not-found]  # noqa: F401
+        elif backend_name == "dask":
+            import dask.dataframe  # type: ignore[import-not-found]  # noqa: F401
+        else:
+            return False
+    except Exception:
+        return False
+    return True
 
 
 def _read_lazy_csv(
@@ -1001,8 +1101,18 @@ def _gpu_backend_required() -> bool:
     return _requested_backend() in {"dask_cudf", "cudf"}
 
 
-def _dask_blocksize() -> str:
-    return os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_BLOCKSIZE", CSV_FLAT_DEFAULT_BLOCKSIZE).strip() or CSV_FLAT_DEFAULT_BLOCKSIZE
+def _dask_blocksize(csv_path: Path | None = None) -> str:
+    explicit = os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_BLOCKSIZE", "").strip()
+    if explicit:
+        return explicit
+    if csv_path is None or not _should_partition_with_dask_cudf(csv_path):
+        return CSV_FLAT_DEFAULT_BLOCKSIZE
+    budget = _memory_target_bytes()
+    if budget is None:
+        return CSV_FLAT_DEFAULT_BLOCKSIZE
+    default_bytes = _parse_memory_bytes(CSV_FLAT_DEFAULT_BLOCKSIZE) or 256 * 1024**2
+    blocksize = max(CSV_FLAT_MIN_BLOCKSIZE_BYTES, min(default_bytes, budget // 16))
+    return _format_memory_target(blocksize)
 
 
 def _dask_scheduler() -> str:
@@ -1012,10 +1122,33 @@ def _dask_scheduler() -> str:
 def _memory_target() -> str:
     requested = os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", CSV_FLAT_MEMORY_TARGET).strip() or CSV_FLAT_MEMORY_TARGET
     requested_bytes = _parse_memory_bytes(requested)
-    system_limit = _distributed_memory_limit()
-    if requested_bytes is None or system_limit is None or requested_bytes <= system_limit:
+    available_limit = _available_memory_limit()
+    if requested_bytes is None or available_limit is None or requested_bytes <= int(available_limit * CSV_FLAT_MEMORY_HEADROOM):
         return requested
-    return _format_memory_target(int(system_limit * CSV_FLAT_MEMORY_HEADROOM))
+    return _format_memory_target(int(available_limit * CSV_FLAT_MEMORY_HEADROOM))
+
+
+def _memory_target_bytes() -> int | None:
+    return _parse_memory_bytes(_memory_target())
+
+
+def _available_memory_limit() -> int | None:
+    proc_available = _proc_mem_available()
+    distributed_limit = _distributed_memory_limit()
+    candidates = [value for value in (proc_available, distributed_limit) if value is not None and value > 0]
+    return min(candidates) if candidates else None
+
+
+def _proc_mem_available() -> int | None:
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(parts[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 def _distributed_memory_limit() -> int | None:
@@ -1063,6 +1196,16 @@ def _format_memory_target(value: int) -> str:
     if value >= 1024**3:
         return f"{max(value // 1024**3, 1)}GiB"
     return f"{max(value // 1024**2, 1)}MiB"
+
+
+def _format_file_size(value: int) -> str:
+    if value >= 1024**3:
+        return f"{value / 1024**3:.2f} GiB"
+    if value >= 1024**2:
+        return f"{value / 1024**2:.2f} MiB"
+    if value >= 1024:
+        return f"{value / 1024:.2f} KiB"
+    return f"{value} bytes"
 
 
 def _dask_cluster_mode() -> str:
@@ -1302,11 +1445,13 @@ def _dedupe(values: Iterable[str]) -> list[str]:
 
 __all__ = [
     "CSV_FLAT_BRANCH_TABLE",
+    "CSV_FLAT_ALLOW_CPU_DASK_ENV",
     "CSV_FLAT_BUS_TABLE",
     "CSV_FLAT_CONVERGENCE_TABLE",
     "CSV_FLAT_RESULTS_TABLE",
     "ConversionResult",
     "convert_csv_to_parquet",
+    "cpu_dask_fallback_warning",
     "ensure_csv_flat_parquet",
     "merge_csv_flat_branch_metadata",
     "parse_csv_flat_outputs",

@@ -132,6 +132,15 @@ def test_csv_flat_accelerated_backend_uses_absolute_max_loading(tmp_path, monkey
         encoding="utf-8",
     )
     monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask")
+    monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"cudf", "dask_cudf"}:
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
 
     tables = parse_all_output_tables(run_dir)
 
@@ -171,6 +180,55 @@ def test_csv_flat_auto_uses_dask_cudf_before_cpu_dask(monkeypatch) -> None:
 
     assert backend.name == "dask_cudf"
     assert backend.module is fake_dask_cudf
+
+
+def test_csv_flat_auto_uses_cudf_for_csv_below_memory_threshold(tmp_path, monkeypatch) -> None:
+    csv_path = tmp_path / "small.csv"
+    csv_path.write_bytes(b"x" * 74)
+    monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 100)
+
+    assert csv_flat._auto_backend_order(csv_path) == ("cudf", "dask_cudf", "dask")
+
+
+def test_csv_flat_auto_uses_dask_cudf_for_csv_above_memory_threshold(tmp_path, monkeypatch) -> None:
+    csv_path = tmp_path / "large.csv"
+    csv_path.write_bytes(b"x" * 76)
+    monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 100)
+
+    assert csv_flat._auto_backend_order(csv_path) == ("dask_cudf", "dask")
+
+
+def test_csv_flat_auto_blocks_cpu_dask_without_warning_acknowledgement(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"cudf", "dask_cudf"}:
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.delenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, raising=False)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+
+    with pytest.raises(RuntimeError, match="user acknowledgement"):
+        csv_flat._lazy_backend()
+
+
+def test_csv_flat_auto_allows_cpu_dask_after_warning_acknowledgement(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"cudf", "dask_cudf"}:
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+
+    backend = csv_flat._lazy_backend()
+
+    assert backend.name == "dask"
 
 
 def test_csv_flat_forced_dask_cudf_does_not_silently_use_cpu_dask(monkeypatch) -> None:
@@ -284,16 +342,29 @@ def test_cuda_cluster_kwargs_allows_explicit_device_memory_limit(monkeypatch) ->
 
 def test_memory_target_is_capped_to_visible_system_limit(monkeypatch) -> None:
     monkeypatch.delenv("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", raising=False)
-    monkeypatch.setattr(csv_flat, "_distributed_memory_limit", lambda: 121 * 1024**3)
+    monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 121 * 1024**3)
 
     assert csv_flat._memory_target() == "114GiB"
 
 
 def test_memory_target_preserves_lower_explicit_limit(monkeypatch) -> None:
     monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", "96GB")
-    monkeypatch.setattr(csv_flat, "_distributed_memory_limit", lambda: 121 * 1024**3)
+    monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 121 * 1024**3)
 
     assert csv_flat._memory_target() == "96GB"
+
+
+def test_cpu_dask_fallback_warning_describes_missing_gpu_backends(tmp_path, monkeypatch) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+    monkeypatch.setattr(csv_flat, "_gpu_backends_unavailable", lambda: True)
+    monkeypatch.setattr(csv_flat, "_backend_importable", lambda name: name == "dask")
+
+    warning = csv_flat.cpu_dask_fallback_warning(run_dir)
+
+    assert "RAPIDS cuDF and dask-cuDF are not available" in warning
+    assert "CPU Dask" in warning
+    assert "training_tiny_flat1.csv" in warning
 
 
 def _csv_flat_run(root) -> object:
