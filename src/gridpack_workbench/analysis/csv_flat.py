@@ -26,6 +26,7 @@ CSV_FLAT_MEMORY_TARGET = "160GB"
 CSV_FLAT_DEFAULT_CLUSTER = "auto"
 CSV_FLAT_DEFAULT_DASK_TEMP_DIR = "/tmp/gridpack-workbench-dask"
 CSV_FLAT_DEFAULT_DEVICE_MEMORY_LIMIT = "auto"
+CSV_FLAT_MEMORY_HEADROOM = 0.95
 
 _EVENT_ALIASES = ("event_idx", "event_index", "contingency_index")
 _CONTINGENCY_ALIASES = ("contingency", "contingency_name", "event")
@@ -969,11 +970,11 @@ def _read_lazy_csv(
         kwargs["assume_missing"] = True
 
     try:
-        return backend.module.read_csv(path, **kwargs)
+        return backend.module.read_csv(str(path), **kwargs)
     except TypeError:
         kwargs.pop("blocksize", None)
         kwargs["chunksize"] = blocksize
-        return backend.module.read_csv(path, **kwargs)
+        return backend.module.read_csv(str(path), **kwargs)
 
 
 def _read_eager_csv(
@@ -985,7 +986,7 @@ def _read_eager_csv(
     kwargs = {}
     if usecols is not None:
         kwargs["usecols"] = usecols
-    return backend.module.read_csv(path, **kwargs)
+    return backend.module.read_csv(str(path), **kwargs)
 
 
 def _requested_backend() -> str:
@@ -1009,7 +1010,59 @@ def _dask_scheduler() -> str:
 
 
 def _memory_target() -> str:
-    return os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", CSV_FLAT_MEMORY_TARGET).strip() or CSV_FLAT_MEMORY_TARGET
+    requested = os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", CSV_FLAT_MEMORY_TARGET).strip() or CSV_FLAT_MEMORY_TARGET
+    requested_bytes = _parse_memory_bytes(requested)
+    system_limit = _distributed_memory_limit()
+    if requested_bytes is None or system_limit is None or requested_bytes <= system_limit:
+        return requested
+    return _format_memory_target(int(system_limit * CSV_FLAT_MEMORY_HEADROOM))
+
+
+def _distributed_memory_limit() -> int | None:
+    try:
+        from distributed.system import MEMORY_LIMIT  # type: ignore[import-not-found]
+    except Exception:
+        return None
+    try:
+        value = int(MEMORY_LIMIT)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if value > 0 else None
+
+
+def _parse_memory_bytes(value: str) -> int | None:
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([kmgt]i?b?|bytes?)?\s*", value, flags=re.IGNORECASE)
+    if not match:
+        return None
+    number = float(match.group(1))
+    unit = (match.group(2) or "b").lower()
+    units = {
+        "b": 1,
+        "byte": 1,
+        "bytes": 1,
+        "k": 1000,
+        "kb": 1000,
+        "kib": 1024,
+        "m": 1000**2,
+        "mb": 1000**2,
+        "mib": 1024**2,
+        "g": 1000**3,
+        "gb": 1000**3,
+        "gib": 1024**3,
+        "t": 1000**4,
+        "tb": 1000**4,
+        "tib": 1024**4,
+    }
+    multiplier = units.get(unit)
+    if multiplier is None:
+        return None
+    return int(number * multiplier)
+
+
+def _format_memory_target(value: int) -> str:
+    if value >= 1024**3:
+        return f"{max(value // 1024**3, 1)}GiB"
+    return f"{max(value // 1024**2, 1)}MiB"
 
 
 def _dask_cluster_mode() -> str:

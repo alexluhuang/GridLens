@@ -341,7 +341,7 @@ class AnalysisTab(QWidget):
         controls.addStretch()
         layout.addLayout(controls)
 
-        figure = Figure(figsize=(7.0, 3.2), constrained_layout=True)
+        figure = Figure(figsize=(7.0, 3.2))
         canvas = FigureCanvas(figure)
         canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         toolbar = NavigationToolbar(canvas, panel)
@@ -606,7 +606,7 @@ class AnalysisTab(QWidget):
         self._style_axis(axis)
         for bar, row, value in zip(bars, rows, values):
             self._style_selected_bar(bar, str(row.get("voltage_group") or "") in self.selected_voltage_groups)
-            axis.text(bar.get_x() + bar.get_width() / 2, value + max(max_value * 0.025, 0.5), f"{value:.1f}", ha="center", va="bottom", fontsize=8, fontweight="600")
+            axis.text(bar.get_x() + bar.get_width() / 2, value + max(max_value * 0.025, 0.5), f"{value:.1f}", ha="center", va="bottom", fontsize=8, fontweight="bold")
         canvas.setMinimumHeight(330)
         self.voltage_group_click_items = list(zip(bars, rows))
         self.voltage_group_hover.bind_bars(axis, bars, rows, self._voltage_group_hover_text, horizontal=False)

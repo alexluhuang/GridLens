@@ -282,6 +282,20 @@ def test_cuda_cluster_kwargs_allows_explicit_device_memory_limit(monkeypatch) ->
     assert kwargs["device_memory_limit"] == "96GB"
 
 
+def test_memory_target_is_capped_to_visible_system_limit(monkeypatch) -> None:
+    monkeypatch.delenv("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", raising=False)
+    monkeypatch.setattr(csv_flat, "_distributed_memory_limit", lambda: 121 * 1024**3)
+
+    assert csv_flat._memory_target() == "114GiB"
+
+
+def test_memory_target_preserves_lower_explicit_limit(monkeypatch) -> None:
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", "96GB")
+    monkeypatch.setattr(csv_flat, "_distributed_memory_limit", lambda: 121 * 1024**3)
+
+    assert csv_flat._memory_target() == "96GB"
+
+
 def _csv_flat_run(root) -> object:
     run_dir = root / "runs" / "2026-07-05_12-00-00"
     work = run_dir / "work"
