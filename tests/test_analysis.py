@@ -6,11 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from gridpack_workbench.analysis.distributions import generate_distribution_exports
-from gridpack_workbench.analysis.dataset import build_run_analysis, gini, top_share
-from gridpack_workbench.analysis.master import ensure_branch_master_exports
-from gridpack_workbench.analysis.parsers import parse_input_xml, parse_success_file, summarize_success_file
-from gridpack_workbench.analysis.summary import generate_run_report
+from gridlens.analysis.distributions import generate_distribution_exports
+from gridlens.analysis.dataset import build_run_analysis, gini, top_share
+from gridlens.analysis.master import ensure_branch_master_exports
+from gridlens.analysis.parsers import parse_input_xml, parse_success_file, summarize_success_file
+from gridlens.analysis.summary import generate_run_report
 
 
 class AnalysisTests(unittest.TestCase):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gridpack_workbench.analysis.parsers import sniff_table
+from gridlens.analysis.parsers import sniff_table
 
 
 def test_sniff_table_returns_empty_list_for_missing_file(tmp_path: Path) -> None:

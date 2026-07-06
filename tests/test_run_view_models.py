@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from gridpack_workbench.core.app_settings import AppSettings
-from gridpack_workbench.core.project import ProjectData
-from gridpack_workbench.core.validation import ValidationError
-from gridpack_workbench.gui.run_view_models import (
+from gridlens.core.app_settings import AppSettings
+from gridlens.core.project import ProjectData
+from gridlens.core.validation import ValidationError
+from gridlens.gui.run_view_models import (
     RunFormValues,
     apply_run_form_values_to_settings,
     build_gridpack_run_request,

@@ -4,8 +4,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from gridpack_workbench.core.project import Project, copy_project_inputs_to_run, open_project
-from gridpack_workbench.core.validation import ValidationError
+from gridlens.core.project import Project, copy_project_inputs_to_run, open_project
+from gridlens.core.validation import ValidationError
 
 
 class ProjectTests(unittest.TestCase):

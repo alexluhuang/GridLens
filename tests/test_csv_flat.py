@@ -7,13 +7,13 @@ import types
 
 import pytest
 
-from gridpack_workbench.analysis import csv_flat
-from gridpack_workbench.analysis import parsers
-from gridpack_workbench.analysis.dataset import build_run_analysis
-from gridpack_workbench.analysis.enrichment import enrich_with_bus_metadata
-from gridpack_workbench.analysis.metrics import compute_metrics
-from gridpack_workbench.analysis.parsers import parse_all_output_tables, summarize_success_file
-from gridpack_workbench.gui.analysis_view_models import max_line_utilization_rows
+from gridlens.analysis import csv_flat
+from gridlens.analysis import parsers
+from gridlens.analysis.dataset import build_run_analysis
+from gridlens.analysis.enrichment import enrich_with_bus_metadata
+from gridlens.analysis.metrics import compute_metrics
+from gridlens.analysis.parsers import parse_all_output_tables, summarize_success_file
+from gridlens.gui.analysis_view_models import max_line_utilization_rows
 
 
 def test_csv_flat_outputs_parse_into_existing_analysis_tables(tmp_path) -> None:
@@ -108,7 +108,7 @@ def test_build_run_analysis_can_skip_interactive_artifacts_and_metrics(tmp_path)
 
 def test_csv_flat_python_backend_can_be_forced(tmp_path, monkeypatch) -> None:
     run_dir = _csv_flat_run(tmp_path)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "python")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "python")
 
     tables = parse_all_output_tables(run_dir)
 
@@ -131,7 +131,8 @@ def test_csv_flat_accelerated_backend_uses_absolute_max_loading(tmp_path, monkey
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "dask")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "off")
     monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
     original_import = builtins.__import__
 
@@ -154,7 +155,7 @@ def test_csv_flat_accelerated_backend_uses_absolute_max_loading(tmp_path, monkey
 def test_csv_flat_auto_prefers_cudf_when_available(monkeypatch) -> None:
     fake_cudf = types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "cudf", fake_cudf)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
 
     backend = csv_flat._lazy_backend()
 
@@ -174,7 +175,7 @@ def test_csv_flat_auto_uses_dask_cudf_before_cpu_dask(monkeypatch) -> None:
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
 
     backend = csv_flat._lazy_backend()
 
@@ -208,7 +209,7 @@ def test_csv_flat_auto_blocks_cpu_dask_without_warning_acknowledgement(monkeypat
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     monkeypatch.delenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, raising=False)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
 
     with pytest.raises(RuntimeError, match="user acknowledgement"):
         csv_flat._lazy_backend()
@@ -224,7 +225,7 @@ def test_csv_flat_auto_allows_cpu_dask_after_warning_acknowledgement(monkeypatch
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
 
     backend = csv_flat._lazy_backend()
 
@@ -240,7 +241,7 @@ def test_csv_flat_forced_dask_cudf_does_not_silently_use_cpu_dask(monkeypatch) -
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask_cudf")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "dask_cudf")
 
     with pytest.raises(RuntimeError, match="dask_cudf"):
         csv_flat._lazy_backend()
@@ -255,7 +256,7 @@ def test_csv_flat_forced_cudf_does_not_silently_use_cpu_dask(monkeypatch) -> Non
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "cudf")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "cudf")
 
     with pytest.raises(RuntimeError, match="cudf"):
         csv_flat._lazy_backend()
@@ -271,7 +272,7 @@ def test_csv_flat_forced_dask_cudf_parse_fails_loudly(tmp_path, monkeypatch) -> 
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask_cudf")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "dask_cudf")
 
     with pytest.raises(RuntimeError, match="GPU csv_flat aggregation was required"):
         parse_all_output_tables(run_dir)
@@ -281,7 +282,7 @@ def test_dask_runtime_auto_falls_back_to_local_scheduler(monkeypatch) -> None:
     def fail_create_client(backend):
         raise RuntimeError("distributed unavailable")
 
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_CLUSTER", "auto")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "auto")
     monkeypatch.setattr(csv_flat, "_create_dask_client", fail_create_client)
 
     with csv_flat._dask_runtime(csv_flat._LazyBackend("dask", object())) as runtime:
@@ -293,7 +294,7 @@ def test_dask_runtime_required_fails_when_cluster_is_unavailable(monkeypatch) ->
     def fail_create_client(backend):
         raise RuntimeError("distributed unavailable")
 
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_CLUSTER", "required")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "required")
     monkeypatch.setattr(csv_flat, "_create_dask_client", fail_create_client)
 
     with pytest.raises(RuntimeError, match="Dask distributed runtime was required"):
@@ -311,7 +312,7 @@ def test_dask_runtime_uses_distributed_client_when_available(monkeypatch) -> Non
     def fake_create_client(backend):
         return FakeCloseable(), FakeCloseable(), "Dask distributed runtime was used with a 160GB worker memory limit."
 
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_CLUSTER", "auto")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "auto")
     monkeypatch.setattr(csv_flat, "_create_dask_client", fake_create_client)
 
     with csv_flat._dask_runtime(csv_flat._LazyBackend("dask", object())) as runtime:
@@ -322,33 +323,33 @@ def test_dask_runtime_uses_distributed_client_when_available(monkeypatch) -> Non
 
 
 def test_cuda_cluster_kwargs_uses_separate_device_memory_limit(monkeypatch) -> None:
-    monkeypatch.delenv("GRIDPACK_WORKBENCH_CSV_FLAT_DEVICE_MEMORY_LIMIT", raising=False)
+    monkeypatch.delenv("GRIDLENS_CSV_FLAT_DEVICE_MEMORY_LIMIT", raising=False)
 
-    kwargs = csv_flat._cuda_cluster_kwargs("160GB", "/tmp/workbench-dask")
+    kwargs = csv_flat._cuda_cluster_kwargs("160GB", "/tmp/gridlens-dask")
 
     assert kwargs["memory_limit"] == "160GB"
     assert kwargs["device_memory_limit"] == "auto"
-    assert kwargs["local_directory"] == "/tmp/workbench-dask"
+    assert kwargs["local_directory"] == "/tmp/gridlens-dask"
 
 
 def test_cuda_cluster_kwargs_allows_explicit_device_memory_limit(monkeypatch) -> None:
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_DEVICE_MEMORY_LIMIT", "96GB")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_DEVICE_MEMORY_LIMIT", "96GB")
 
-    kwargs = csv_flat._cuda_cluster_kwargs("160GB", "/tmp/workbench-dask")
+    kwargs = csv_flat._cuda_cluster_kwargs("160GB", "/tmp/gridlens-dask")
 
     assert kwargs["memory_limit"] == "160GB"
     assert kwargs["device_memory_limit"] == "96GB"
 
 
 def test_memory_target_is_capped_to_visible_system_limit(monkeypatch) -> None:
-    monkeypatch.delenv("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", raising=False)
+    monkeypatch.delenv("GRIDLENS_CSV_FLAT_MEMORY_TARGET", raising=False)
     monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 121 * 1024**3)
 
     assert csv_flat._memory_target() == "114GiB"
 
 
 def test_memory_target_preserves_lower_explicit_limit(monkeypatch) -> None:
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", "96GB")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_MEMORY_TARGET", "96GB")
     monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 121 * 1024**3)
 
     assert csv_flat._memory_target() == "96GB"
@@ -356,7 +357,7 @@ def test_memory_target_preserves_lower_explicit_limit(monkeypatch) -> None:
 
 def test_cpu_dask_fallback_warning_describes_missing_gpu_backends(tmp_path, monkeypatch) -> None:
     run_dir = _csv_flat_run(tmp_path)
-    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
     monkeypatch.setattr(csv_flat, "_gpu_backends_unavailable", lambda: True)
     monkeypatch.setattr(csv_flat, "_backend_importable", lambda name: name == "dask")
 

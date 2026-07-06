@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-cd /home/user/Documents/gridpack-workbench-dev
+cd /home/user/Documents/gridlens-dev
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
@@ -18,7 +18,7 @@ The minimal GUI dependency is also listed in `requirements.txt`; optional plotti
 
 ```bash
 source .venv/bin/activate
-gridpack-workbench
+gridlens
 ```
 
 or:
@@ -40,7 +40,7 @@ are available. Individual tests are intentionally small and independent; prefer 
 changing parser, analysis, runner, or GUI behavior.
 
 The test suite also checks package metadata, console-script wiring, runtime dependency mirrors, and local README
-documentation links. Keep `pyproject.toml`, `requirements.txt`, `README.md`, and `src/gridpack_workbench/__init__.py`
+documentation links. Keep `pyproject.toml`, `requirements.txt`, `README.md`, and `src/gridlens/__init__.py`
 in sync when changing packaging or release information.
 
 For headless machines, Qt tests set `QT_QPA_PLATFORM=offscreen` in the test module.

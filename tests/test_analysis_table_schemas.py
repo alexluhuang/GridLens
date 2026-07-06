@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gridpack_workbench.analysis.table_schemas import TABLE_SCHEMAS
+from gridlens.analysis.table_schemas import TABLE_SCHEMAS
 
 
 def test_table_schemas_have_required_fields_and_declared_columns() -> None:

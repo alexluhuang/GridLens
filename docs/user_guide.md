@@ -2,7 +2,7 @@
 
 ## Create A Project
 
-1. Open GridPACK Workbench.
+1. Open GridLens.
 2. Go to Project.
 3. Enter a project name.
 4. Choose a project folder.

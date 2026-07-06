@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from gridpack_workbench.analysis.distribution_stats import distribution_summary_row, percentile
+from gridlens.analysis.distribution_stats import distribution_summary_row, percentile
 
 
 def test_percentile_interpolates_between_sorted_values() -> None:

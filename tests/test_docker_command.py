@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
-from gridpack_workbench.runner.docker_command import (
+from gridlens.runner.docker_command import (
     CONTAINER_WORKSPACE,
     DOCKER_BASE_COMMAND,
     MPI_EXECUTABLE,

@@ -11,4 +11,4 @@ dist/
 *.deb
 *.tar.gz
 .DS_Store
-GridPACKWorkbenchProjects/
+GridLensProjects/

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from gridpack_workbench.analysis.metrics import (
+from gridlens.analysis.metrics import (
     GENERATOR_DEVIATION_FIELDS,
     RANKED_COUNT_BASE_FIELDS,
     THERMAL_BOTTLENECK_FIELDS,
     VOLTAGE_EXTREME_FIELDS,
     compute_metrics,
 )
-from gridpack_workbench.analysis.parser_models import ParsedTable
+from gridlens.analysis.parser_models import ParsedTable
 
 
 def test_metric_field_sets_are_unique() -> None:

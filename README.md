@@ -1,6 +1,6 @@
-# GridPACK Workbench
+# GridLens
 
-GridPACK Workbench is a local Python desktop application for running GridPACK contingency analysis through a prebuilt Docker container. 
+GridLens is a local Python desktop application for running GridPACK contingency analysis through a prebuilt Docker container. 
 
 The intended deployment target is NVIDIA DGX Spark / DGX OS 7, which is Ubuntu 24.04 based on ARM64. For other architectures, the app detects the host architecture and passes the matching Docker platform flag.
 
@@ -9,12 +9,12 @@ This app is local-only by design. Pull the GridPACK Docker image before opening 
 ## Quick Start For Development
 
 ```bash
-cd /home/alh360/Documents/gridpack-workbench-dev
+cd /home/alh360/Documents/gridlens-dev
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev]"
-gridpack-workbench
+gridlens
 ```
 
 If you only want to verify the core code without installing GUI dependencies:
@@ -46,7 +46,7 @@ On x86_64 systems the platform is `linux/amd64`; on DGX Spark ARM64 it is typica
 ## Repository Layout
 
 ```text
-src/gridpack_workbench/
+src/gridlens/
   gui/        PySide6 tabs and main window
   core/       settings, projects, validation, run manifests
   runner/     Docker probing, command construction, GridPACK execution

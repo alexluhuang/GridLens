@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from gridpack_workbench.analysis.master import (
+from gridlens.analysis.master import (
     BASE_FLOW_SOURCE_COLUMN,
     BASE_UTILIZATION_SOURCE_COLUMN,
     MAX_N1_FLOW_SOURCE_COLUMN,

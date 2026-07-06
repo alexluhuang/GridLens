@@ -8,7 +8,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - used on Python 3.10.
     import tomli as tomllib
 
-import gridpack_workbench
+import gridlens
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,13 +21,13 @@ def _project_metadata() -> dict:
 def test_package_version_matches_project_metadata() -> None:
     metadata = _project_metadata()
 
-    assert gridpack_workbench.__version__ == metadata["version"]
+    assert gridlens.__version__ == metadata["version"]
 
 
 def test_console_script_points_to_main_entrypoint() -> None:
     metadata = _project_metadata()
 
-    assert metadata["scripts"]["gridpack-workbench"] == "gridpack_workbench.main:main"
+    assert metadata["scripts"]["gridlens"] == "gridlens.main:main"
 
 
 def test_runtime_requirements_mirror_project_dependencies() -> None:

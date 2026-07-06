@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QTableWidget
 
-from gridpack_workbench.gui.table_utils import make_read_only_item, populate_table
+from gridlens.gui.table_utils import make_read_only_item, populate_table
 
 
 def _app() -> QApplication:

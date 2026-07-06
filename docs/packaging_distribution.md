@@ -13,24 +13,24 @@ development editable install
 ## Build With PyInstaller
 
 ```bash
-cd /home/alh360/Documents/gridpack-workbench-dev
+cd /home/alh360/Documents/gridlens-dev
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-pyinstaller packaging/pyinstaller/gridpack-workbench.spec
+pyinstaller packaging/pyinstaller/gridlens.spec
 ```
 
 Output:
 
 ```text
-dist/GridPACKWorkbench/
-  GridPACKWorkbench
+dist/GridLens/
+  GridLens
   _internal/
 ```
 
 Test:
 
 ```bash
-./dist/GridPACKWorkbench/GridPACKWorkbench
+./dist/GridLens/GridLens
 ```
 
 ## Pilot Tarball
@@ -39,14 +39,14 @@ For a small internal pilot:
 
 ```bash
 cd dist
-tar -czf GridPACKWorkbench-0.1.0-linux.tar.gz GridPACKWorkbench
+tar -czf GridLens-0.1.0-linux.tar.gz GridLens
 ```
 
 A pilot user can unpack and run:
 
 ```bash
-tar -xzf GridPACKWorkbench-0.1.0-linux.tar.gz
-./GridPACKWorkbench/GridPACKWorkbench
+tar -xzf GridLens-0.1.0-linux.tar.gz
+./GridLens/GridLens
 ```
 
 ## Debian Package
@@ -60,21 +60,21 @@ packaging/deb/build_deb.sh 0.1.0
 Output:
 
 ```text
-dist/gridpack-workbench_0.1.0.deb
+dist/gridlens_0.1.0.deb
 ```
 
 Install:
 
 ```bash
-sudo apt install ./dist/gridpack-workbench_0.1.0.deb
+sudo apt install ./dist/gridlens_0.1.0.deb
 ```
 
 The installed layout is:
 
 ```text
-/opt/gridpack-workbench/
-/usr/share/applications/gridpack-workbench.desktop
-/usr/share/icons/hicolor/scalable/apps/gridpack-workbench.svg
+/opt/gridlens/
+/usr/share/applications/gridlens.desktop
+/usr/share/icons/hicolor/scalable/apps/gridlens.svg
 ```
 
 ## Internal Website Distribution

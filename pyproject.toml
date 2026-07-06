@@ -3,14 +3,14 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gridpack-workbench"
+name = "gridlens"
 version = "0.1.0"
 description = "Local desktop GUI for running GridPACK contingency analysis through Docker"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-only" }
 authors = [
-  { name = "GridPACK Workbench Contributors" }
+  { name = "GridLens Contributors" }
 ]
 keywords = ["gridpack", "contingency-analysis", "docker", "power-systems", "qt"]
 classifiers = [
@@ -45,13 +45,13 @@ dev = [
 ]
 
 [project.scripts]
-gridpack-workbench = "gridpack_workbench.main:main"
+gridlens = "gridlens.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-gridpack_workbench = ["resources/*"]
+gridlens = ["resources/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

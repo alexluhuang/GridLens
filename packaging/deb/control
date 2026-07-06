@@ -1,11 +1,11 @@
-Package: gridpack-workbench
+Package: gridlens
 Version: 0.1.0
 Section: science
 Priority: optional
 Architecture: any
-Maintainer: GridPACK Workbench Contributors
+Maintainer: GridLens Contributors
 Depends: docker-ce | docker.io
 Description: Local GUI for GridPACK contingency analysis
- GridPACK Workbench is a local PySide6 desktop application that runs
+ GridLens is a local PySide6 desktop application that runs
  GridPACK Docker containers against regulator-selected project inputs
  and stores run logs, manifests, outputs, and reports on the local machine.

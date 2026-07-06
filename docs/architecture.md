@@ -1,6 +1,6 @@
 # Architecture
 
-GridPACK Workbench separates the consumer GUI from the execution engine. The GUI gathers input files and settings. The
+GridLens separates the consumer GUI from the execution engine. The GUI gathers input files and settings. The
 core layer creates a local project and run folder. The runner layer builds a Docker argument list and runs GridPACK. The
 analysis layer reads local outputs and creates reports.
 
@@ -20,7 +20,7 @@ PySide6 GUI
 A regulator-facing project is stored under:
 
 ```text
-~/GridPACKWorkbenchProjects/
+~/GridLensProjects/
   Project_Name/
     project.json
     original_inputs/

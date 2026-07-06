@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=GridLens
+Comment=Local GUI for GridPACK contingency analysis
+Exec=/opt/gridlens/GridLens
+Icon=gridlens
+Terminal=false
+Type=Application
+Categories=Science;Engineering;

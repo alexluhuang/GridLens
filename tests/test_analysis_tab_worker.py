@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from gridpack_workbench.analysis import interactive
-from gridpack_workbench.analysis.dataset import ANALYSIS_DATASET_VERSION, RunAnalysisDataset
-from gridpack_workbench.analysis.csv_flat import CSV_FLAT_RESULTS_TABLE
-from gridpack_workbench.analysis.parser_models import PARSER_VERSION, ParsedTable
-from gridpack_workbench.analysis.utilization import UtilizationBranchOptions
-from gridpack_workbench.gui import analysis_tab
+from gridlens.analysis import interactive
+from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION, RunAnalysisDataset
+from gridlens.analysis.csv_flat import CSV_FLAT_RESULTS_TABLE
+from gridlens.analysis.parser_models import PARSER_VERSION, ParsedTable
+from gridlens.analysis.utilization import UtilizationBranchOptions
+from gridlens.gui import analysis_tab
 
 
 def test_csv_flat_runtime_status_reports_gpu_backend() -> None:
@@ -41,7 +41,7 @@ def test_csv_flat_runtime_status_reports_cpu_backend() -> None:
             CSV_FLAT_RESULTS_TABLE: SimpleNamespace(
                 notes=[
                     "CPU Dask backend was used for csv_flat aggregation. Install RAPIDS dask-cudf/dask-cuda "
-                    "and set GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=dask_cudf to require GPU execution."
+                    "and set GRIDLENS_CSV_FLAT_BACKEND=dask_cudf to require GPU execution."
                 ]
             )
         }

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gridpack_workbench.analysis.parser_models import OutputFile
-from gridpack_workbench.analysis.report_html import DecisionSupportReportView, render_decision_support_report_html
+from gridlens.analysis.parser_models import OutputFile
+from gridlens.analysis.report_html import DecisionSupportReportView, render_decision_support_report_html
 
 
 def test_decision_support_report_html_escapes_dynamic_content() -> None:

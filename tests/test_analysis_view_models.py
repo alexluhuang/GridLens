@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from gridpack_workbench.analysis.distributions import DistributionExport
-from gridpack_workbench.analysis.parser_models import ParsedTable
-from gridpack_workbench.gui.analysis_view_models import (
+from gridlens.analysis.distributions import DistributionExport
+from gridlens.analysis.parser_models import ParsedTable
+from gridlens.gui.analysis_view_models import (
     DISTRIBUTION_OUTPUT_COLUMNS,
     UtilizationBranchOptions,
     average_n1_utilization_rows,

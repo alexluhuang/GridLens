@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from gridpack_workbench.analysis.parser_models import OutputFile
-from gridpack_workbench.gui.results_view_models import (
+from gridlens.analysis.parser_models import OutputFile
+from gridlens.gui.results_view_models import (
     output_file_row,
     output_file_rows,
     read_run_status,

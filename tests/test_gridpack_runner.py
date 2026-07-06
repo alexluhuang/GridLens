@@ -7,8 +7,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from gridpack_workbench.core.project import Project
-from gridpack_workbench.runner.gridpack_runner import GridpackRunRequest, run_gridpack_case
+from gridlens.core.project import Project
+from gridlens.runner.gridpack_runner import GridpackRunRequest, run_gridpack_case
 
 
 class FakeProcess:
@@ -44,7 +44,7 @@ class GridpackRunnerTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             request, run_dir = self._make_request(Path(tmp))
 
-            with patch("gridpack_workbench.runner.gridpack_runner.subprocess.Popen", return_value=FakeProcess()):
+            with patch("gridlens.runner.gridpack_runner.subprocess.Popen", return_value=FakeProcess()):
                 result = run_gridpack_case(request)
 
             terminal_log = run_dir / "work" / "terminal.log"
@@ -76,7 +76,7 @@ class GridpackRunnerTests(unittest.TestCase):
 
             with (
                 patch(
-                    "gridpack_workbench.runner.gridpack_runner.subprocess.Popen",
+                    "gridlens.runner.gridpack_runner.subprocess.Popen",
                     side_effect=OSError("docker unavailable"),
                 ),
                 self.assertRaises(OSError),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gridpack_workbench.analysis.raw_parsers import (
+from gridlens.analysis.raw_parsers import (
     parse_raw_area_metadata,
     parse_raw_branch_metadata,
     parse_raw_bus_metadata,

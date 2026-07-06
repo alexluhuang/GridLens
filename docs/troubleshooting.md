@@ -66,7 +66,7 @@ docker load -i gridpack-ca-0.1.0-linux-arm64.tar
 The app runs Docker with `-u uid:gid` by default. If old runs produced root-owned files, fix ownership from an admin shell:
 
 ```bash
-sudo chown -R "$USER:$USER" ~/GridPACKWorkbenchProjects
+sudo chown -R "$USER:$USER" ~/GridLensProjects
 ```
 
 ## MPI Fails In Container
@@ -88,7 +88,7 @@ Install dependencies:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-gridpack-workbench
+gridlens
 ```
 
 On minimal Ubuntu systems, Qt may also need desktop libraries installed by IT through apt.

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from gridpack_workbench.core.validation import ValidationError
-from gridpack_workbench.gui.project_view_models import (
+from gridlens.core.validation import ValidationError
+from gridlens.gui.project_view_models import (
     ProjectFormValues,
     default_project_folder,
     prepare_project_save,

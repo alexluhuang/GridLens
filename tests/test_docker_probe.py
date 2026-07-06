@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import patch
 
-from gridpack_workbench.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
+from gridlens.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
 
 
 def completed(command: list[str], returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
@@ -11,7 +11,7 @@ def completed(command: list[str], returncode: int, stdout: str = "", stderr: str
 
 
 def test_docker_client_available_reports_missing_binary() -> None:
-    with patch("gridpack_workbench.runner.docker_probe.run_command", side_effect=FileNotFoundError):
+    with patch("gridlens.runner.docker_probe.run_command", side_effect=FileNotFoundError):
         result = docker_client_available()
 
     assert result.ok is False
@@ -20,7 +20,7 @@ def test_docker_client_available_reports_missing_binary() -> None:
 
 def test_docker_engine_available_formats_success_message() -> None:
     with patch(
-        "gridpack_workbench.runner.docker_probe.run_command",
+        "gridlens.runner.docker_probe.run_command",
         return_value=completed(["docker"], 0, stdout="29.2.1\n"),
     ):
         result = docker_engine_available()
@@ -31,7 +31,7 @@ def test_docker_engine_available_formats_success_message() -> None:
 
 def test_docker_engine_available_uses_fallback_for_empty_failure_output() -> None:
     with patch(
-        "gridpack_workbench.runner.docker_probe.run_command",
+        "gridlens.runner.docker_probe.run_command",
         return_value=completed(["docker"], 1),
     ):
         result = docker_engine_available()
@@ -42,7 +42,7 @@ def test_docker_engine_available_uses_fallback_for_empty_failure_output() -> Non
 
 def test_image_exists_reports_timeout_with_image_name() -> None:
     with patch(
-        "gridpack_workbench.runner.docker_probe.run_command",
+        "gridlens.runner.docker_probe.run_command",
         side_effect=subprocess.TimeoutExpired(["docker"], timeout=30),
     ):
         result = image_exists("pnnl/gridpack:latest")
@@ -53,7 +53,7 @@ def test_image_exists_reports_timeout_with_image_name() -> None:
 
 def test_image_exists_reports_local_image_success() -> None:
     with patch(
-        "gridpack_workbench.runner.docker_probe.run_command",
+        "gridlens.runner.docker_probe.run_command",
         return_value=completed(["docker"], 0, stdout="[]\n"),
     ):
         result = image_exists("pnnl/gridpack:latest")

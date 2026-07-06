@@ -60,7 +60,7 @@ Development install:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-gridpack-workbench
+gridlens
 ```
 
 Production install should use the `.deb` built from `docs/packaging_distribution.md`.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from gridpack_workbench.analysis.enrichment import enrich_with_bus_metadata, voltage_class
-from gridpack_workbench.analysis.parser_models import ParsedTable
+from gridlens.analysis.enrichment import enrich_with_bus_metadata, voltage_class
+from gridlens.analysis.parser_models import ParsedTable
 
 
 def test_voltage_class_handles_missing_and_invalid_values() -> None:

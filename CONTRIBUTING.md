@@ -1,6 +1,6 @@
-# Contributing To GridPACK Workbench
+# Contributing To GridLens
 
-GridPACK Workbench is intended to become an open-source desktop application for local GridPACK contingency analysis.
+GridLens is intended to become an open-source desktop application for local GridPACK contingency analysis.
 Contributions should keep the app understandable for regulators and maintainable for future developers.
 
 ## Local-Only And CEII Rules
@@ -25,7 +25,7 @@ python -m pip install -e ".[dev,analysis]"
 Run the app with:
 
 ```bash
-gridpack-workbench
+gridlens
 ```
 
 ## Verification
