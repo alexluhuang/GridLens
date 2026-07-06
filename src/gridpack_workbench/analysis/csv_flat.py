@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, suppress
 import csv
 from dataclasses import dataclass
 import math
@@ -22,6 +23,9 @@ CSV_FLAT_DEFAULT_BACKEND = "auto"
 CSV_FLAT_DEFAULT_BLOCKSIZE = "256MB"
 CSV_FLAT_DEFAULT_SCHEDULER = "threads"
 CSV_FLAT_MEMORY_TARGET = "160GB"
+CSV_FLAT_DEFAULT_CLUSTER = "auto"
+CSV_FLAT_DEFAULT_DASK_TEMP_DIR = "/tmp/gridpack-workbench-dask"
+CSV_FLAT_DEFAULT_DEVICE_MEMORY_LIMIT = "auto"
 
 _EVENT_ALIASES = ("event_idx", "event_index", "contingency_index")
 _CONTINGENCY_ALIASES = ("contingency", "contingency_name", "event")
@@ -129,6 +133,12 @@ class ConversionResult:
 class _LazyBackend:
     name: str
     module: object
+
+
+@dataclass(slots=True)
+class _DaskRuntime:
+    compute_kwargs: dict[str, object]
+    note: str
 
 
 @dataclass(slots=True)
@@ -320,8 +330,14 @@ def convert_csv_to_parquet(csv_path: str | Path, output_dir: str | Path, blocksi
 
     try:
         destination.mkdir(parents=True, exist_ok=True)
-        data = _read_lazy_csv(backend, source, blocksize=blocksize)
-        data.to_parquet(destination, engine="pyarrow", compression="snappy", write_index=False)
+        if backend.name == "cudf":
+            data = _read_eager_csv(backend, source)
+            data.to_parquet(destination / "part.0.parquet", compression="snappy", index=False)
+        else:
+            with _dask_runtime(backend) as runtime:
+                data = _read_lazy_csv(backend, source, blocksize=blocksize)
+                with _dask_scheduler_config(runtime):
+                    data.to_parquet(destination, engine="pyarrow", compression="snappy", write_index=False)
     except Exception as exc:  # pragma: no cover - depends on local parquet stack and filesystem state.
         return ConversionResult(None, f"csv_flat parquet conversion failed for {source.name}: {exc}", backend.name)
     return ConversionResult(destination, backend=backend.name)
@@ -391,40 +407,43 @@ def _parse_flat_results_accelerated(path: Path, lookup: dict[str, str]) -> tuple
         backend = _lazy_backend()
     except Exception as exc:
         if _gpu_backend_required():
-            raise RuntimeError(f"GPU csv_flat aggregation was required but dask-cudf could not be used: {exc}") from exc
+            raise RuntimeError(f"GPU csv_flat aggregation was required but {_requested_backend()} could not be used: {exc}") from exc
         return None, f"Accelerated csv_flat aggregation was skipped: {exc}"
 
     try:
-        data = _normalized_lazy_flat_frame(path, lookup, backend)
-        preview_rows = _preview_rows(path, lookup)
-        keys = ["from_bus", "to_bus", "line_id", "section"]
-        grouped = data.groupby(keys).agg(
-            {
-                "loading_percent": ["count", "sum", "min", "max"],
-                "abs_loading": "max",
-                "base_loading": "max",
-                "overloaded": "sum",
-                "rate_mva": "first",
-            }
-        )
-        label_frame = _lazy_extreme_label_frame(data, keys)
-        grouped, label_frame = _compute_lazy_frames(grouped, label_frame)
-        labels = _extreme_labels_from_frame(label_frame)
-        aggregates = _aggregates_from_frame(grouped, labels)
+        if backend.name == "cudf":
+            data = _normalized_eager_flat_frame(path, lookup, backend)
+            preview_rows = _preview_rows(path, lookup)
+            keys = ["from_bus", "to_bus", "line_id", "section"]
+            grouped = _flat_grouped_frame(data, keys)
+            label_frame = _lazy_extreme_label_frame(data, keys)
+            labels = _extreme_labels_from_frame(label_frame)
+            aggregates = _aggregates_from_frame(grouped, labels)
+            runtime_note = ""
+        else:
+            with _dask_runtime(backend) as runtime:
+                data = _normalized_lazy_flat_frame(path, lookup, backend)
+                preview_rows = _preview_rows(path, lookup)
+                keys = ["from_bus", "to_bus", "line_id", "section"]
+                grouped = _flat_grouped_frame(data, keys)
+                label_frame = _lazy_extreme_label_frame(data, keys)
+                grouped, label_frame = _compute_lazy_frames(grouped, label_frame, runtime=runtime)
+                labels = _extreme_labels_from_frame(label_frame)
+                aggregates = _aggregates_from_frame(grouped, labels)
+                runtime_note = runtime.note
     except Exception as exc:
         if _gpu_backend_required():
-            raise RuntimeError(f"GPU csv_flat aggregation with dask-cudf failed: {exc}") from exc
+            raise RuntimeError(f"GPU csv_flat aggregation with {_requested_backend()} failed: {exc}") from exc
         return None, (
             f"Accelerated csv_flat aggregation with {_requested_backend()} failed and Python streaming was used: {exc}"
         )
 
     notes = [
-        (
-            f"{path.name} was aggregated with {backend.name}; partitions are bounded by "
-            f"{_dask_blocksize()} and the memory target is {_memory_target()}."
-        ),
+        _backend_aggregation_note(path, backend),
         _backend_runtime_note(backend),
     ]
+    if runtime_note:
+        notes.append(runtime_note)
     return _flat_tables_from_aggregates(path, preview_rows, aggregates, notes), ""
 
 
@@ -475,6 +494,17 @@ def _normalized_lazy_flat_frame(path: Path, lookup: dict[str, str], backend: _La
     columns = _flat_lazy_columns(lookup)
     data = _read_lazy_csv(backend, path, usecols=list(columns), blocksize=_dask_blocksize())
     data = data.rename(columns=columns)
+    return _normalize_flat_frame_columns(data)
+
+
+def _normalized_eager_flat_frame(path: Path, lookup: dict[str, str], backend: _LazyBackend):
+    columns = _flat_lazy_columns(lookup)
+    data = _read_eager_csv(backend, path, usecols=list(columns))
+    data = data.rename(columns=columns)
+    return _normalize_flat_frame_columns(data)
+
+
+def _normalize_flat_frame_columns(data):
     for optional_column, default_value in (
         ("section", ""),
         ("event_idx", None),
@@ -515,6 +545,18 @@ def _normalized_lazy_flat_frame(path: Path, lookup: dict[str, str], backend: _La
     return data
 
 
+def _flat_grouped_frame(data, keys: list[str]):
+    return data.groupby(keys).agg(
+        {
+            "loading_percent": ["count", "sum", "min", "max"],
+            "abs_loading": "max",
+            "base_loading": "max",
+            "overloaded": "sum",
+            "rate_mva": "first",
+        }
+    )
+
+
 def _lazy_extreme_label_frame(data, keys: list[str]):
     max_values = data.groupby(keys)["abs_loading"].max().reset_index().rename(
         columns={"abs_loading": "max_abs_loading"}
@@ -524,13 +566,105 @@ def _lazy_extreme_label_frame(data, keys: list[str]):
     return candidates.groupby(keys).agg({"event_idx": "first", "contingency": "first"})
 
 
-def _compute_lazy_frames(*frames):
+def _compute_lazy_frames(*frames, runtime: _DaskRuntime):
     try:
         import dask
 
-        return dask.compute(*frames, scheduler=_dask_scheduler())
+        return dask.compute(*frames, **runtime.compute_kwargs)
     except Exception:
-        return tuple(frame.compute(scheduler=_dask_scheduler()) for frame in frames)
+        return tuple(frame.compute(**runtime.compute_kwargs) for frame in frames)
+
+
+@contextmanager
+def _dask_runtime(backend: _LazyBackend):
+    mode = _dask_cluster_mode()
+    if mode == "off":
+        yield _local_dask_runtime()
+        return
+
+    client = None
+    cluster = None
+    try:
+        client, cluster, note = _create_dask_client(backend)
+    except Exception as exc:
+        if mode == "required":
+            raise RuntimeError(f"Dask distributed runtime was required but could not be started: {exc}") from exc
+        yield _local_dask_runtime(f"Dask distributed runtime was unavailable and local scheduler was used: {exc}")
+        return
+
+    try:
+        yield _DaskRuntime({}, note)
+    finally:
+        if client is not None:
+            with suppress(Exception):
+                client.close()
+        if cluster is not None:
+            with suppress(Exception):
+                cluster.close()
+
+
+def _create_dask_client(backend: _LazyBackend):
+    memory_target = _memory_target()
+    local_directory = _dask_temp_dir()
+    if backend.name == "dask_cudf":
+        from dask_cuda import LocalCUDACluster  # type: ignore[import-not-found]
+        from distributed import Client  # type: ignore[import-not-found]
+
+        cluster = LocalCUDACluster(**_cuda_cluster_kwargs(memory_target, local_directory))
+        client = Client(cluster)
+        return (
+            client,
+            cluster,
+            "Dask-CUDA distributed runtime was used with "
+            f"a {memory_target} worker memory target and {_device_memory_limit()} device memory limit.",
+        )
+
+    from distributed import Client, LocalCluster  # type: ignore[import-not-found]
+
+    cluster = LocalCluster(
+        n_workers=1,
+        threads_per_worker=max(os.cpu_count() or 1, 1),
+        processes=False,
+        memory_limit=memory_target,
+        local_directory=local_directory,
+    )
+    client = Client(cluster)
+    return client, cluster, f"Dask distributed runtime was used with a {memory_target} worker memory limit."
+
+
+def _cuda_cluster_kwargs(memory_target: str, local_directory: str) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "n_workers": 1,
+        "threads_per_worker": 1,
+        "memory_limit": memory_target,
+        "local_directory": local_directory,
+    }
+    device_limit = _device_memory_limit()
+    if device_limit:
+        kwargs["device_memory_limit"] = device_limit
+    return kwargs
+
+
+def _local_dask_runtime(reason: str = "") -> _DaskRuntime:
+    note = f"Local Dask scheduler '{_dask_scheduler()}' was used."
+    if reason:
+        note = f"{note} {reason}"
+    return _DaskRuntime({"scheduler": _dask_scheduler()}, note)
+
+
+@contextmanager
+def _dask_scheduler_config(runtime: _DaskRuntime):
+    scheduler = runtime.compute_kwargs.get("scheduler")
+    if not scheduler:
+        yield
+        return
+    try:
+        import dask
+    except Exception:
+        yield
+        return
+    with dask.config.set(scheduler=scheduler):
+        yield
 
 
 def _extreme_labels_from_frame(frame) -> dict[tuple[object, object, str, str], _ExtremeLabels]:
@@ -554,12 +688,23 @@ def _extreme_labels_from_frame(frame) -> dict[tuple[object, object, str, str], _
 def _backend_runtime_note(backend: _LazyBackend) -> str:
     if backend.name == "dask_cudf":
         return "RAPIDS dask-cudf GPU backend was used for csv_flat aggregation."
+    if backend.name == "cudf":
+        return "RAPIDS cuDF GPU backend was used for csv_flat aggregation."
     if backend.name == "dask":
         return (
-            "CPU Dask backend was used for csv_flat aggregation. Install RAPIDS dask-cudf/dask-cuda "
-            "and set GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=dask_cudf to require GPU execution."
+            "CPU Dask backend was used for csv_flat aggregation. Install RAPIDS cuDF/dask-cudf/dask-cuda "
+            "and set GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND=dask_cudf or cudf to require GPU execution."
         )
     return f"{backend.name} backend was used for csv_flat aggregation."
+
+
+def _backend_aggregation_note(path: Path, backend: _LazyBackend) -> str:
+    if backend.name == "cudf":
+        return f"{path.name} was aggregated with cuDF on one GPU."
+    return (
+        f"{path.name} was aggregated with {backend.name}; partitions are bounded by "
+        f"{_dask_blocksize()} and the memory target is {_memory_target()}."
+    )
 
 
 def _flat_lazy_columns(lookup: dict[str, str]) -> dict[str, str]:
@@ -630,10 +775,11 @@ def _flatten_aggregate_frame(frame):
     except Exception:
         is_multi_index = False
 
-    if is_multi_index:
+    columns = list(frame.columns)
+    if is_multi_index or any(isinstance(column, tuple) for column in columns):
         frame.columns = [
-            "_".join(str(part) for part in column if str(part))
-            for column in frame.columns
+            "_".join(str(part) for part in (column if isinstance(column, tuple) else (column,)) if str(part))
+            for column in columns
         ]
     rename = {
         "loading_percent_count": "contingency_count",
@@ -782,7 +928,7 @@ def _normalize_flat_result_row(raw_row: dict[str, str], lookup: dict[str, str]) 
 def _lazy_backend() -> _LazyBackend:
     requested = _requested_backend()
     errors: list[str] = []
-    backend_order = ("dask_cudf", "dask") if requested == "auto" else (requested,)
+    backend_order = ("dask_cudf", "cudf", "dask") if requested == "auto" else (requested,)
 
     for backend_name in backend_order:
         if backend_name == "python":
@@ -792,6 +938,10 @@ def _lazy_backend() -> _LazyBackend:
                 import dask_cudf  # type: ignore[import-not-found]
 
                 return _LazyBackend("dask_cudf", dask_cudf)
+            if backend_name == "cudf":
+                import cudf  # type: ignore[import-not-found]
+
+                return _LazyBackend("cudf", cudf)
             if backend_name == "dask":
                 import dask.dataframe as dd  # type: ignore[import-not-found]
 
@@ -826,16 +976,28 @@ def _read_lazy_csv(
         return backend.module.read_csv(path, **kwargs)
 
 
+def _read_eager_csv(
+    backend: _LazyBackend,
+    path: Path,
+    *,
+    usecols: list[str] | None = None,
+):
+    kwargs = {}
+    if usecols is not None:
+        kwargs["usecols"] = usecols
+    return backend.module.read_csv(path, **kwargs)
+
+
 def _requested_backend() -> str:
     value = os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", CSV_FLAT_DEFAULT_BACKEND)
     value = value.strip().lower().replace("-", "_")
-    if value in {"auto", "dask_cudf", "dask", "python"}:
+    if value in {"auto", "dask_cudf", "cudf", "dask", "python"}:
         return value
     return CSV_FLAT_DEFAULT_BACKEND
 
 
 def _gpu_backend_required() -> bool:
-    return _requested_backend() == "dask_cudf"
+    return _requested_backend() in {"dask_cudf", "cudf"}
 
 
 def _dask_blocksize() -> str:
@@ -848,6 +1010,23 @@ def _dask_scheduler() -> str:
 
 def _memory_target() -> str:
     return os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_MEMORY_TARGET", CSV_FLAT_MEMORY_TARGET).strip() or CSV_FLAT_MEMORY_TARGET
+
+
+def _dask_cluster_mode() -> str:
+    value = os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_CLUSTER", CSV_FLAT_DEFAULT_CLUSTER)
+    value = value.strip().lower()
+    if value in {"auto", "off", "required"}:
+        return value
+    return CSV_FLAT_DEFAULT_CLUSTER
+
+
+def _dask_temp_dir() -> str:
+    return os.environ.get("GRIDPACK_WORKBENCH_DASK_TEMP_DIR", CSV_FLAT_DEFAULT_DASK_TEMP_DIR).strip() or CSV_FLAT_DEFAULT_DASK_TEMP_DIR
+
+
+def _device_memory_limit() -> str:
+    value = os.environ.get("GRIDPACK_WORKBENCH_CSV_FLAT_DEVICE_MEMORY_LIMIT", CSV_FLAT_DEFAULT_DEVICE_MEMORY_LIMIT)
+    return value.strip() or CSV_FLAT_DEFAULT_DEVICE_MEMORY_LIMIT
 
 
 def _aggregate_to_pflow_row(aggregate: _BranchAggregate) -> dict[str, object]:

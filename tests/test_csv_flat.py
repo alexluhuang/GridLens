@@ -89,6 +89,23 @@ def test_build_run_analysis_can_skip_csv_flat_parquet_for_interactive_graphs(tmp
     assert (run_dir / "reports" / "tables" / "pflow_mm.csv").exists()
 
 
+def test_build_run_analysis_can_skip_interactive_artifacts_and_metrics(tmp_path) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+
+    dataset = build_run_analysis(
+        run_dir,
+        convert_csv_flat_parquet=False,
+        write_artifacts=False,
+        compute_metric_summary=False,
+    )
+
+    assert dataset.tables["pflow_mm"].row_count == 2
+    assert dataset.metrics == {}
+    assert dataset.table_files == {}
+    assert not dataset.manifest_path.exists()
+    assert not (run_dir / "reports" / "tables").exists()
+
+
 def test_csv_flat_python_backend_can_be_forced(tmp_path, monkeypatch) -> None:
     run_dir = _csv_flat_run(tmp_path)
     monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "python")
@@ -136,6 +153,26 @@ def test_csv_flat_auto_prefers_dask_cudf_when_available(monkeypatch) -> None:
     assert backend.module is fake_dask_cudf
 
 
+def test_csv_flat_auto_uses_cudf_before_cpu_dask(monkeypatch) -> None:
+    fake_cudf = types.SimpleNamespace()
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "dask_cudf":
+            raise ModuleNotFoundError("No module named 'dask_cudf'")
+        if name == "cudf":
+            return fake_cudf
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
+
+    backend = csv_flat._lazy_backend()
+
+    assert backend.name == "cudf"
+    assert backend.module is fake_cudf
+
+
 def test_csv_flat_forced_dask_cudf_does_not_silently_use_cpu_dask(monkeypatch) -> None:
     original_import = builtins.__import__
 
@@ -148,6 +185,21 @@ def test_csv_flat_forced_dask_cudf_does_not_silently_use_cpu_dask(monkeypatch) -
     monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "dask_cudf")
 
     with pytest.raises(RuntimeError, match="dask_cudf"):
+        csv_flat._lazy_backend()
+
+
+def test_csv_flat_forced_cudf_does_not_silently_use_cpu_dask(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "cudf":
+            raise ModuleNotFoundError("No module named 'cudf'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "cudf")
+
+    with pytest.raises(RuntimeError, match="cudf"):
         csv_flat._lazy_backend()
 
 
@@ -165,6 +217,69 @@ def test_csv_flat_forced_dask_cudf_parse_fails_loudly(tmp_path, monkeypatch) -> 
 
     with pytest.raises(RuntimeError, match="GPU csv_flat aggregation was required"):
         parse_all_output_tables(run_dir)
+
+
+def test_dask_runtime_auto_falls_back_to_local_scheduler(monkeypatch) -> None:
+    def fail_create_client(backend):
+        raise RuntimeError("distributed unavailable")
+
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_CLUSTER", "auto")
+    monkeypatch.setattr(csv_flat, "_create_dask_client", fail_create_client)
+
+    with csv_flat._dask_runtime(csv_flat._LazyBackend("dask", object())) as runtime:
+        assert runtime.compute_kwargs == {"scheduler": "threads"}
+        assert "local scheduler" in runtime.note
+
+
+def test_dask_runtime_required_fails_when_cluster_is_unavailable(monkeypatch) -> None:
+    def fail_create_client(backend):
+        raise RuntimeError("distributed unavailable")
+
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_CLUSTER", "required")
+    monkeypatch.setattr(csv_flat, "_create_dask_client", fail_create_client)
+
+    with pytest.raises(RuntimeError, match="Dask distributed runtime was required"):
+        with csv_flat._dask_runtime(csv_flat._LazyBackend("dask", object())):
+            pass
+
+
+def test_dask_runtime_uses_distributed_client_when_available(monkeypatch) -> None:
+    closed = []
+
+    class FakeCloseable:
+        def close(self):
+            closed.append(type(self).__name__)
+
+    def fake_create_client(backend):
+        return FakeCloseable(), FakeCloseable(), "Dask distributed runtime was used with a 160GB worker memory limit."
+
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_CLUSTER", "auto")
+    monkeypatch.setattr(csv_flat, "_create_dask_client", fake_create_client)
+
+    with csv_flat._dask_runtime(csv_flat._LazyBackend("dask", object())) as runtime:
+        assert runtime.compute_kwargs == {}
+        assert "distributed runtime" in runtime.note
+
+    assert closed == ["FakeCloseable", "FakeCloseable"]
+
+
+def test_cuda_cluster_kwargs_uses_separate_device_memory_limit(monkeypatch) -> None:
+    monkeypatch.delenv("GRIDPACK_WORKBENCH_CSV_FLAT_DEVICE_MEMORY_LIMIT", raising=False)
+
+    kwargs = csv_flat._cuda_cluster_kwargs("160GB", "/tmp/workbench-dask")
+
+    assert kwargs["memory_limit"] == "160GB"
+    assert kwargs["device_memory_limit"] == "auto"
+    assert kwargs["local_directory"] == "/tmp/workbench-dask"
+
+
+def test_cuda_cluster_kwargs_allows_explicit_device_memory_limit(monkeypatch) -> None:
+    monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_DEVICE_MEMORY_LIMIT", "96GB")
+
+    kwargs = csv_flat._cuda_cluster_kwargs("160GB", "/tmp/workbench-dask")
+
+    assert kwargs["memory_limit"] == "160GB"
+    assert kwargs["device_memory_limit"] == "96GB"
 
 
 def _csv_flat_run(root) -> object:

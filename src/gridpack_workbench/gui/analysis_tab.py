@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 import os
 from pathlib import Path
 import textwrap
@@ -35,11 +36,14 @@ except Exception:  # pragma: no cover - exercised only on systems without matplo
     Figure = None  # type: ignore[assignment]
 
 from gridpack_workbench.analysis.csv_flat import CSV_FLAT_RESULTS_TABLE
-from gridpack_workbench.analysis.dataset import RunAnalysisDataset, build_run_analysis
+from gridpack_workbench.analysis.dataset import RunAnalysisDataset
+from gridpack_workbench.analysis.interactive import (
+    AnalysisBuildResult,
+    build_interactive_analysis_result as _build_analysis_result,
+)
 from gridpack_workbench.analysis.utilization import UtilizationBranchOptions
 from gridpack_workbench.core.project import Project
 from gridpack_workbench.gui.analysis_view_models import (
-    max_line_utilization_rows,
     numeric_value,
     summarize_control_area_utilization,
     summarize_voltage_group_utilization,
@@ -73,8 +77,8 @@ def _csv_flat_runtime_status(dataset: RunAnalysisDataset | None) -> str:
     if not table:
         return ""
     for note in table.notes:
-        if note.startswith("RAPIDS dask-cudf GPU backend was used"):
-            return "RAPIDS dask-cudf GPU backend used."
+        if note.startswith("RAPIDS dask-cudf GPU backend was used") or note.startswith("RAPIDS cuDF GPU backend was used"):
+            return "RAPIDS GPU backend used."
         if note.startswith("CPU Dask backend was used"):
             return "CPU Dask backend used; RAPIDS was not active."
         if "Python streaming" in note or "streamed from the full file" in note:
@@ -82,14 +86,10 @@ def _csv_flat_runtime_status(dataset: RunAnalysisDataset | None) -> str:
     return ""
 
 
-@dataclass(slots=True)
-class AnalysisBuildResult:
-    dataset: RunAnalysisDataset
-    max_line_rows: list[dict[str, object]]
-    group_branch_rows: list[dict[str, object]]
-    control_area_rows: list[dict[str, object]]
-    voltage_group_rows: list[dict[str, object]]
-    line_rows: list[dict[str, object]]
+def _build_analysis_result_in_process(run_dir: Path, branch_options: UtilizationBranchOptions) -> AnalysisBuildResult:
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=1, mp_context=context) as executor:
+        return executor.submit(_build_analysis_result, run_dir, branch_options).result()
 
 
 class AnalysisWorker(QThread):
@@ -103,21 +103,7 @@ class AnalysisWorker(QThread):
 
     def run(self) -> None:
         try:
-            dataset = build_run_analysis(self.run_dir, convert_csv_flat_parquet=False)
-            max_line_rows = max_line_utilization_rows(dataset.tables, self.branch_options)
-            group_branch_rows = list(max_line_rows)
-            control_area_rows = summarize_control_area_utilization(group_branch_rows)
-            voltage_group_rows = summarize_voltage_group_utilization(group_branch_rows)
-            self.finished_analysis.emit(
-                AnalysisBuildResult(
-                    dataset=dataset,
-                    max_line_rows=max_line_rows,
-                    group_branch_rows=group_branch_rows,
-                    control_area_rows=control_area_rows,
-                    voltage_group_rows=voltage_group_rows,
-                    line_rows=list(max_line_rows),
-                )
-            )
+            self.finished_analysis.emit(_build_analysis_result_in_process(self.run_dir, self.branch_options))
         except Exception:
             self.failed_analysis.emit(traceback.format_exc())
 

@@ -61,20 +61,27 @@ class RunAnalysisDataset:
         }
 
 
-def build_run_analysis(run_dir: str | Path, *, convert_csv_flat_parquet: bool = True) -> RunAnalysisDataset:
+def build_run_analysis(
+    run_dir: str | Path,
+    *,
+    convert_csv_flat_parquet: bool = True,
+    write_artifacts: bool = True,
+    compute_metric_summary: bool = True,
+) -> RunAnalysisDataset:
     """Parse a run directory and write reusable CSV/JSON analysis artifacts."""
 
     run_path = Path(run_dir).expanduser().resolve()
     report_dir = run_path / "reports"
     table_dir = report_dir / "tables"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    table_dir.mkdir(parents=True, exist_ok=True)
+    if write_artifacts:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        table_dir.mkdir(parents=True, exist_ok=True)
 
     tables = parse_all_output_tables(run_path)
     enrich_with_bus_metadata(tables)
-    metrics = compute_metrics(tables)
+    metrics = compute_metrics(tables) if compute_metric_summary else {}
     parquet_files = ensure_csv_flat_parquet(run_path, tables) if convert_csv_flat_parquet else {}
-    table_files = _write_tables(table_dir, tables)
+    table_files = _write_tables(table_dir, tables) if write_artifacts else {}
     for name, paths in parquet_files.items():
         table_files.setdefault(name, {}).update(paths)
 
@@ -88,7 +95,8 @@ def build_run_analysis(run_dir: str | Path, *, convert_csv_flat_parquet: bool = 
         table_files=table_files,
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
-    dataset.manifest_path.write_text(json.dumps(dataset.manifest(), indent=2), encoding="utf-8")
+    if write_artifacts:
+        dataset.manifest_path.write_text(json.dumps(dataset.manifest(), indent=2), encoding="utf-8")
     return dataset
 
 

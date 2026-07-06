@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from multiprocessing import freeze_support
 import sys
 
 
 def main() -> int:
+    freeze_support()
     try:
         from PySide6.QtWidgets import QApplication
     except ModuleNotFoundError:
