@@ -189,10 +189,58 @@ def test_build_analysis_result_writes_interactive_cache_after_cold_parse(tmp_pat
     first = interactive.build_interactive_analysis_result(run_dir, UtilizationBranchOptions())
     assert calls
     assert first.line_rows[0]["max_utilization_pct"] == 42.0
-    assert (run_dir / "reports" / "interactive_analysis_manifest.json").exists()
+    manifest_path = run_dir / "reports" / "interactive_analysis_manifest.json"
+    assert manifest_path.exists()
+    table_dir = run_dir / "reports" / "interactive_tables"
+    assert sorted(path.name for path in table_dir.iterdir()) == [
+        "area_metadata.csv",
+        "branch_metadata.csv",
+        "pflow_mm.csv",
+    ]
+    assert not list(table_dir.glob("*.json"))
+    assert not (run_dir / "reports" / "tables").exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["tables"][CSV_FLAT_RESULTS_TABLE]["csv_path"] == ""
 
     def fail_build_run_analysis(*args, **kwargs):
         raise AssertionError("warm interactive cache should avoid parsing run outputs")
+
+    monkeypatch.setattr(interactive, "build_run_analysis", fail_build_run_analysis)
+    second = interactive.build_interactive_analysis_result(run_dir, UtilizationBranchOptions())
+
+    assert second.line_rows[0]["max_utilization_pct"] == 42.0
+
+
+def test_build_analysis_result_writes_local_interactive_cache_without_csv_flat_status(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "runs" / "2026-07-05_14-48-34"
+    work = run_dir / "work"
+    work.mkdir(parents=True)
+    (work / "flat.csv").write_text("source\n", encoding="utf-8")
+    (work / "raw.raw").write_text("source\n", encoding="utf-8")
+    fake_dataset = _interactive_dataset(run_dir)
+    fake_dataset.tables.pop(CSV_FLAT_RESULTS_TABLE)
+    calls = []
+
+    def fake_build_run_analysis(*args, **kwargs):
+        calls.append((args, kwargs))
+        return fake_dataset
+
+    monkeypatch.setattr(interactive, "build_run_analysis", fake_build_run_analysis)
+
+    first = interactive.build_interactive_analysis_result(run_dir, UtilizationBranchOptions())
+    assert calls
+    assert first.line_rows[0]["max_utilization_pct"] == 42.0
+    table_dir = run_dir / "reports" / "interactive_tables"
+    assert sorted(path.name for path in table_dir.iterdir()) == [
+        "area_metadata.csv",
+        "branch_metadata.csv",
+        "pflow_mm.csv",
+    ]
+    manifest = json.loads((run_dir / "reports" / "interactive_analysis_manifest.json").read_text(encoding="utf-8"))
+    assert CSV_FLAT_RESULTS_TABLE not in manifest["tables"]
+
+    def fail_build_run_analysis(*args, **kwargs):
+        raise AssertionError("warm local interactive cache should avoid parsing run outputs")
 
     monkeypatch.setattr(interactive, "build_run_analysis", fail_build_run_analysis)
     second = interactive.build_interactive_analysis_result(run_dir, UtilizationBranchOptions())

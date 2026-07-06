@@ -19,7 +19,8 @@ from gridpack_workbench.gui.analysis_view_models import (
 )
 
 
-_INTERACTIVE_TABLES = ("pflow_mm", "branch_metadata", "area_metadata", CSV_FLAT_RESULTS_TABLE)
+_INTERACTIVE_TABLES = ("pflow_mm", "branch_metadata", "area_metadata")
+_INTERACTIVE_NOTE_ONLY_TABLES = (CSV_FLAT_RESULTS_TABLE,)
 _INTERACTIVE_MANIFEST = "interactive_analysis_manifest.json"
 _INTERACTIVE_TABLE_DIR = "interactive_tables"
 
@@ -106,6 +107,20 @@ def _load_cached_manifest(run_dir: Path, report_dir: Path, manifest_path: Path) 
             "parquet": str(table_info.get("parquet_path") or ""),
         }
 
+    for table_name in _INTERACTIVE_NOTE_ONLY_TABLES:
+        table_info = manifest_tables.get(table_name)
+        if not isinstance(table_info, dict):
+            continue
+        table = _read_optional_cached_table(table_name, table_info)
+        if table is None:
+            continue
+        tables[table_name] = table
+        table_files[table_name] = {
+            "csv": str(table_info.get("csv_path") or ""),
+            "json": str(table_info.get("json_path") or ""),
+            "parquet": str(table_info.get("parquet_path") or ""),
+        }
+
     return RunAnalysisDataset(
         run_dir=run_dir,
         report_dir=report_dir,
@@ -142,6 +157,17 @@ def _write_cached_interactive_dataset(dataset: RunAnalysisDataset) -> None:
             "parquet_path": "",
         }
 
+    for table_name in _INTERACTIVE_NOTE_ONLY_TABLES:
+        table = dataset.tables.get(table_name)
+        if not table:
+            continue
+        manifest_tables[table_name] = {
+            **table.schema_dict(),
+            "csv_path": "",
+            "json_path": "",
+            "parquet_path": "",
+        }
+
     manifest = {
         "dataset_version": ANALYSIS_DATASET_VERSION,
         "parser_version": PARSER_VERSION,
@@ -153,6 +179,25 @@ def _write_cached_interactive_dataset(dataset: RunAnalysisDataset) -> None:
         "tables": manifest_tables,
     }
     (report_dir / _INTERACTIVE_MANIFEST).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _read_optional_cached_table(table_name: str, table_info: dict[str, object]) -> ParsedTable | None:
+    csv_path_text = str(table_info.get("csv_path") or "")
+    if csv_path_text:
+        table = _read_cached_table(table_name, table_info, Path(csv_path_text))
+        if table is not None:
+            return table
+    notes = table_info.get("notes")
+    columns = table_info.get("columns")
+    if not isinstance(notes, list) and not isinstance(columns, list):
+        return None
+    return ParsedTable(
+        table_name,
+        str(table_info.get("source_file") or ""),
+        [str(column) for column in columns] if isinstance(columns, list) else [],
+        [],
+        [str(note) for note in notes] if isinstance(notes, list) else [],
+    )
 
 
 def _cached_table_is_fresh(run_dir: Path, csv_path: Path, source_file: str) -> bool:
