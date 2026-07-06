@@ -142,26 +142,26 @@ def test_csv_flat_accelerated_backend_uses_absolute_max_loading(tmp_path, monkey
     assert any("CPU Dask backend" in note for note in tables["csv_flat_results"].notes)
 
 
-def test_csv_flat_auto_prefers_dask_cudf_when_available(monkeypatch) -> None:
-    fake_dask_cudf = types.SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "dask_cudf", fake_dask_cudf)
+def test_csv_flat_auto_prefers_cudf_when_available(monkeypatch) -> None:
+    fake_cudf = types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "cudf", fake_cudf)
     monkeypatch.setenv("GRIDPACK_WORKBENCH_CSV_FLAT_BACKEND", "auto")
 
     backend = csv_flat._lazy_backend()
 
-    assert backend.name == "dask_cudf"
-    assert backend.module is fake_dask_cudf
+    assert backend.name == "cudf"
+    assert backend.module is fake_cudf
 
 
-def test_csv_flat_auto_uses_cudf_before_cpu_dask(monkeypatch) -> None:
-    fake_cudf = types.SimpleNamespace()
+def test_csv_flat_auto_uses_dask_cudf_before_cpu_dask(monkeypatch) -> None:
+    fake_dask_cudf = types.SimpleNamespace()
     original_import = builtins.__import__
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "dask_cudf":
-            raise ModuleNotFoundError("No module named 'dask_cudf'")
         if name == "cudf":
-            return fake_cudf
+            raise ModuleNotFoundError("No module named 'cudf'")
+        if name == "dask_cudf":
+            return fake_dask_cudf
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
@@ -169,8 +169,8 @@ def test_csv_flat_auto_uses_cudf_before_cpu_dask(monkeypatch) -> None:
 
     backend = csv_flat._lazy_backend()
 
-    assert backend.name == "cudf"
-    assert backend.module is fake_cudf
+    assert backend.name == "dask_cudf"
+    assert backend.module is fake_dask_cudf
 
 
 def test_csv_flat_forced_dask_cudf_does_not_silently_use_cpu_dask(monkeypatch) -> None:

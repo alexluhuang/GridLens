@@ -929,7 +929,7 @@ def _normalize_flat_result_row(raw_row: dict[str, str], lookup: dict[str, str]) 
 def _lazy_backend() -> _LazyBackend:
     requested = _requested_backend()
     errors: list[str] = []
-    backend_order = ("dask_cudf", "cudf", "dask") if requested == "auto" else (requested,)
+    backend_order = ("cudf", "dask_cudf", "dask") if requested == "auto" else (requested,)
 
     for backend_name in backend_order:
         if backend_name == "python":
