@@ -11,25 +11,6 @@ from gridpack_workbench.analysis.utilization import UtilizationBranchOptions
 from gridpack_workbench.gui import analysis_tab
 
 
-def test_line_chart_display_points_preserves_small_sets() -> None:
-    rows = [{"line": index} for index in range(4)]
-
-    points = analysis_tab._line_chart_display_points(rows)
-
-    assert points == [(1, rows[0]), (2, rows[1]), (3, rows[2]), (4, rows[3])]
-
-
-def test_line_chart_display_points_samples_large_sets() -> None:
-    rows = [{"line": index} for index in range(analysis_tab.LINE_CHART_MAX_POINTS + 1)]
-
-    points = analysis_tab._line_chart_display_points(rows)
-
-    assert len(points) == analysis_tab.LINE_CHART_MAX_POINTS
-    assert points[0] == (1, rows[0])
-    assert points[-1] == (len(rows), rows[-1])
-    assert [point[0] for point in points] == sorted({point[0] for point in points})
-
-
 def test_csv_flat_runtime_status_reports_gpu_backend() -> None:
     dataset = SimpleNamespace(
         tables={

@@ -60,18 +60,6 @@ CONTROL_AREA_MIN_HEIGHT = 360
 CONTROL_AREA_TOP_BOTTOM_PADDING = 150
 CONTROL_AREA_ROW_PIXELS = 26
 CONTROL_AREA_LABEL_LIMIT = 46
-LINE_CHART_MAX_POINTS = 5000
-
-
-def _line_chart_display_points(rows: list[dict[str, object]]) -> list[tuple[int, dict[str, object]]]:
-    if len(rows) <= LINE_CHART_MAX_POINTS:
-        return [(index, row) for index, row in enumerate(rows, start=1)]
-    last_index = len(rows) - 1
-    sampled_indices = [
-        min(last_index, index * last_index // (LINE_CHART_MAX_POINTS - 1))
-        for index in range(LINE_CHART_MAX_POINTS)
-    ]
-    return [(index + 1, rows[index]) for index in sampled_indices]
 
 
 def _csv_flat_runtime_status(dataset: RunAnalysisDataset | None) -> str:
@@ -632,10 +620,8 @@ class AnalysisTab(QWidget):
             canvas.draw_idle()
             return
 
-        display_points = _line_chart_display_points(rows)
-        x_values = [point[0] for point in display_points]
-        display_rows = [point[1] for point in display_points]
-        values = [numeric_value(row.get("max_utilization_pct")) for row in display_rows]
+        x_values = list(range(1, len(rows) + 1))
+        values = [numeric_value(row.get("max_utilization_pct")) for row in rows]
         max_value = max(values) if values else 0
         axis.axhspan(0, 100, color="#dff2dd", alpha=0.75, label="Capability")
         axis.fill_between(x_values, values, color="#92d0c8", alpha=0.55, label="Utilization")
@@ -651,19 +637,8 @@ class AnalysisTab(QWidget):
         axis.set_title(self._line_title())
         self._style_axis(axis)
         axis.legend(loc="upper left", fontsize=8)
-        if len(display_rows) < len(rows):
-            axis.text(
-                0.99,
-                0.03,
-                f"Showing {len(display_rows):,} of {len(rows):,} lines",
-                ha="right",
-                va="bottom",
-                fontsize=8,
-                color="#5b667a",
-                transform=axis.transAxes,
-            )
         canvas.setMinimumHeight(390)
-        self.line_hover.bind_curve(axis, x_values, values, display_rows, self._line_hover_text)
+        self.line_hover.bind_curve(axis, x_values, values, rows, self._line_hover_text)
         canvas.draw_idle()
 
     def _sorted_group_rows(
