@@ -11,7 +11,7 @@ from gridlens.core.validation import (
     validate_executable,
     validate_mpi_processes,
 )
-from gridlens.runner.gridpack_runner import GridpackRunRequest
+from gridlens.runner.gridpack_runner import GridpackRunRequest, effective_gridpack_container_name
 
 
 VALID_PULL_POLICIES = frozenset({"never", "missing", "always"})
@@ -89,6 +89,7 @@ def build_gridpack_run_request(
         use_platform_flag=normalized.use_platform_flag,
         memory_limit=normalized.memory_limit,
         extra_docker_args=normalized.extra_docker_args,
+        container_name=effective_gridpack_container_name(run_dir, normalized.extra_docker_args),
     )
 
 

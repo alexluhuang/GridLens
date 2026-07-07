@@ -26,6 +26,16 @@ def _split_extra_args(extra_docker_args: str | list[str] | None) -> list[str]:
     return shlex.split(extra_docker_args)
 
 
+def docker_container_name_from_args(extra_docker_args: str | list[str] | None) -> str:
+    args = _split_extra_args(extra_docker_args)
+    for index, arg in enumerate(args):
+        if arg == "--name" and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith("--name="):
+            return arg.split("=", 1)[1]
+    return ""
+
+
 def build_gridpack_docker_command(
     work_dir: str | Path,
     image: str,
@@ -38,6 +48,7 @@ def build_gridpack_docker_command(
     use_platform_flag: bool = True,
     memory_limit: str = "",
     extra_docker_args: str | list[str] | None = None,
+    container_name: str = "",
     executable_args: list[str] | None = None,
 ) -> list[str]:
     resolved_work_dir = Path(work_dir).expanduser().resolve()
@@ -71,7 +82,11 @@ def build_gridpack_docker_command(
     if memory_limit.strip():
         cmd += ["--memory", memory_limit.strip()]
 
-    cmd += _split_extra_args(extra_docker_args)
+    extra_args = _split_extra_args(extra_docker_args)
+    if container_name.strip() and not docker_container_name_from_args(extra_args):
+        cmd += ["--name", container_name.strip()]
+
+    cmd += extra_args
     cmd += [
         "-v",
         f"{resolved_work_dir}:{CONTAINER_WORKSPACE}",

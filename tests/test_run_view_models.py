@@ -69,6 +69,7 @@ def test_build_gridpack_run_request_uses_project_xml_and_normalized_values(tmp_p
     assert request.xml_filename == "input.xml"
     assert request.mpi_processes == 4
     assert request.network_mode == "none"
+    assert request.container_name == "gridlens-run"
 
 
 def test_run_form_validation_rejects_unknown_pull_policy() -> None:

@@ -3,12 +3,19 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from gridlens.core.project import Project
-from gridlens.runner.gridpack_runner import GridpackRunRequest, run_gridpack_case
+from gridlens.runner.gridpack_runner import (
+    GridpackRunRequest,
+    effective_gridpack_container_name,
+    gridpack_container_name,
+    run_gridpack_case,
+    terminate_gridpack_run,
+)
 
 
 class FakeProcess:
@@ -17,6 +24,13 @@ class FakeProcess:
 
     def wait(self) -> int:
         return 0
+
+
+class FakeCompletedProcess:
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 class GridpackRunnerTests(unittest.TestCase):
@@ -57,6 +71,9 @@ class GridpackRunnerTests(unittest.TestCase):
 
             expected_sha = hashlib.sha256(b"<Configuration />").hexdigest()
             manifest = json.loads(result.manifest_file.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["container_name"], gridpack_container_name(run_dir))
+            self.assertIn("--name", manifest["command"])
+            self.assertIn(gridpack_container_name(run_dir), manifest["command"])
             self.assertEqual(
                 manifest["input_files"],
                 [
@@ -92,6 +109,68 @@ class GridpackRunnerTests(unittest.TestCase):
             self.assertIn("Docker run could not be started: docker unavailable", terminal_log)
             self.assertEqual(terminal_log, run_log)
             self.assertIn("Docker run could not be started", "".join(messages))
+
+    def test_effective_container_name_respects_explicit_extra_arg_name(self) -> None:
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "runs" / "2026-07-07_10-00-00"
+
+            self.assertEqual(
+                effective_gridpack_container_name(run_dir, "--name custom-gridpack-run"),
+                "custom-gridpack-run",
+            )
+
+    def test_terminate_gridpack_run_stops_named_container(self) -> None:
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return FakeCompletedProcess(0, stdout="gridlens-run\n")
+
+        with patch("gridlens.runner.gridpack_runner.subprocess.run", side_effect=fake_run):
+            result = terminate_gridpack_run("gridlens-run")
+
+        self.assertTrue(result.stopped)
+        self.assertFalse(result.killed)
+        self.assertEqual(calls, [["docker", "stop", "--time", "10", "gridlens-run"]])
+
+    def test_terminate_gridpack_run_kills_when_stop_times_out(self) -> None:
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            if command[:2] == ["docker", "stop"]:
+                raise subprocess.TimeoutExpired(command, timeout=15)
+            return FakeCompletedProcess(0, stdout="gridlens-run\n")
+
+        with patch("gridlens.runner.gridpack_runner.subprocess.run", side_effect=fake_run):
+            result = terminate_gridpack_run("gridlens-run")
+
+        self.assertFalse(result.stopped)
+        self.assertTrue(result.killed)
+        self.assertEqual(
+            calls,
+            [
+                ["docker", "stop", "--time", "10", "gridlens-run"],
+                ["docker", "kill", "gridlens-run"],
+            ],
+        )
+
+    def test_terminate_gridpack_run_kills_when_stop_fails(self) -> None:
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            if command[:2] == ["docker", "stop"]:
+                return FakeCompletedProcess(1, stderr="stop refused")
+            return FakeCompletedProcess(0, stdout="gridlens-run\n")
+
+        with patch("gridlens.runner.gridpack_runner.subprocess.run", side_effect=fake_run):
+            result = terminate_gridpack_run("gridlens-run")
+
+        self.assertFalse(result.stopped)
+        self.assertTrue(result.killed)
+        self.assertIn("stop refused", result.message)
+        self.assertEqual(calls[-1], ["docker", "kill", "gridlens-run"])
 
 
 if __name__ == "__main__":

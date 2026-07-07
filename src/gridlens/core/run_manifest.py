@@ -41,6 +41,7 @@ class RunManifest:
     host_architecture: str
     network_mode: str
     pull_policy: str
+    container_name: str
     command: list[str]
     input_files: list[ManifestInputFile] = field(default_factory=list)
     notes: str = ""
@@ -56,6 +57,7 @@ class RunManifest:
         mpi_processes: int,
         network_mode: str,
         pull_policy: str,
+        container_name: str,
         command: list[str],
         input_files: list[ManifestInputFile] | None = None,
         notes: str = "",
@@ -72,6 +74,7 @@ class RunManifest:
             host_architecture=detect_host_architecture(),
             network_mode=network_mode,
             pull_policy=pull_policy,
+            container_name=container_name,
             command=command,
             input_files=input_files or [],
             notes=notes,

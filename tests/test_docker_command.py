@@ -8,6 +8,7 @@ from gridlens.runner.docker_command import (
     DOCKER_BASE_COMMAND,
     MPI_EXECUTABLE,
     build_gridpack_docker_command,
+    docker_container_name_from_args,
 )
 
 
@@ -52,6 +53,42 @@ class DockerCommandTests(unittest.TestCase):
         self.assertIn("4", command)
         self.assertIn("--name", command)
         self.assertIn("gridpack-test", command)
+
+    def test_container_name_is_added_when_extra_args_do_not_define_one(self) -> None:
+        command = build_gridpack_docker_command(
+            work_dir=Path.cwd(),
+            image="example/gridpack:1.0",
+            executable="powerflow.x",
+            xml_filename="case.xml",
+            mpi_processes=2,
+            container_name="gridlens-run-1",
+            use_host_user=False,
+            use_platform_flag=False,
+        )
+
+        self.assertIn("--name", command)
+        self.assertEqual(command[command.index("--name") + 1], "gridlens-run-1")
+
+    def test_explicit_extra_arg_name_takes_precedence(self) -> None:
+        command = build_gridpack_docker_command(
+            work_dir=Path.cwd(),
+            image="example/gridpack:1.0",
+            executable="powerflow.x",
+            xml_filename="case.xml",
+            mpi_processes=2,
+            container_name="gridlens-generated",
+            extra_docker_args="--name gridpack-test",
+            use_host_user=False,
+            use_platform_flag=False,
+        )
+
+        self.assertEqual(command.count("--name"), 1)
+        self.assertIn("gridpack-test", command)
+        self.assertNotIn("gridlens-generated", command)
+
+    def test_container_name_can_be_read_from_extra_args(self) -> None:
+        self.assertEqual(docker_container_name_from_args("--name gridpack-test"), "gridpack-test")
+        self.assertEqual(docker_container_name_from_args("--name=gridpack-test"), "gridpack-test")
 
     def test_xml_path_is_reduced_to_container_local_file_name(self) -> None:
         command = build_gridpack_docker_command(

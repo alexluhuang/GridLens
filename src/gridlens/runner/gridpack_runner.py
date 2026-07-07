@@ -4,15 +4,17 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Callable
 
 from gridlens.core.project import ProjectData, copy_project_inputs_to_run, file_sha256
 from gridlens.core.run_manifest import ManifestInputFile, RunManifest
-from gridlens.runner.docker_command import build_gridpack_docker_command
+from gridlens.runner.docker_command import build_gridpack_docker_command, docker_container_name_from_args
 
 
 LogCallback = Callable[[str], None]
+TERMINATE_GRACE_SECONDS = 10
 
 
 @dataclass(slots=True)
@@ -29,6 +31,7 @@ class GridpackRunRequest:
     use_platform_flag: bool = True
     memory_limit: str = ""
     extra_docker_args: str = ""
+    container_name: str = ""
     notes: str = ""
 
 
@@ -40,6 +43,14 @@ class GridpackRunResult:
     terminal_log_file: Path
     status_file: Path
     manifest_file: Path
+
+
+@dataclass(slots=True)
+class GridpackTerminationResult:
+    container_name: str
+    stopped: bool
+    killed: bool
+    message: str
 
 
 @dataclass(slots=True)
@@ -101,11 +112,75 @@ def _input_manifest_records(work_dir: Path) -> list[ManifestInputFile]:
     return records
 
 
+def gridpack_container_name(run_dir: str | Path) -> str:
+    safe_run_id = re.sub(r"[^a-z0-9_.-]+", "-", Path(run_dir).name.lower()).strip("-.")
+    return f"gridlens-{safe_run_id or 'run'}"
+
+
+def effective_gridpack_container_name(run_dir: str | Path, extra_docker_args: str | list[str] | None = None) -> str:
+    return docker_container_name_from_args(extra_docker_args) or gridpack_container_name(run_dir)
+
+
+def terminate_gridpack_run(container_name: str, grace_seconds: int = TERMINATE_GRACE_SECONDS) -> GridpackTerminationResult:
+    name = container_name.strip()
+    if not name:
+        raise ValueError("Container name is required.")
+
+    stop_command = ["docker", "stop", "--time", str(grace_seconds), name]
+    try:
+        stopped = subprocess.run(
+            stop_command,
+            capture_output=True,
+            text=True,
+            timeout=grace_seconds + 5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return _kill_gridpack_container(name, f"Docker stop did not finish within {grace_seconds} seconds.")
+
+    if stopped.returncode == 0:
+        return GridpackTerminationResult(
+            container_name=name,
+            stopped=True,
+            killed=False,
+            message=f"Docker container {name} stopped.",
+        )
+
+    reason = (stopped.stderr or stopped.stdout or f"docker stop exited with {stopped.returncode}").strip()
+    return _kill_gridpack_container(name, reason)
+
+
+def _kill_gridpack_container(container_name: str, reason: str) -> GridpackTerminationResult:
+    killed = subprocess.run(
+        ["docker", "kill", container_name],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if killed.returncode == 0:
+        return GridpackTerminationResult(
+            container_name=container_name,
+            stopped=False,
+            killed=True,
+            message=f"Docker stop failed or timed out ({reason}); docker kill terminated {container_name}.",
+        )
+
+    failure = (killed.stderr or killed.stdout or f"docker kill exited with {killed.returncode}").strip()
+    return GridpackTerminationResult(
+        container_name=container_name,
+        stopped=False,
+        killed=False,
+        message=f"Docker stop failed ({reason}); docker kill also failed ({failure}).",
+    )
+
+
 def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | None = None) -> GridpackRunResult:
     files = GridpackRunFiles.for_run(request.run_dir)
     files.create_directories()
 
     copy_project_inputs_to_run(request.project_data, files.run_dir)
+    container_name = request.container_name or effective_gridpack_container_name(files.run_dir, request.extra_docker_args)
     command = build_gridpack_docker_command(
         work_dir=files.work_dir,
         image=request.image,
@@ -118,6 +193,7 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
         use_platform_flag=request.use_platform_flag,
         memory_limit=request.memory_limit,
         extra_docker_args=request.extra_docker_args,
+        container_name=container_name,
     )
 
     manifest = RunManifest.now(
@@ -129,6 +205,7 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
         mpi_processes=request.mpi_processes,
         network_mode=request.network_mode,
         pull_policy=request.pull_policy,
+        container_name=container_name,
         command=command,
         input_files=_input_manifest_records(files.work_dir),
         notes=request.notes,

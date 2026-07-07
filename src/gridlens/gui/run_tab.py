@@ -32,7 +32,13 @@ from gridlens.gui.run_view_models import (
 )
 from gridlens.gui.theme import set_button_role
 from gridlens.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
-from gridlens.runner.gridpack_runner import GridpackRunRequest, GridpackRunResult, run_gridpack_case
+from gridlens.runner.gridpack_runner import (
+    GridpackRunRequest,
+    GridpackRunResult,
+    GridpackTerminationResult,
+    run_gridpack_case,
+    terminate_gridpack_run,
+)
 
 
 class RunWorker(QThread):
@@ -52,6 +58,22 @@ class RunWorker(QThread):
             self.failed_run.emit(traceback.format_exc())
 
 
+class TerminateWorker(QThread):
+    finished_terminate = Signal(object)
+    failed_terminate = Signal(str)
+
+    def __init__(self, container_name: str) -> None:
+        super().__init__()
+        self.container_name = container_name
+
+    def run(self) -> None:
+        try:
+            result = terminate_gridpack_run(self.container_name)
+            self.finished_terminate.emit(result)
+        except Exception:
+            self.failed_terminate.emit(traceback.format_exc())
+
+
 class RunTab(QWidget):
     run_finished = Signal(object)
 
@@ -61,6 +83,9 @@ class RunTab(QWidget):
         self.project: Project | None = None
         self.project_data: ProjectData | None = None
         self.worker: RunWorker | None = None
+        self.terminate_worker: TerminateWorker | None = None
+        self.active_request: GridpackRunRequest | None = None
+        self.termination_requested = False
         self.last_run_dir: Path | None = None
 
         layout = QVBoxLayout(self)
@@ -108,12 +133,17 @@ class RunTab(QWidget):
         set_button_role(self.run_button, "primary")
         self.run_button.clicked.connect(self.start_run)
         self.run_button.setEnabled(False)
+        self.terminate_button = QPushButton("Terminate")
+        set_button_role(self.terminate_button, "destructive")
+        self.terminate_button.clicked.connect(self.terminate_run)
+        self.terminate_button.setEnabled(False)
         self.open_run_button = QPushButton("Open Run Folder")
         set_button_role(self.open_run_button, "secondary")
         self.open_run_button.clicked.connect(self.open_last_run)
         self.open_run_button.setEnabled(False)
         action_row.addWidget(self.check_button)
         action_row.addWidget(self.run_button)
+        action_row.addWidget(self.terminate_button)
         action_row.addWidget(self.open_run_button)
         action_row.addStretch()
 
@@ -172,7 +202,10 @@ class RunTab(QWidget):
         self.log.clear()
         self.append_log(f"Created run folder: {run_dir}")
         self.run_button.setEnabled(False)
+        self.terminate_button.setEnabled(True)
         self.open_run_button.setEnabled(False)
+        self.active_request = request
+        self.termination_requested = False
 
         self.worker = RunWorker(request)
         self.worker.log_line.connect(self.append_log)
@@ -182,6 +215,32 @@ class RunTab(QWidget):
 
     def append_log(self, text: str) -> None:
         self.log.append(text.rstrip())
+
+    def terminate_run(self) -> None:
+        if not self.active_request:
+            QMessageBox.warning(self, "No active run", "There is no active GridPACK run to terminate.")
+            return
+        if self.terminate_worker and self.terminate_worker.isRunning():
+            return
+
+        response = QMessageBox.question(
+            self,
+            "Terminate run",
+            "Terminate the active GridPACK Docker run?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if response != QMessageBox.Yes:
+            return
+
+        self.termination_requested = True
+        self.terminate_button.setEnabled(False)
+        self.append_log(f"Terminating Docker container: {self.active_request.container_name}")
+
+        self.terminate_worker = TerminateWorker(self.active_request.container_name)
+        self.terminate_worker.finished_terminate.connect(self.on_terminated)
+        self.terminate_worker.failed_terminate.connect(self.on_terminate_failed)
+        self.terminate_worker.start()
 
     def _run_form_values(self) -> RunFormValues:
         return RunFormValues(
@@ -198,20 +257,42 @@ class RunTab(QWidget):
 
     def on_finished(self, result: GridpackRunResult) -> None:
         self.run_button.setEnabled(True)
+        self.terminate_button.setEnabled(False)
         self.last_run_dir = result.run_dir
         self.open_run_button.setEnabled(True)
-        if result.return_code == 0:
+        if self.termination_requested:
+            self.append_log(f"Run terminated with return code {result.return_code}.")
+            QMessageBox.information(self, "Run terminated", "The GridPACK Docker run was terminated.")
+        elif result.return_code == 0:
             self.append_log("Run completed successfully.")
             QMessageBox.information(self, "Run completed", "GridPACK completed successfully.")
         else:
             self.append_log(f"Run failed with return code {result.return_code}.")
             QMessageBox.warning(self, "Run failed", f"GridPACK exited with return code {result.return_code}.")
+        self.active_request = None
+        self.termination_requested = False
         self.run_finished.emit(result.run_dir)
 
     def on_failed(self, error_text: str) -> None:
         self.run_button.setEnabled(True)
+        self.terminate_button.setEnabled(False)
+        self.active_request = None
+        self.termination_requested = False
         self.append_log(error_text)
         QMessageBox.critical(self, "Run error", error_text)
+
+    def on_terminated(self, result: GridpackTerminationResult) -> None:
+        self.append_log(result.message)
+        if result.stopped or result.killed:
+            QMessageBox.information(self, "Terminate requested", result.message)
+        else:
+            self.terminate_button.setEnabled(self.worker is not None and self.worker.isRunning())
+            QMessageBox.warning(self, "Terminate failed", result.message)
+
+    def on_terminate_failed(self, error_text: str) -> None:
+        self.terminate_button.setEnabled(self.worker is not None and self.worker.isRunning())
+        self.append_log(error_text)
+        QMessageBox.critical(self, "Terminate error", error_text)
 
     def open_last_run(self) -> None:
         if self.last_run_dir:
