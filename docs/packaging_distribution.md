@@ -1,81 +1,67 @@
 # Packaging And Distribution
 
-The recommended distribution path is:
+The recommended DGX Spark distribution artifact is one local Debian package:
 
 ```text
-development editable install
-  -> PyInstaller onedir build
-  -> internal pilot tarball
-  -> Debian package for DGX OS 7
-  -> signed package and internal website download
+dist/gridlens_<version>_<arch>.deb
 ```
 
-## Build With PyInstaller
+Install it with `apt`, not `dpkg`, so DGX OS can download Docker and shared-library dependencies:
 
 ```bash
-cd /home/alh360/Documents/gridlens-dev
-source .venv/bin/activate
-python -m pip install -e ".[dev]"
-pyinstaller packaging/pyinstaller/gridlens.spec
+sudo apt install ./dist/gridlens_0.1.0_arm64.deb
 ```
 
-Output:
+The package installs GridLens to `/opt/gridlens`, adds `/usr/bin/gridlens`, enables Docker when systemd is available,
+and adds the sudo-invoking user to the `docker` group when that user can be identified. Users must log out and back in
+before new Docker group membership is active.
+
+## Build The Package
+
+Build on the same architecture you plan to distribute to. For DGX Spark, build on an ARM64 DGX Spark or equivalent ARM64
+Ubuntu 24.04 environment.
+
+One-time build host setup:
+
+```bash
+sudo apt update
+sudo apt install python3 python3-venv python3-pip dpkg-dev
+```
+
+Build:
+
+```bash
+cd /home/alh360/Documents/gridpack-workbench-dev
+packaging/deb/build_deb.sh
+```
+
+Output on DGX Spark ARM64:
 
 ```text
-dist/GridLens/
-  GridLens
-  _internal/
+dist/gridlens_0.1.0_arm64.deb
 ```
 
-Test:
+The build script creates `.venv-packaging`, installs GridLens with `dev` and full `analysis` extras, runs PyInstaller,
+and wraps the frozen app in a Debian package. The resulting `.deb` is large because it bundles RAPIDS/cuDF and related
+CUDA Python libraries for DGX Spark. To override the version:
 
 ```bash
-./dist/GridLens/GridLens
+packaging/deb/build_deb.sh 0.1.1
 ```
 
-## Pilot Tarball
-
-For a small internal pilot:
+To reuse an existing `dist/GridLens` bundle without rebuilding it:
 
 ```bash
-cd dist
-tar -czf GridLens-0.1.0-linux.tar.gz GridLens
+GRIDLENS_SKIP_BUNDLE_BUILD=1 packaging/deb/build_deb.sh
 ```
 
-A pilot user can unpack and run:
+## What The Package Downloads
 
-```bash
-tar -xzf GridLens-0.1.0-linux.tar.gz
-./GridLens/GridLens
-```
+On the build machine, Python GUI, analysis, RAPIDS/cuDF, and CUDA Python libraries are downloaded from Python package
+indexes into the bundled PyInstaller app.
 
-## Debian Package
-
-After PyInstaller succeeds:
-
-```bash
-packaging/deb/build_deb.sh 0.1.0
-```
-
-Output:
-
-```text
-dist/gridlens_0.1.0.deb
-```
-
-Install:
-
-```bash
-sudo apt install ./dist/gridlens_0.1.0.deb
-```
-
-The installed layout is:
-
-```text
-/opt/gridlens/
-/usr/share/applications/gridlens.desktop
-/usr/share/icons/hicolor/scalable/apps/gridlens.svg
-```
+On the user machine, `apt install ./gridlens_<version>_<arch>.deb` downloads Docker and required Qt/X11 runtime
+libraries from configured DGX OS/Ubuntu package repositories.
 
 ## Internal Website Distribution
 
@@ -84,12 +70,13 @@ For regulators, publish a simple download page in an approved internal environme
 - app `.deb`;
 - SHA-256 checksum;
 - versioned release notes;
-- required Docker/GridPACK image version;
+- required GridPACK image version;
 - installation guide;
 - troubleshooting guide;
 - security statement.
 
-Do not make the installer auto-download container images in CEII environments. Provide the image through an approved internal registry or offline tarball.
+Do not make the installer auto-download GridPACK container images in CEII environments. Provide the image through an
+approved internal registry or offline tarball.
 
 ## Why Not Flatpak First
 

@@ -54,13 +54,19 @@ docker image inspect your-registry/gridpack-ca:0.1.0
 
 ## App Install
 
-Development install:
+Install the distributed package with `apt` so Docker and shared-library dependencies are downloaded automatically:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+sudo apt install ./gridlens_0.1.0_arm64.deb
+```
+
+Log out and back in if the installer added your account to the `docker` group, then run:
+
+```bash
 gridlens
 ```
 
-Production install should use the `.deb` built from `docs/packaging_distribution.md`.
+For development and packaging builds, see `docs/packaging_distribution.md`.
+
+The package bundles GridLens Python libraries, including RAPIDS/cuDF for DGX Spark analysis. It does not bundle the
+GridPACK Docker image; load or pull the approved image before running sensitive cases.

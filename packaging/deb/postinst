@@ -1,6 +1,22 @@
 #!/bin/sh
 set -e
 
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl enable --now docker >/dev/null 2>&1 || true
+fi
+
+if command -v addgroup >/dev/null 2>&1 && ! getent group docker >/dev/null 2>&1; then
+  addgroup --system docker >/dev/null 2>&1 || true
+fi
+
+INSTALL_USER="${SUDO_USER:-}"
+if [ -n "$INSTALL_USER" ] && [ "$INSTALL_USER" != "root" ] && command -v adduser >/dev/null 2>&1; then
+  adduser "$INSTALL_USER" docker >/dev/null 2>&1 || true
+  echo "GridLens: added $INSTALL_USER to the docker group. Log out and back in before running Docker without sudo."
+else
+  echo "GridLens: Docker is installed. Add each GridLens user to the docker group if Docker access is denied."
+fi
+
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database /usr/share/applications || true
 fi

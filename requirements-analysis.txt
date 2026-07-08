@@ -1,9 +1,14 @@
+cuda-toolkit>=13.3,<14
+cudf-cu13>=26.6,<27
+cupy-cuda13x>=14.1,<15
+dask-cuda>=26.6,<27
+dask-cudf-cu13>=26.6,<27
 matplotlib>=3.8
+numba-cuda>=0.28
+nvidia-nccl-cu13>=2.27,<3
 pandas>=2.2
 dask[dataframe]>=2024.1
 distributed>=2024.1
 pyarrow>=15
-# On DGX systems with RAPIDS, install/provide cuDF so `import cudf.pandas`
-# succeeds and pandas calls are accelerated on the GPU.
-# For ca-scalability-v2 csv_flat GPU acceleration, also install RAPIDS
-# dask-cudf/dask-cuda packages that match the DGX Spark Python/CUDA stack.
+# RAPIDS/cuDF is part of GridLens full functionality and must be present in
+# packaging builds for DGX Spark.

@@ -1,0 +1,12 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: GridLens
+Source: https://example.invalid/gridlens
+
+Files: *
+Copyright: GridLens Contributors
+License: GPL-3.0-only
+
+License: GPL-3.0-only
+ This package is distributed under the GNU General Public License version 3.
+ See /usr/share/common-licenses/GPL-3 for the full license text on Debian and
+ Ubuntu systems.

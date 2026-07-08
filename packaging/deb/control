@@ -4,8 +4,30 @@ Section: science
 Priority: optional
 Architecture: any
 Maintainer: GridLens Contributors
-Depends: docker-ce | docker.io
+Depends: adduser,
+ docker.io | docker-ce,
+ desktop-file-utils,
+ hicolor-icon-theme,
+ libdbus-1-3,
+ libegl1,
+ libfontconfig1,
+ libfreetype6,
+ libgl1,
+ libglib2.0-0,
+ libx11-6,
+ libxcb-cursor0,
+ libxcb-icccm4,
+ libxcb-image0,
+ libxcb-keysyms1,
+ libxcb-randr0,
+ libxcb-render-util0,
+ libxcb-shape0,
+ libxcb-sync1,
+ libxcb-xfixes0,
+ libxcb-xinerama0,
+ libxkbcommon-x11-0,
+ libxrender1
 Description: Local GUI for GridPACK contingency analysis
- GridLens is a local PySide6 desktop application that runs
- GridPACK Docker containers against regulator-selected project inputs
- and stores run logs, manifests, outputs, and reports on the local machine.
+ GridLens is a local PySide6 desktop application that runs GridPACK Docker
+ containers against regulator-selected project inputs and stores run logs,
+ manifests, outputs, charts, and reports on the local machine.

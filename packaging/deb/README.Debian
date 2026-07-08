@@ -1,0 +1,15 @@
+GridLens for DGX Spark
+======================
+
+Install the local package with apt, not dpkg, so Ubuntu/DGX OS can download
+Docker and shared-library dependencies:
+
+  sudo apt install ./gridlens_<version>_<arch>.deb
+
+The GridLens application and Python libraries, including RAPIDS/cuDF, are
+bundled under /opt/gridlens. Docker is installed through the package dependency
+on docker.io or docker-ce.
+
+The post-install script enables Docker and adds the sudo-invoking user to the
+docker group when that user can be identified. Users may need to log out and
+back in before Docker group membership is active.
