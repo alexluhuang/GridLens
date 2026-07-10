@@ -37,8 +37,27 @@ def test_debian_build_script_bundles_full_python_stack() -> None:
 def test_pyinstaller_spec_collects_analysis_packages() -> None:
     spec = _read("packaging/pyinstaller/gridlens.spec")
 
-    for package in ("matplotlib", "pandas", "dask", "distributed", "pyarrow", "cudf", "dask_cudf"):
+    for package in ("matplotlib", "pandas", "dask", "distributed", "pyarrow", "cudf", "dask_cudf", "graphlib", "nvtx"):
         assert package in spec
+
+
+def test_pyinstaller_spec_collects_rapids_loader_package_data() -> None:
+    spec = _read("packaging/pyinstaller/gridlens.spec")
+
+    assert "collect_data_files" in spec
+    for package in ("libcudf", "libkvikio", "librmm", "rapids_logger"):
+        assert package in spec
+    assert 'includes=["VERSION", "GIT_COMMIT"]' in spec
+
+
+def test_pyinstaller_spec_runs_numba_cuda_redirector_runtime_hook() -> None:
+    spec = _read("packaging/pyinstaller/gridlens.spec")
+
+    assert "_numba_cuda_redirector" in spec
+    assert "runtime_hooks" in spec
+    assert "numba_cuda_redirector.py" in spec
+    assert '_collect_package_relative_files("numba_cuda", ["**/*.so"])' in spec
+    assert '_collect_package_relative_files("cuda", ["**/*.so"])' in spec
 
 
 def test_analysis_requirements_include_rapids_stack() -> None:

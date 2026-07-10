@@ -1,11 +1,34 @@
 from __future__ import annotations
 
+import importlib
 from multiprocessing import freeze_support
+import os
 import sys
+import traceback
+
+
+def _run_import_diagnostics() -> int:
+    modules = ("cudf", "dask_cudf", "dask.dataframe")
+    failed = False
+    for module_name in modules:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            failed = True
+            print(f"FAIL {module_name}", file=sys.stderr)
+            traceback.print_exc()
+            continue
+        version = getattr(module, "__version__", "")
+        suffix = f" {version}" if version else ""
+        print(f"OK {module_name}{suffix}")
+    return 1 if failed else 0
 
 
 def main() -> int:
     freeze_support()
+    if os.environ.get("GRIDLENS_DIAGNOSTICS", "").strip().lower() == "imports":
+        return _run_import_diagnostics()
+
     try:
         from PySide6.QtWidgets import QApplication
     except ModuleNotFoundError:
