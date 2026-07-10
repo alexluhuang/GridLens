@@ -5,6 +5,8 @@ from collections.abc import Mapping, Sequence
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 
+from gridlens.gui.theme import configure_table
+
 
 TableRow = Mapping[str, object]
 
@@ -19,6 +21,7 @@ def make_read_only_item(value: object) -> QTableWidgetItem:
 def populate_table(table: QTableWidget, rows: Sequence[TableRow], columns: Sequence[str]) -> None:
     """Replace a QTableWidget with read-only rows from dictionaries."""
     table.clear()
+    configure_table(table)
     table.setColumnCount(len(columns))
     table.setRowCount(len(rows))
     table.setHorizontalHeaderLabels(list(columns))

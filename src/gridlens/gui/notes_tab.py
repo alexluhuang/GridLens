@@ -13,6 +13,36 @@ class NotesTab(QWidget):
         browser.setOpenExternalLinks(True)
         browser.setHtml(
             """
+            <style>
+              body {
+                color: #111111;
+                font-family: Helvetica, Arial, sans-serif;
+                font-size: 11pt;
+                line-height: 1.45;
+                margin: 0;
+              }
+              h1 {
+                font-size: 20pt;
+                margin: 0 0 14px 0;
+              }
+              h2 {
+                border-top: 1px solid #d6d6d6;
+                font-size: 14pt;
+                margin: 22px 0 8px 0;
+                padding-top: 14px;
+              }
+              p {
+                margin: 0 0 10px 0;
+              }
+              li {
+                margin: 4px 0;
+              }
+              code {
+                background: #f2f3f4;
+                color: #111111;
+                padding: 1px 4px;
+              }
+            </style>
             <h1>Analysis Notes</h1>
             <p>The Branch Analysis and Transformer Analysis tabs use the same parsing, enrichment, and
             plotting pipeline. The difference is the facility type filter: Branch Analysis includes

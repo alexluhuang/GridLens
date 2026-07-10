@@ -27,7 +27,7 @@ from gridlens.gui.project_view_models import (
     prepare_project_save,
     should_update_project_folder,
 )
-from gridlens.gui.theme import set_button_role
+from gridlens.gui.theme import configure_form_layout, set_button_role, set_muted_label
 
 
 class ProjectTab(QWidget):
@@ -45,13 +45,18 @@ class ProjectTab(QWidget):
 
         project_box = QGroupBox("Project")
         project_form = QFormLayout(project_box)
+        configure_form_layout(project_form)
         self.project_name = QLineEdit("GridPACK Pilot Project")
         self.project_dir = QLineEdit(str(settings.default_projects_dir / "GridPACK_Pilot_Project"))
+        self.project_name.setToolTip("Used for project metadata and the default project folder name.")
+        self.project_dir.setToolTip("Folder where GridLens stores project.json, copied inputs, and run outputs.")
 
         project_dir_row = QHBoxLayout()
+        project_dir_row.setSpacing(8)
         project_dir_row.addWidget(self.project_dir)
         browse_project = QPushButton("Browse")
         set_button_role(browse_project, "secondary")
+        browse_project.setToolTip("Choose the project folder.")
         browse_project.clicked.connect(self.choose_project_dir)
         project_dir_row.addWidget(browse_project)
 
@@ -61,17 +66,24 @@ class ProjectTab(QWidget):
         input_box = QGroupBox("Input Files")
         input_layout = QVBoxLayout(input_box)
         self.file_list = QListWidget()
+        self.file_list.setAlternatingRowColors(True)
+        self.file_list.setTextElideMode(Qt.ElideMiddle)
+        self.file_list.setToolTip("GridPACK input files copied into the project when it is saved.")
         input_layout.addWidget(self.file_list)
 
         input_buttons = QHBoxLayout()
+        input_buttons.setSpacing(8)
         add_files = QPushButton("Add Files")
         set_button_role(add_files, "primary")
+        add_files.setToolTip("Add XML, RAW, CSV, contingency, monitor, dynamics, or text inputs.")
         add_files.clicked.connect(self.add_files)
         remove_files = QPushButton("Remove Selected")
         set_button_role(remove_files, "destructive")
+        remove_files.setToolTip("Remove selected files from this project input list.")
         remove_files.clicked.connect(self.remove_selected_files)
         clear_files = QPushButton("Clear")
         set_button_role(clear_files, "secondary")
+        clear_files.setToolTip("Clear the input list.")
         clear_files.clicked.connect(self.clear_files)
         input_buttons.addWidget(add_files)
         input_buttons.addWidget(remove_files)
@@ -80,19 +92,21 @@ class ProjectTab(QWidget):
         input_layout.addLayout(input_buttons)
 
         action_row = QHBoxLayout()
+        action_row.setSpacing(8)
         self.save_button = QPushButton("Create / Save Project")
         set_button_role(self.save_button, "primary")
+        self.save_button.setToolTip("Save project metadata and copy the selected input files.")
         self.save_button.clicked.connect(self.save_project)
         self.open_button = QPushButton("Open Existing Project")
         set_button_role(self.open_button, "secondary")
+        self.open_button.setToolTip("Open an existing GridLens project.json file.")
         self.open_button.clicked.connect(self.open_existing_project)
         action_row.addWidget(self.save_button)
         action_row.addWidget(self.open_button)
         action_row.addStretch()
 
         self.status = QLabel("No project saved yet.")
-        self.status.setObjectName("mutedLabel")
-        self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        set_muted_label(self.status)
 
         layout.addWidget(project_box)
         layout.addWidget(input_box, stretch=1)
@@ -151,8 +165,9 @@ class ProjectTab(QWidget):
     def refresh_file_list(self) -> None:
         self.file_list.clear()
         for path in self.input_paths:
-            item = QListWidgetItem(f"{path.name}    {path.parent}")
+            item = QListWidgetItem(f"{path.name}  -  {path.parent}")
             item.setData(Qt.UserRole, str(path))
+            item.setToolTip(str(path))
             self.file_list.addItem(item)
 
     def save_project(self) -> None:

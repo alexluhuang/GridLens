@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -33,7 +33,7 @@ from gridlens.gui.configuration_view_models import (
     project_network_file_names,
     save_input_configuration,
 )
-from gridlens.gui.theme import set_button_role
+from gridlens.gui.theme import configure_form_layout, set_button_role, set_context_label, set_muted_label
 
 
 class ConfigurationTab(QWidget):
@@ -49,10 +49,11 @@ class ConfigurationTab(QWidget):
         layout.setSpacing(12)
 
         self.project_label = QLabel("No project loaded.")
-        self.project_label.setObjectName("contextLabel")
+        set_context_label(self.project_label)
         layout.addWidget(self.project_label)
 
         scroll = QScrollArea()
+        scroll.setObjectName("contentScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll_content = QWidget()
@@ -62,11 +63,17 @@ class ConfigurationTab(QWidget):
 
         basic_box = QGroupBox("Configuration")
         basic_form = QFormLayout(basic_box)
+        configure_form_layout(basic_form)
         self.xml_file_name = QLineEdit(DEFAULT_XML_FILE_NAME)
+        self.xml_file_name.setToolTip("Generated XML file name saved in the project's original inputs folder.")
         self.network_file = QComboBox()
+        self.network_file.setToolTip("Network file copied into the project.")
         self.full_branch_n1 = QCheckBox("Full Branch N1")
+        self.full_branch_n1.setToolTip("Include all branch N-1 contingencies.")
         self.full_generator_n1 = QCheckBox("Full Generator N1")
+        self.full_generator_n1.setToolTip("Include all generator N-1 contingencies.")
         contingency_type_row = QHBoxLayout()
+        contingency_type_row.setSpacing(12)
         contingency_type_row.addWidget(self.full_branch_n1)
         contingency_type_row.addWidget(self.full_generator_n1)
         contingency_type_row.addStretch()
@@ -79,6 +86,8 @@ class ConfigurationTab(QWidget):
         basic_form.addRow("Enforce reactive power limit", self.enforce_reactive_power_limit)
 
         self.advanced_box = QGroupBox("Advanced Configuration")
+        self.advanced_box.setObjectName("sectionToggle")
+        self.advanced_box.setToolTip("Expand only when GridPACK XML defaults need to be adjusted.")
         self.advanced_box.setCheckable(True)
         self.advanced_box.setChecked(False)
         advanced_layout = QVBoxLayout(self.advanced_box)
@@ -125,6 +134,7 @@ class ConfigurationTab(QWidget):
 
         contingency_box = QGroupBox("Contingency")
         contingency_form = QFormLayout(contingency_box)
+        configure_form_layout(contingency_form)
         contingency_form.addRow("Print calculation files", self.print_calc_files)
         contingency_form.addRow("Group size", self.group_size)
         contingency_form.addRow("Maximum voltage", self.max_voltage)
@@ -138,6 +148,7 @@ class ConfigurationTab(QWidget):
 
         powerflow_box = QGroupBox("Powerflow")
         powerflow_form = QFormLayout(powerflow_box)
+        configure_form_layout(powerflow_form)
         powerflow_form.addRow("Network configuration tag", self.network_configuration_tag)
         powerflow_form.addRow("Init start", self.init_start)
         powerflow_form.addRow("Switched shunt", self.switched_shunt)
@@ -155,6 +166,7 @@ class ConfigurationTab(QWidget):
 
         monitoring_box = QGroupBox("Monitoring")
         monitoring_form = QFormLayout(monitoring_box)
+        configure_form_layout(monitoring_form)
         monitoring_form.addRow("Monitor branches file", self.monitor_branches_file)
         monitoring_form.addRow("Monitor areas", self.monitor_areas)
         monitoring_form.addRow("Monitor kV minimum", self.monitor_kv_min)
@@ -177,6 +189,7 @@ class ConfigurationTab(QWidget):
         action_row = QHBoxLayout()
         self.save_button = QPushButton("Generate / Save XML")
         set_button_role(self.save_button, "primary")
+        self.save_button.setToolTip("Write the XML configuration and update the project.")
         self.save_button.clicked.connect(self.save_configuration)
         self.save_button.setEnabled(False)
         action_row.addWidget(self.save_button)
@@ -184,11 +197,43 @@ class ConfigurationTab(QWidget):
         layout.addLayout(action_row)
 
         self.status = QLabel("Create or open a project before generating XML.")
-        self.status.setObjectName("mutedLabel")
-        self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        set_muted_label(self.status)
         layout.addWidget(self.status)
 
         self._load_values(default_input_configuration_values())
+        self._set_field_hints()
+
+    def _set_field_hints(self) -> None:
+        self.contingency_rating.setToolTip("GridPACK contingency rating set used for branch loading checks.")
+        self.enforce_reactive_power_limit.setToolTip("Whether generated XML enforces generator reactive power limits.")
+        self.print_calc_files.setToolTip("Write additional calculation files during contingency analysis.")
+        self.group_size.setToolTip("Optional GridPACK group size override.")
+        self.max_voltage.setToolTip("Maximum voltage threshold for contingency calculations.")
+        self.min_voltage.setToolTip("Minimum voltage threshold for contingency calculations.")
+        self.contingency_qlim_deadband.setToolTip("Reactive power limit deadband for contingency solves.")
+        self.contingency_ltc.setToolTip("Enable or disable load tap changer handling for contingency solves.")
+        self.write_stats.setToolTip("Write GridPACK statistics output.")
+        self.contingency_output_format.setToolTip("Output format written by the contingency analysis.")
+        self.contingency_output_file.setToolTip("Base output filename used by GridPACK.")
+        self.contingency_list.setToolTip("Optional XML file that narrows the contingency list.")
+        self.network_configuration_tag.setToolTip("XML tag variant used to reference the network file.")
+        self.init_start.setToolTip("Initial powerflow start mode.")
+        self.switched_shunt.setToolTip("Enable or disable switched shunt handling.")
+        self.powerflow_qlim_deadband.setToolTip("Reactive power limit deadband for powerflow solves.")
+        self.powerflow_ltc.setToolTip("Enable or disable load tap changer handling for powerflow solves.")
+        self.area_interchange.setToolTip("Enable or disable area interchange control.")
+        self.max_controller_iterations.setToolTip("Maximum controller iterations.")
+        self.max_iteration.setToolTip("Maximum powerflow iterations.")
+        self.tolerance.setToolTip("Powerflow convergence tolerance.")
+        self.max_qlim_iterations.setToolTip("Maximum reactive power limit iterations.")
+        self.damping_factor.setToolTip("Powerflow damping factor.")
+        self.phase_shift_sign.setToolTip("Phase-shift sign convention.")
+        self.petsc_prefix.setToolTip("Optional PETSc prefix.")
+        self.petsc_options.setToolTip("Optional PETSc options, one option per line or space-separated.")
+        self.monitor_branches_file.setToolTip("Optional CSV file listing monitored branches.")
+        self.monitor_areas.setToolTip("Optional space-separated area numbers to monitor.")
+        self.monitor_kv_min.setToolTip("Optional minimum kV value for monitored facilities.")
+        self.monitor_kv_max.setToolTip("Optional maximum kV value for monitored facilities.")
 
     def set_project(self, project: Project, project_data: ProjectData) -> None:
         self.project = project

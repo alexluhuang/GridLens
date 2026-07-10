@@ -30,7 +30,7 @@ from gridlens.gui.run_view_models import (
     build_gridpack_run_request,
     validate_run_form_values,
 )
-from gridlens.gui.theme import set_button_role
+from gridlens.gui.theme import configure_form_layout, set_button_role, set_context_label
 from gridlens.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
 from gridlens.runner.gridpack_runner import (
     GridpackRunRequest,
@@ -94,26 +94,36 @@ class RunTab(QWidget):
 
         config_box = QGroupBox("Container Run Settings")
         form = QFormLayout(config_box)
+        configure_form_layout(form)
         self.image = QLineEdit(settings.default_gridpack_image)
+        self.image.setToolTip("Docker image used to run GridPACK.")
         self.executable = QLineEdit(settings.default_executable)
+        self.executable.setToolTip("Executable path or command inside the GridPACK container.")
         self.mpi_processes = QSpinBox()
         self.mpi_processes.setRange(1, 4096)
         self.mpi_processes.setValue(settings.default_mpi_processes)
+        self.mpi_processes.setToolTip("MPI process count passed to the run command.")
         self.memory_limit = QLineEdit(settings.memory_limit)
         self.memory_limit.setPlaceholderText("Optional, for example 8g")
+        self.memory_limit.setToolTip("Optional Docker memory limit, such as 8g.")
         self.extra_args = QLineEdit(settings.extra_docker_args)
         self.extra_args.setPlaceholderText("Optional Docker args, parsed safely")
+        self.extra_args.setToolTip("Optional Docker arguments parsed without invoking a shell.")
 
         self.pull_policy = QComboBox()
         self.pull_policy.addItems(["never", "missing", "always"])
         self.pull_policy.setCurrentText(settings.docker_pull_policy)
+        self.pull_policy.setToolTip("Controls whether GridLens tries to pull the Docker image.")
 
         self.network_none = QCheckBox("Disable network inside the run container")
         self.network_none.setChecked(settings.docker_network_mode == "none")
+        self.network_none.setToolTip("Run the container with Docker network mode set to none.")
         self.use_platform = QCheckBox("Use detected platform flag")
         self.use_platform.setChecked(settings.use_platform_flag)
+        self.use_platform.setToolTip("Pass the detected Docker platform flag when needed.")
         self.use_host_user = QCheckBox("Write output files as the current Linux user")
         self.use_host_user.setChecked(settings.use_host_user)
+        self.use_host_user.setToolTip("Map container writes to the current Linux user.")
 
         form.addRow("Docker image", self.image)
         form.addRow("GridPACK executable", self.executable)
@@ -126,19 +136,24 @@ class RunTab(QWidget):
         form.addRow("", self.use_host_user)
 
         action_row = QHBoxLayout()
+        action_row.setSpacing(8)
         self.check_button = QPushButton("Check Docker")
         set_button_role(self.check_button, "secondary")
+        self.check_button.setToolTip("Check Docker client, engine, and image availability.")
         self.check_button.clicked.connect(self.check_docker)
         self.run_button = QPushButton("Run GridPACK")
         set_button_role(self.run_button, "primary")
+        self.run_button.setToolTip("Start a GridPACK Docker run for the current project.")
         self.run_button.clicked.connect(self.start_run)
         self.run_button.setEnabled(False)
         self.terminate_button = QPushButton("Terminate")
         set_button_role(self.terminate_button, "destructive")
+        self.terminate_button.setToolTip("Request termination of the active Docker run.")
         self.terminate_button.clicked.connect(self.terminate_run)
         self.terminate_button.setEnabled(False)
         self.open_run_button = QPushButton("Open Run Folder")
         set_button_role(self.open_run_button, "secondary")
+        self.open_run_button.setToolTip("Open the latest completed run folder.")
         self.open_run_button.clicked.connect(self.open_last_run)
         self.open_run_button.setEnabled(False)
         action_row.addWidget(self.check_button)
@@ -148,14 +163,18 @@ class RunTab(QWidget):
         action_row.addStretch()
 
         self.project_label = QLabel("No project loaded.")
-        self.project_label.setObjectName("contextLabel")
+        set_context_label(self.project_label)
         self.log = QTextEdit()
+        self.log.setObjectName("logPane")
         self.log.setReadOnly(True)
+        self.log.setToolTip("Live GridPACK run output.")
 
         layout.addWidget(self.project_label)
         layout.addWidget(config_box)
         layout.addLayout(action_row)
-        layout.addWidget(QLabel("Run log"))
+        log_label = QLabel("Run log")
+        log_label.setObjectName("sectionTitle")
+        layout.addWidget(log_label)
         layout.addWidget(self.log, stretch=1)
 
     def set_project(self, project: Project, project_data: ProjectData) -> None:

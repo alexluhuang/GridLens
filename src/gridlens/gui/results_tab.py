@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QVBoxLayout,
     QWidget,
@@ -26,7 +27,7 @@ from gridlens.gui.results_view_models import (
     run_list_label,
 )
 from gridlens.gui.table_utils import populate_table
-from gridlens.gui.theme import set_button_role
+from gridlens.gui.theme import configure_table, set_button_role, set_context_label
 
 
 class ResultsTab(QWidget):
@@ -40,27 +41,43 @@ class ResultsTab(QWidget):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
         self.project_label = QLabel("No project loaded.")
-        self.project_label.setObjectName("contextLabel")
+        set_context_label(self.project_label)
         layout.addWidget(self.project_label)
 
-        split = QHBoxLayout()
-        left = QVBoxLayout()
-        right = QVBoxLayout()
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
+        left_panel = QWidget()
+        right_panel = QWidget()
+        left = QVBoxLayout(left_panel)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(8)
+        right = QVBoxLayout(right_panel)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(8)
 
         self.run_list = QListWidget()
+        self.run_list.setAlternatingRowColors(True)
+        self.run_list.setTextElideMode(Qt.ElideMiddle)
+        self.run_list.setToolTip("Completed project runs.")
         self.run_list.currentItemChanged.connect(self.on_run_selected)
-        left.addWidget(QLabel("Runs"))
+        runs_label = QLabel("Runs")
+        runs_label.setObjectName("sectionTitle")
+        left.addWidget(runs_label)
         left.addWidget(self.run_list)
 
         button_row = QHBoxLayout()
+        button_row.setSpacing(8)
         refresh = QPushButton("Refresh")
         set_button_role(refresh, "secondary")
+        refresh.setToolTip("Refresh the run list.")
         refresh.clicked.connect(lambda: self.refresh_runs())
         open_run = QPushButton("Open Run")
         set_button_role(open_run, "secondary")
+        open_run.setToolTip("Open the selected run folder.")
         open_run.clicked.connect(self.open_selected_run)
         export_zip = QPushButton("Export ZIP")
         set_button_role(export_zip, "primary")
+        export_zip.setToolTip("Export the selected run as a ZIP package.")
         export_zip.clicked.connect(self.export_selected_run)
         button_row.addWidget(refresh)
         button_row.addWidget(open_run)
@@ -69,13 +86,19 @@ class ResultsTab(QWidget):
 
         self.output_table = QTableWidget(0, len(OUTPUT_TABLE_COLUMNS))
         self.output_table.setHorizontalHeaderLabels(OUTPUT_TABLE_COLUMNS)
+        configure_table(self.output_table)
         self.output_table.horizontalHeader().setStretchLastSection(True)
-        right.addWidget(QLabel("Output files"))
+        self.output_table.setToolTip("Files produced by the selected run.")
+        output_label = QLabel("Output files")
+        output_label.setObjectName("sectionTitle")
+        right.addWidget(output_label)
         right.addWidget(self.output_table)
 
-        split.addLayout(left, stretch=1)
-        split.addLayout(right, stretch=2)
-        layout.addLayout(split, stretch=1)
+        split.addWidget(left_panel)
+        split.addWidget(right_panel)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 2)
+        layout.addWidget(split, stretch=1)
 
     def set_project(self, project: Project) -> None:
         self.project = project
@@ -91,6 +114,7 @@ class ResultsTab(QWidget):
             label = run_list_label(run_dir, read_run_status(run_dir))
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, str(run_dir))
+            item.setToolTip(str(run_dir))
             self.run_list.addItem(item)
             if select_run and run_dir.resolve() == Path(select_run).resolve():
                 self.run_list.setCurrentItem(item)

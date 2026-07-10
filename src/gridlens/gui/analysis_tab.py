@@ -51,7 +51,7 @@ from gridlens.gui.analysis_view_models import (
     summarize_control_area_utilization,
     summarize_voltage_group_utilization,
 )
-from gridlens.gui.theme import set_button_role
+from gridlens.gui.theme import set_button_role, set_context_label, set_muted_label
 
 
 CONTROL_AREA_FULL_WIDTH_ROWS = 36
@@ -59,6 +59,11 @@ CONTROL_AREA_MIN_HEIGHT = 360
 CONTROL_AREA_TOP_BOTTOM_PADDING = 150
 CONTROL_AREA_ROW_PIXELS = 26
 CONTROL_AREA_LABEL_LIMIT = 46
+MTA_BLUE = "#0039a6"
+MTA_GREEN = "#00933c"
+MTA_ORANGE = "#ff6319"
+MTA_RED = "#ee352e"
+MTA_BLACK = "#111111"
 
 
 def _csv_flat_runtime_status(dataset: RunAnalysisDataset | None) -> str:
@@ -122,25 +127,33 @@ class AnalysisTab(QWidget):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
         self.project_label = QLabel("No project loaded.")
-        self.project_label.setObjectName("contextLabel")
+        set_context_label(self.project_label)
         layout.addWidget(self.project_label)
 
         run_row = QHBoxLayout()
+        run_row.setSpacing(8)
         self.run_combo = QComboBox()
+        self.run_combo.setToolTip("Completed run to analyze.")
         self.refresh_button = QPushButton("Refresh Runs")
         set_button_role(self.refresh_button, "secondary")
+        self.refresh_button.setToolTip("Refresh the run choices.")
         self.refresh_button.clicked.connect(lambda: self.refresh_runs())
         self.analyze_button = QPushButton("Generate Graphs")
         set_button_role(self.analyze_button, "primary")
+        self.analyze_button.setToolTip("Build interactive utilization charts for the selected run.")
         self.analyze_button.clicked.connect(self.generate_graphs)
-        run_row.addWidget(QLabel("Run"))
+        run_label = QLabel("Run")
+        run_label.setObjectName("sectionTitle")
+        run_row.addWidget(run_label)
         run_row.addWidget(self.run_combo, stretch=1)
         run_row.addWidget(self.refresh_button)
         run_row.addWidget(self.analyze_button)
         layout.addLayout(run_row)
 
-        self.status_label = QLabel(f"Select a completed run and generate the three {self._analysis_noun()} graphs.")
-        self.status_label.setObjectName("mutedLabel")
+        self.status_label = QLabel(
+            f"Select a completed run and generate {self._analysis_noun()} charts. Click bars to filter."
+        )
+        set_muted_label(self.status_label)
         layout.addWidget(self.status_label)
 
         if FigureCanvas and Figure and NavigationToolbar:
@@ -149,7 +162,7 @@ class AnalysisTab(QWidget):
             missing = QLabel(
                 "Install the analysis optional dependencies to enable interactive embedded charts."
             )
-            missing.setObjectName("contextLabel")
+            set_context_label(missing)
             layout.addWidget(missing, stretch=1)
 
         self._show_empty_state()
@@ -264,15 +277,25 @@ class AnalysisTab(QWidget):
             self._render_line_chart,
         )
 
-        self.control_area_panel, self.control_area_figure, self.control_area_canvas = self._chart_panel(
+        (
+            self.control_area_panel,
+            self.control_area_title_label,
+            self.control_area_figure,
+            self.control_area_canvas,
+        ) = self._chart_panel(
             f"Mean Max {self._entity_title()} Utilization by Control Area (50 kV and Above)",
             self.control_area_sort,
         )
-        self.voltage_group_panel, self.voltage_group_figure, self.voltage_group_canvas = self._chart_panel(
+        (
+            self.voltage_group_panel,
+            self.voltage_group_title_label,
+            self.voltage_group_figure,
+            self.voltage_group_canvas,
+        ) = self._chart_panel(
             self._category_panel_title(),
             self.voltage_group_sort,
         )
-        self.line_panel, self.line_figure, self.line_canvas = self._chart_panel(
+        self.line_panel, self.line_title_label, self.line_figure, self.line_canvas = self._chart_panel(
             f"Maximum Observed {self._entity_title()} Utilization",
             self.line_sort,
         )
@@ -306,25 +329,33 @@ class AnalysisTab(QWidget):
         return combo
 
     def _chart_panel(self, title: str, sort_combo: QComboBox):
-        panel = QGroupBox(title)
+        panel = QGroupBox()
         panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 12, 10, 10)
         layout.setSpacing(8)
 
+        title_label = QLabel(title)
+        title_label.setObjectName("chartTitle")
+        title_label.setWordWrap(True)
+        layout.addWidget(title_label)
+
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("Sort"))
+        controls.setSpacing(8)
+        sort_label = QLabel("Sort")
+        sort_label.setObjectName("sectionTitle")
+        controls.addWidget(sort_label)
         controls.addWidget(sort_combo)
         controls.addStretch()
         layout.addLayout(controls)
 
-        figure = Figure(figsize=(7.0, 3.2))
+        figure = Figure(figsize=(7.0, 3.2), facecolor="#ffffff")
         canvas = FigureCanvas(figure)
         canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         toolbar = NavigationToolbar(canvas, panel)
         layout.addWidget(toolbar)
         layout.addWidget(canvas, stretch=1)
-        return panel, figure, canvas
+        return panel, title_label, figure, canvas
 
     def _arrange_charts(self) -> None:
         wide = self.chart_scroll.viewport().width() >= 1120 if hasattr(self, "chart_scroll") else self.width() >= 1120
@@ -498,7 +529,7 @@ class AnalysisTab(QWidget):
             self.control_area_sort.currentData(),
             "control_area",
         )
-        self.control_area_panel.setTitle(self._control_area_title())
+        self.control_area_title_label.setText(self._control_area_title())
         figure = self.control_area_figure
         canvas = self.control_area_canvas
         figure.clear()
@@ -520,7 +551,7 @@ class AnalysisTab(QWidget):
         values = [numeric_value(row.get("average_utilization_pct")) for row in rows]
         y_positions = list(range(row_count))
         colors = [
-            self._selection_color(str(row.get("control_area") or ""), self.selected_control_areas, "#2f6f9f")
+            self._selection_color(str(row.get("control_area") or ""), self.selected_control_areas, MTA_BLUE)
             for row in rows
         ]
         bars = axis.barh(y_positions, values, height=0.72, color=colors)
@@ -529,7 +560,7 @@ class AnalysisTab(QWidget):
         axis.invert_yaxis()
         max_value = max(values) if values else 0
         axis.set_xlim(0, max(35, max_value * 1.22))
-        axis.axvline(30, color="#d83b3b", linestyle="--", linewidth=1, label="30% threshold")
+        axis.axvline(30, color=MTA_RED, linestyle="--", linewidth=1, label="30% reference")
         axis.set_xlabel(f"Mean max {self._entity_noun()} utilization (%)")
         axis.set_ylabel("Control area")
         axis.set_title(self._control_area_title())
@@ -561,7 +592,7 @@ class AnalysisTab(QWidget):
             self.voltage_group_sort.currentData(),
             "voltage_group",
         )
-        self.voltage_group_panel.setTitle(self._voltage_group_title())
+        self.voltage_group_title_label.setText(self._voltage_group_title())
         figure = self.voltage_group_figure
         canvas = self.voltage_group_canvas
         figure.clear()
@@ -575,7 +606,7 @@ class AnalysisTab(QWidget):
         labels = [str(row.get("voltage_group", "unknown")) for row in rows]
         values = [numeric_value(row.get("average_utilization_pct")) for row in rows]
         colors = [
-            self._selection_color(str(row.get("voltage_group") or ""), self.selected_voltage_groups, "#82a9c9")
+            self._selection_color(str(row.get("voltage_group") or ""), self.selected_voltage_groups, MTA_GREEN)
             for row in rows
         ]
         bars = axis.bar(labels, values, color=colors)
@@ -595,7 +626,7 @@ class AnalysisTab(QWidget):
 
     def _render_line_chart(self) -> None:
         rows = self._sorted_line_rows(self.line_rows, self.line_sort.currentData())
-        self.line_panel.setTitle(self._line_title())
+        self.line_title_label.setText(self._line_title())
         figure = self.line_figure
         canvas = self.line_canvas
         figure.clear()
@@ -608,10 +639,10 @@ class AnalysisTab(QWidget):
         x_values = list(range(1, len(rows) + 1))
         values = [numeric_value(row.get("max_utilization_pct")) for row in rows]
         max_value = max(values) if values else 0
-        axis.axhspan(0, 100, color="#dff2dd", alpha=0.75, label="Capability")
-        axis.fill_between(x_values, values, color="#92d0c8", alpha=0.55, label="Utilization")
-        axis.plot(x_values, values, color="#1f6fb2", linewidth=1.5)
-        axis.axhline(100, color="#70a36a", linewidth=1)
+        axis.axhspan(0, 100, color="#dff3e6", alpha=0.85, label="Capability")
+        axis.fill_between(x_values, values, color="#9bd8c1", alpha=0.58, label="Utilization")
+        axis.plot(x_values, values, color=MTA_BLACK, linewidth=1.6)
+        axis.axhline(100, color=MTA_GREEN, linewidth=1.1)
         if len(rows) == 1:
             axis.set_xlim(0.5, 1.5)
         else:
@@ -659,17 +690,18 @@ class AnalysisTab(QWidget):
         canvas.draw_idle()
 
     def _draw_empty_axis(self, axis, message: str) -> None:
-        axis.text(0.5, 0.5, message, ha="center", va="center", transform=axis.transAxes, color="#5b667a")
+        axis.text(0.5, 0.5, message, ha="center", va="center", transform=axis.transAxes, color="#4c4c4c")
         axis.set_axis_off()
 
     def _style_axis(self, axis) -> None:
-        axis.grid(True, axis="y", color="#d8dde7", linewidth=0.8, alpha=0.8)
-        axis.grid(True, axis="x", color="#e9edf4", linewidth=0.6, alpha=0.7)
+        axis.set_facecolor("#ffffff")
+        axis.grid(True, axis="y", color="#d6d6d6", linewidth=0.8, alpha=0.9)
+        axis.grid(True, axis="x", color="#ebebeb", linewidth=0.6, alpha=0.85)
         axis.set_axisbelow(True)
         axis.spines["top"].set_visible(False)
         axis.spines["right"].set_visible(False)
-        axis.spines["left"].set_color("#9aa5b5")
-        axis.spines["bottom"].set_color("#9aa5b5")
+        axis.spines["left"].set_color("#777777")
+        axis.spines["bottom"].set_color("#777777")
         axis.tick_params(axis="both", labelsize=8)
 
     def _control_area_canvas_height(self, row_count: int) -> int:
@@ -690,12 +722,12 @@ class AnalysisTab(QWidget):
     def _selection_color(self, value: str, selected: set[str], default: str) -> str:
         if not selected:
             return default
-        return "#d97706" if value in selected else "#b8c5d2"
+        return MTA_ORANGE if value in selected else "#c9c9c9"
 
     def _style_selected_bar(self, bar, selected: bool) -> None:
         if selected:
-            bar.set_edgecolor("#7c2d12")
-            bar.set_linewidth(1.4)
+            bar.set_edgecolor(MTA_BLACK)
+            bar.set_linewidth(1.6)
         else:
             bar.set_edgecolor("none")
             bar.set_linewidth(0)
@@ -848,8 +880,8 @@ class _HoverBinding:
             xy=(0, 0),
             xytext=(12, 12),
             textcoords="offset points",
-            bbox={"boxstyle": "round,pad=0.35", "fc": "#ffffff", "ec": "#7a8798", "alpha": 0.96},
-            arrowprops={"arrowstyle": "->", "color": "#7a8798", "linewidth": 0.8},
+            bbox={"boxstyle": "square,pad=0.35", "fc": "#ffffff", "ec": MTA_BLACK, "alpha": 0.97},
+            arrowprops={"arrowstyle": "->", "color": MTA_BLACK, "linewidth": 0.8},
         )
         annotation.set_visible(False)
         annotation.set_zorder(20)
