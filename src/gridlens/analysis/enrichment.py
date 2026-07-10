@@ -39,8 +39,10 @@ def voltage_class(base_kv: object) -> str:
     kv = as_float(base_kv)
     if kv is None:
         return "unknown"
+    if kv < 50:
+        return "<50 kV"
     if kv < 100:
-        return "<100 kV"
+        return "50-99 kV"
     if kv < 230:
         return "100-229 kV"
     if kv < 345:

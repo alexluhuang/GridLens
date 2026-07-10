@@ -8,6 +8,10 @@ def test_voltage_class_handles_missing_and_invalid_values() -> None:
     assert voltage_class(None) == "unknown"
     assert voltage_class("") == "unknown"
     assert voltage_class("not-a-number") == "unknown"
+    assert voltage_class(49.9) == "<50 kV"
+    assert voltage_class(50.0) == "50-99 kV"
+    assert voltage_class(99.9) == "50-99 kV"
+    assert voltage_class(100.0) == "100-229 kV"
 
 
 def test_enrich_with_bus_metadata_adds_branch_context() -> None:

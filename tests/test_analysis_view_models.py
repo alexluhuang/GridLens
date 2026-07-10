@@ -98,8 +98,9 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
             rows=[
                 _branch(101, 102, "1", 138.0, 138.0, 100.0, "North", "100-229 kV", 1, "North", 1, "North"),
                 _branch(201, 202, "1", 230.0, 230.0, 200.0, "South", "230-344 kV", 2, "South", 2, "South"),
-                _branch(301, 302, "1", 69.0, 69.0, 100.0, "Low", "<100 kV"),
+                _branch(301, 302, "1", 69.0, 69.0, 100.0, "Low", "50-99 kV"),
                 _branch(401, 402, "1", 230.0, 345.0, 50.0, "North / South", "345-499 kV", 1, "North", 2, "South"),
+                _branch(501, 502, "1", 49.0, 49.0, 100.0, "Subtransmission", "<50 kV"),
             ],
         ),
         "pflow": ParsedTable(
@@ -111,6 +112,7 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
                 _flow(201, 202, "1", 120.0),
                 _flow(301, 302, "1", 70.0),
                 _flow(401, 402, "1", 25.0),
+                _flow(501, 502, "1", 95.0),
             ],
         ),
         "qflow": ParsedTable(
@@ -122,6 +124,7 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
                 _flow(201, 202, "1", 0.0),
                 _flow(301, 302, "1", 0.0),
                 _flow(401, 402, "1", 0.0),
+                _flow(501, 502, "1", 0.0),
             ],
         ),
         "pflow_mm": ParsedTable(
@@ -133,6 +136,7 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
                 _pflow_mm(201, 202, "1", 0.0, 180.0, -200.0, 200.0, 1, 4),
                 _pflow_mm(301, 302, "1", 0.0, 80.0, -100.0, 100.0, 1, 5),
                 _pflow_mm(401, 402, "1", 0.0, 20.0, -50.0, 50.0, 1, 6),
+                _pflow_mm(501, 502, "1", 0.0, 95.0, -100.0, 100.0, 1, 7),
             ],
         ),
         "perf_mm": ParsedTable(
@@ -144,6 +148,7 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
                 _perf(201, 202, "1", 0.81, 4),
                 _perf(301, 302, "1", 0.64, 5),
                 _perf(401, 402, "1", 0.16, 6),
+                _perf(501, 502, "1", 0.9, 7),
             ],
         ),
     }
@@ -157,18 +162,20 @@ def test_requested_analysis_graph_rows_merge_filter_group_and_sort() -> None:
     line_rows = max_230kv_line_utilization_rows(tables)
     all_line_rows = max_line_utilization_rows(tables)
 
-    assert [row["control_area"] for row in area_rows] == ["South", "North"]
-    assert area_rows[0]["average_utilization_pct"] == 65.0
-    assert area_rows[1]["average_utilization_pct"] == 45.0
-    assert all(row["control_area"] != "Low" for row in area_rows)
+    assert [row["control_area"] for row in area_rows] == ["Low", "South", "North"]
+    assert area_rows[0]["average_utilization_pct"] == 80.0
+    assert area_rows[1]["average_utilization_pct"] == 65.0
+    assert area_rows[2]["average_utilization_pct"] == 45.0
+    assert all(row["control_area"] != "Subtransmission" for row in area_rows)
     assert all(" / " not in row["control_area"] for row in area_rows)
     assert next(row for row in branch_rows if row["from_bus"] == 401)["control_areas"] == ["North", "South"]
-    assert [row["voltage_group"] for row in voltage_rows] == ["<100 kV", "100-229 kV", "230-344 kV", "345-499 kV"]
+    assert all(row["from_bus"] != 501 for row in branch_rows)
+    assert [row["voltage_group"] for row in voltage_rows] == ["50-99 kV", "100-229 kV", "230-344 kV", "345-499 kV"]
     assert [row["average_utilization_pct"] for row in voltage_rows] == [80.0, 50.0, 90.0, 40.0]
     assert [row["voltage_group"] for row in north_voltage_rows] == ["100-229 kV", "345-499 kV"]
     assert [row["max_utilization_pct"] for row in line_rows] == [40.0, 90.0]
     assert [row["max_contingency"] for row in line_rows] == [6, 4]
-    assert [row["voltage_group"] for row in all_line_rows] == ["345-499 kV", "100-229 kV", "<100 kV", "230-344 kV"]
+    assert [row["voltage_group"] for row in all_line_rows] == ["345-499 kV", "100-229 kV", "50-99 kV", "230-344 kV"]
 
 
 def test_average_utilization_ignores_qflow() -> None:

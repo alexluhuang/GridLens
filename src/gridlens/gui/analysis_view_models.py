@@ -57,11 +57,12 @@ CONTINGENCY_TABLE_COLUMNS = [
     "performance_index_average",
 ]
 VOLTAGE_GROUP_ORDER = {
-    "<100 kV": 0,
-    "100-229 kV": 1,
-    "230-344 kV": 2,
-    "345-499 kV": 3,
-    "500+ kV": 4,
+    "<50 kV": 0,
+    "50-99 kV": 1,
+    "100-229 kV": 2,
+    "230-344 kV": 3,
+    "345-499 kV": 4,
+    "500+ kV": 5,
     "unknown": 99,
 }
 TRANSFORMER_STEP_ORDER = {
@@ -71,6 +72,7 @@ TRANSFORMER_STEP_ORDER = {
     "Transformer voltage unknown": 99,
 }
 BRANCH_KEY_COLUMNS = ("from_bus", "to_bus", "line_id", "section")
+MIN_BRANCH_ANALYSIS_VOLTAGE_KV = 50.0
 
 
 class DistributionExportLike(Protocol):
@@ -101,7 +103,7 @@ def control_area_utilization_rows(
     tables: Mapping[str, ParsedTable],
     branch_options: UtilizationBranchOptions | None = None,
 ) -> list[dict[str, object]]:
-    """Mean maximum branch utilization by control area for lines at or above 100 kV."""
+    """Mean maximum branch utilization by control area for branches at or above 50 kV."""
     return summarize_control_area_utilization(max_line_utilization_rows(tables, branch_options))
 
 
@@ -114,10 +116,9 @@ def average_n1_utilization_rows(
     rows = []
     for row in _average_n1_utilization_rows(tables, branch_options):
         area_labels = _endpoint_control_area_labels(row, duplicate_area_names)
-        group = str(row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
         enriched = dict(row)
         enriched["control_areas"] = area_labels
-        enriched["voltage_group"] = group
+        enriched["voltage_group"] = _row_voltage_group(row)
         rows.append(enriched)
     return rows
 
@@ -126,7 +127,7 @@ def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> 
     """Summarize mean maximum branch utilization by actual endpoint control area."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
-        if _line_voltage_kv(row) < 100:
+        if _line_voltage_kv(row) < MIN_BRANCH_ANALYSIS_VOLTAGE_KV:
             continue
         for area in _row_control_areas(row):
             buckets.setdefault(area, []).append(float(row["utilization_pct"]))
@@ -148,7 +149,7 @@ def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) ->
     """Summarize mean maximum branch utilization by voltage group."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
-        group = str(row.get("voltage_group") or row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
+        group = _row_voltage_group(row)
         buckets.setdefault(group, []).append(float(row["utilization_pct"]))
 
     summaries = _group_average_rows(buckets, "voltage_group")
@@ -181,6 +182,8 @@ def max_line_utilization_rows(
         if not _is_utilizable_branch(branch, branch_options):
             continue
         context = _merge_rows(branch, row)
+        if _line_voltage_kv(context) < MIN_BRANCH_ANALYSIS_VOLTAGE_KV:
+            continue
         utilization = _pflow_mm_max_utilization_pct(context)
         if utilization is None:
             continue
@@ -232,6 +235,8 @@ def _average_n1_utilization_rows(
         if not _is_utilizable_branch(branch, branch_options):
             continue
         context = _merge_rows(branch, pflow_mm.get(key, {}), row)
+        if _line_voltage_kv(context) < MIN_BRANCH_ANALYSIS_VOLTAGE_KV:
+            continue
         utilization = _finite_float(row.get("average_utilization_pct"))
         if utilization is None:
             rating = _line_rating(context)
@@ -391,7 +396,20 @@ def _is_utilizable_branch(
 def _utilization_voltage_group(row: Mapping[str, object]) -> str:
     if is_transformer_branch_type(row.get("raw_branch_type")):
         return _transformer_step_group(row)
-    return str(row.get("voltage_class") or voltage_class(_line_voltage_kv(row)) or "unknown")
+    computed_group = voltage_class(_line_voltage_kv(row))
+    if computed_group != "unknown":
+        return computed_group
+    return str(row.get("voltage_class") or "unknown")
+
+
+def _row_voltage_group(row: Mapping[str, object]) -> str:
+    existing = str(row.get("voltage_group") or "")
+    if existing and existing not in {"<100 kV", "unknown"}:
+        return existing
+    computed_group = _utilization_voltage_group(row)
+    if computed_group != "unknown":
+        return computed_group
+    return existing or "unknown"
 
 
 def _transformer_step_group(row: Mapping[str, object]) -> str:

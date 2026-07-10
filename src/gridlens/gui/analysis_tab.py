@@ -265,7 +265,7 @@ class AnalysisTab(QWidget):
         )
 
         self.control_area_panel, self.control_area_figure, self.control_area_canvas = self._chart_panel(
-            f"Mean Max {self._entity_title()} Utilization by Control Area (100 kV and Above)",
+            f"Mean Max {self._entity_title()} Utilization by Control Area (50 kV and Above)",
             self.control_area_sort,
         )
         self.voltage_group_panel, self.voltage_group_figure, self.voltage_group_canvas = self._chart_panel(
@@ -505,7 +505,7 @@ class AnalysisTab(QWidget):
         axis = figure.add_subplot(111)
         if not rows:
             self.control_area_click_items = []
-            self._draw_empty_axis(axis, f"No >=100 kV {self._entity_noun()} utilization data was available.")
+            self._draw_empty_axis(axis, f"No >=50 kV {self._entity_noun()} utilization data was available.")
             canvas.draw_idle()
             return
 
