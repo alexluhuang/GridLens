@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidg
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project, ProjectData
 from gridlens.gui.analysis_tab import AnalysisTab
-from gridlens.gui.help_tab import HelpTab
+from gridlens.gui.notes_tab import NotesTab
 from gridlens.gui.project_tab import ProjectTab
 from gridlens.gui.results_tab import ResultsTab
 from gridlens.gui.run_tab import RunTab
@@ -62,14 +62,14 @@ class MainWindow(QMainWindow):
         self.branch_analysis_tab = AnalysisTab()
         self.transformer_analysis_tab = AnalysisTab(transformer_analysis=True)
         self.analysis_tab = self.branch_analysis_tab
-        self.help_tab = HelpTab()
+        self.notes_tab = NotesTab()
 
         self.tabs.addTab(self.project_tab, "Project")
         self.tabs.addTab(self.run_tab, "Run")
         self.tabs.addTab(self.results_tab, "Results")
         self.tabs.addTab(self.branch_analysis_tab, "Branch Analysis")
         self.tabs.addTab(self.transformer_analysis_tab, "Transformer Analysis")
-        self.tabs.addTab(self.help_tab, "Help")
+        self.tabs.addTab(self.notes_tab, "Notes")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.run_tab.run_finished.connect(self.on_run_finished)
