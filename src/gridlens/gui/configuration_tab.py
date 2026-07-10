@@ -236,8 +236,8 @@ class ConfigurationTab(QWidget):
             project_data = save_input_configuration(self.project, self.project_data, self._form_values())
             self.project_data = project_data
             xml_path = self.project.original_inputs_dir / project_data.xml_file_name
-            self.status.setText(f"Saved XML configuration: {xml_path}")
             self.project_changed.emit(self.project, project_data)
+            self.status.setText(f"Saved XML configuration: {xml_path}")
         except Exception as exc:
             QMessageBox.critical(self, "Configuration cannot be saved", str(exc))
 
