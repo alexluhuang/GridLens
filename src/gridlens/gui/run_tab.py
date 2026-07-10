@@ -161,8 +161,12 @@ class RunTab(QWidget):
     def set_project(self, project: Project, project_data: ProjectData) -> None:
         self.project = project
         self.project_data = project_data
-        self.project_label.setText(f"Ready: {project_data.name} ({project.root_dir})")
-        self.run_button.setEnabled(True)
+        if project_data.xml_file_name:
+            self.project_label.setText(f"Ready: {project_data.name} ({project.root_dir})")
+            self.run_button.setEnabled(True)
+        else:
+            self.project_label.setText(f"Configuration needed: {project_data.name} ({project.root_dir})")
+            self.run_button.setEnabled(False)
 
     def check_docker(self) -> None:
         client = docker_client_available()
@@ -184,6 +188,9 @@ class RunTab(QWidget):
     def start_run(self) -> None:
         if not self.project or not self.project_data:
             QMessageBox.warning(self, "No project", "Create or open a project first.")
+            return
+        if not self.project_data.xml_file_name:
+            QMessageBox.warning(self, "No XML configuration", "Generate or select an XML configuration before running.")
             return
 
         values = self._run_form_values()

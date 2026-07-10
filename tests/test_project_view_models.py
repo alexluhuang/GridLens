@@ -46,6 +46,23 @@ def test_prepare_project_save_validates_and_normalizes_inputs(tmp_path: Path) ->
     assert prepared.xml_file_name == "input.xml"
 
 
+def test_prepare_project_save_allows_blank_xml_selection(tmp_path: Path) -> None:
+    raw = tmp_path / "case.raw"
+    raw.write_text("raw", encoding="utf-8")
+
+    prepared = prepare_project_save(
+        ProjectFormValues(
+            project_name="Pilot Project",
+            project_dir=tmp_path / "project",
+            input_paths=[raw],
+            xml_file_name=" ",
+        )
+    )
+
+    assert prepared.input_files == [raw.resolve()]
+    assert prepared.xml_file_name == ""
+
+
 def test_prepare_project_save_requires_selected_xml_file(tmp_path: Path) -> None:
     raw = tmp_path / "case.raw"
     raw.write_text("raw", encoding="utf-8")

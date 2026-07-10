@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QTabWidg
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project, ProjectData
 from gridlens.gui.analysis_tab import AnalysisTab
+from gridlens.gui.configuration_tab import ConfigurationTab
 from gridlens.gui.notes_tab import NotesTab
 from gridlens.gui.project_tab import ProjectTab
 from gridlens.gui.results_tab import ResultsTab
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(shell)
 
         self.project_tab = ProjectTab(self.settings)
+        self.configuration_tab = ConfigurationTab()
         self.run_tab = RunTab(self.settings)
         self.results_tab = ResultsTab()
         self.branch_analysis_tab = AnalysisTab()
@@ -65,6 +67,7 @@ class MainWindow(QMainWindow):
         self.notes_tab = NotesTab()
 
         self.tabs.addTab(self.project_tab, "Project")
+        self.tabs.addTab(self.configuration_tab, "Configuration")
         self.tabs.addTab(self.run_tab, "Run")
         self.tabs.addTab(self.results_tab, "Results")
         self.tabs.addTab(self.branch_analysis_tab, "Branch Analysis")
@@ -72,6 +75,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.notes_tab, "Notes")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
+        self.configuration_tab.project_changed.connect(self.on_project_changed)
         self.run_tab.run_finished.connect(self.on_run_finished)
         self.results_tab.run_selected.connect(self.branch_analysis_tab.select_run)
         self.results_tab.run_selected.connect(self.transformer_analysis_tab.select_run)
@@ -81,6 +85,8 @@ class MainWindow(QMainWindow):
     def on_project_changed(self, project: Project, project_data: ProjectData) -> None:
         self.project = project
         self.project_data = project_data
+        self.project_tab.set_project(project, project_data)
+        self.configuration_tab.set_project(project, project_data)
         self.run_tab.set_project(project, project_data)
         self.results_tab.set_project(project)
         self.branch_analysis_tab.set_project(project)

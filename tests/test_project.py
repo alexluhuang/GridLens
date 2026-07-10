@@ -28,6 +28,33 @@ class ProjectTests(unittest.TestCase):
             self.assertEqual(opened_project.name, "Pilot Project 1")
             self.assertEqual(opened_data.name, "Pilot Project 1")
 
+    def test_project_save_allows_configuration_generated_later(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "case.raw"
+            raw.write_text("raw", encoding="utf-8")
+
+            project = Project("Raw Only Project", root / "project")
+            data = project.save([raw], "")
+
+            self.assertEqual(data.xml_file_name, "")
+            self.assertEqual(len(data.input_files), 1)
+            self.assertTrue((project.original_inputs_dir / "case.raw").exists())
+
+    def test_save_generated_xml_adds_and_selects_project_input(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "case.raw"
+            raw.write_text("raw", encoding="utf-8")
+
+            project = Project("Generated XML Project", root / "project")
+            data = project.save([raw], "")
+            updated = project.save_generated_xml(data, "input.xml", "<Configuration />")
+
+            self.assertEqual(updated.xml_file_name, "input.xml")
+            self.assertEqual([record.file_name for record in updated.input_files], ["case.raw", "input.xml"])
+            self.assertTrue((project.original_inputs_dir / "input.xml").exists())
+
     def test_copy_project_inputs_to_run(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

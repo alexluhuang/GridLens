@@ -35,9 +35,7 @@ def should_update_project_folder(current_project_dir: str | Path) -> bool:
 def prepare_project_save(values: ProjectFormValues) -> PreparedProjectSave:
     input_files = validate_existing_files(list(values.input_paths))
     xml_file_name = values.xml_file_name.strip()
-    if not xml_file_name:
-        raise ValidationError("Add an XML input file and choose it from the XML file field.")
-    if xml_file_name not in {path.name for path in input_files}:
+    if xml_file_name and xml_file_name not in {path.name for path in input_files}:
         raise ValidationError("The selected XML file must be one of the project input files.")
 
     return PreparedProjectSave(

@@ -156,6 +156,32 @@ class Project:
         self.project_file.write_text(json.dumps(data.to_dict(), indent=2), encoding="utf-8")
         return data
 
+    def save_generated_xml(self, project_data: ProjectData, xml_file_name: str, xml_text: str) -> ProjectData:
+        _validate_generated_xml_name(xml_file_name)
+        self.create_directories()
+        xml_path = self.original_inputs_dir / xml_file_name
+        xml_path.write_text(xml_text, encoding="utf-8")
+
+        generated_record = InputFileRecord(
+            file_name=xml_path.name,
+            source_path=str(xml_path),
+            stored_path=str(xml_path),
+            sha256=file_sha256(xml_path),
+            size_bytes=xml_path.stat().st_size,
+            imported_at=utc_timestamp(),
+        )
+        records = _upsert_input_file_record(project_data.input_files, generated_record)
+        data = ProjectData(
+            name=project_data.name,
+            root_dir=project_data.root_dir,
+            created_at=project_data.created_at,
+            updated_at=utc_timestamp(),
+            xml_file_name=xml_path.name,
+            input_files=records,
+        )
+        self.project_file.write_text(json.dumps(data.to_dict(), indent=2), encoding="utf-8")
+        return data
+
     def load_data(self) -> ProjectData:
         raw = json.loads(self.project_file.read_text(encoding="utf-8"))
         return ProjectData.from_dict(raw)
@@ -194,8 +220,32 @@ def _validate_project_inputs(input_files: list[Path], xml_file_name: str) -> Non
     if duplicates:
         duplicate_list = ", ".join(duplicates)
         raise ValidationError(f"Project input files must have unique file names. Duplicates: {duplicate_list}")
+    if not xml_file_name:
+        return
     if xml_file_name not in file_names:
         raise ValidationError("The selected XML file must be one of the project input files.")
+
+
+def _validate_generated_xml_name(xml_file_name: str) -> None:
+    if Path(xml_file_name).name != xml_file_name or Path(xml_file_name).suffix.lower() != ".xml":
+        raise ValidationError("Generated XML file name must be a local .xml file name.")
+
+
+def _upsert_input_file_record(
+    records: list[InputFileRecord],
+    generated_record: InputFileRecord,
+) -> list[InputFileRecord]:
+    updated = []
+    replaced = False
+    for record in records:
+        if record.file_name == generated_record.file_name:
+            updated.append(generated_record)
+            replaced = True
+        else:
+            updated.append(record)
+    if not replaced:
+        updated.append(generated_record)
+    return updated
 
 
 def copy_project_inputs_to_run(project_data: ProjectData, run_dir: Path) -> list[Path]:

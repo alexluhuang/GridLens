@@ -4,7 +4,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -20,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from gridlens.core.app_settings import AppSettings
-from gridlens.core.project import open_project
+from gridlens.core.project import Project, ProjectData, open_project
 from gridlens.core.validation import ValidationError
 from gridlens.gui.project_view_models import (
     ProjectFormValues,
@@ -38,6 +37,7 @@ class ProjectTab(QWidget):
         super().__init__()
         self.settings = settings
         self.input_paths: list[Path] = []
+        self.current_xml_file_name = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -79,12 +79,6 @@ class ProjectTab(QWidget):
         input_buttons.addStretch()
         input_layout.addLayout(input_buttons)
 
-        xml_row = QHBoxLayout()
-        self.xml_combo = QComboBox()
-        xml_row.addWidget(QLabel("GridPACK XML file"))
-        xml_row.addWidget(self.xml_combo)
-        input_layout.addLayout(xml_row)
-
         action_row = QHBoxLayout()
         self.save_button = QPushButton("Create / Save Project")
         set_button_role(self.save_button, "primary")
@@ -123,12 +117,21 @@ class ProjectTab(QWidget):
         if folder:
             self.project_dir.setText(folder)
 
+    def set_project(self, project: Project, project_data: ProjectData) -> None:
+        self.project_name.blockSignals(True)
+        self.project_name.setText(project_data.name)
+        self.project_name.blockSignals(False)
+        self.project_dir.setText(str(project.root_dir))
+        self.input_paths = [Path(record.stored_path) for record in project_data.input_files]
+        self.current_xml_file_name = project_data.xml_file_name
+        self.refresh_file_list()
+
     def add_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Choose GridPACK input files",
             str(Path.home()),
-            "GridPACK Inputs (*.xml *.raw *.con *.mon *.txt *.dyr *.seq);;All Files (*)",
+            "GridPACK Inputs (*.xml *.raw *.csv *.con *.mon *.txt *.dyr *.seq);;All Files (*)",
         )
         for file_name in files:
             path = Path(file_name).expanduser().resolve()
@@ -147,22 +150,17 @@ class ProjectTab(QWidget):
 
     def refresh_file_list(self) -> None:
         self.file_list.clear()
-        self.xml_combo.clear()
         for path in self.input_paths:
             item = QListWidgetItem(f"{path.name}    {path.parent}")
             item.setData(Qt.UserRole, str(path))
             self.file_list.addItem(item)
-            if path.suffix.lower() == ".xml":
-                self.xml_combo.addItem(path.name)
-
-        if self.xml_combo.count() == 0:
-            self.xml_combo.addItem("")
 
     def save_project(self) -> None:
         try:
             prepared = prepare_project_save(self._project_form_values())
             project_data = prepared.project.save(prepared.input_files, prepared.xml_file_name)
             project = prepared.project
+            self.current_xml_file_name = project_data.xml_file_name
             self.status.setText(f"Saved project: {project.project_file}")
             self.project_changed.emit(project, project_data)
         except Exception as exc:
@@ -173,8 +171,14 @@ class ProjectTab(QWidget):
             project_name=self.project_name.text(),
             project_dir=self.project_dir.text(),
             input_paths=self.input_paths,
-            xml_file_name=self.xml_combo.currentText(),
+            xml_file_name=self._selected_xml_file_name(),
         )
+
+    def _selected_xml_file_name(self) -> str:
+        file_names = {path.name for path in self.input_paths}
+        if self.current_xml_file_name in file_names:
+            return self.current_xml_file_name
+        return ""
 
     def open_existing_project(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(
@@ -187,13 +191,7 @@ class ProjectTab(QWidget):
             return
         try:
             project, project_data = open_project(file_name)
-            self.project_name.setText(project_data.name)
-            self.project_dir.setText(project_data.root_dir)
-            self.input_paths = [Path(record.stored_path) for record in project_data.input_files]
-            self.refresh_file_list()
-            index = self.xml_combo.findText(project_data.xml_file_name)
-            if index >= 0:
-                self.xml_combo.setCurrentIndex(index)
+            self.set_project(project, project_data)
             self.status.setText(f"Loaded project: {project.project_file}")
             self.project_changed.emit(project, project_data)
         except Exception as exc:
