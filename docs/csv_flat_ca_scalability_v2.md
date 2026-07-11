@@ -28,10 +28,13 @@ GridLens now detects and reads these three CSV shapes:
 
 The large branch result CSV is processed with a GPU-first backend:
 
-1. GridLens tries `dask-cudf` first. This uses RAPIDS cuDF partitions and runs
-   dataframe operations on the NVIDIA GPU.
-2. If RAPIDS is not installed, GridLens falls back to CPU Dask.
-3. If Dask is not installed or the Dask path fails, GridLens falls back to a
+1. In `auto` mode, GridLens uses eager RAPIDS cuDF for files that fit under the
+   configured memory target.
+2. For larger files, GridLens tries `dask-cudf` first. This uses RAPIDS cuDF
+   partitions and runs dataframe operations on the NVIDIA GPU.
+3. If the GPU backends are unavailable and CPU fallback has been acknowledged,
+   GridLens falls back to CPU Dask.
+4. If Dask is not installed or the Dask path fails, GridLens falls back to a
    Python streaming parser.
 
 GridLens does not hold the whole branch-contingency file in memory to build the
@@ -50,10 +53,12 @@ Use `GRIDLENS_CSV_FLAT_BACKEND=dask_cudf` on DGX Spark when you want
 analysis to fail loudly instead of falling back if RAPIDS is missing. Use
 `python` only for debugging.
 
-The Analysis tab runs this parsing and summarization work in a background Qt
-worker so the desktop event loop stays responsive while Dask/cuDF does the heavy
-lifting. The generated status text and table notes record which backend was
-used; if they say `CPU Dask backend`, RAPIDS was not active for that run.
+The Branch Analysis and Transformer Analysis tabs run this parsing and
+summarization work in a background Qt worker so the desktop event loop stays
+responsive while Dask/cuDF does the heavy lifting. If only CPU Dask is available,
+the GUI warns the user before setting the acknowledgement needed for CPU fallback.
+The generated status text and table notes record which backend was used; if they
+say `CPU Dask backend`, RAPIDS was not active for that run.
 
 For the user-facing analysis, GridLens groups the branch-contingency rows back
 to branch-level summaries:
@@ -90,7 +95,7 @@ run/reports/parquet/<csv-file-name>/
 
 Interactive graph generation skips parquet conversion so the user can see the
 charts as soon as the reduced branch summaries are ready. The default
-`build_run_analysis()` path still writes parquet for report/export workflows
+`build_run_analysis()` path still writes parquet for full artifact/export workflows
 unless a caller explicitly opts out.
 
 The conversion also uses the GPU-first backend. On DGX Spark with RAPIDS
@@ -124,8 +129,10 @@ can keep using pandas and CPU Dask.
    already in Docker's local image store.
 3. Use an XML file that sets `outputFormat` to `csv_flat`.
 4. Run GridPACK normally.
-5. Open the Analysis tab and generate the same GridLens summaries, charts,
-   master CSVs, and distribution outputs.
+5. Open the Branch Analysis or Transformer Analysis tab and generate the
+   interactive GridLens summaries and charts.
 
 The visible analysis remains branch-centered, but it is now built from the raw
 branch-contingency data produced by `ca-scalability-v2`.
+Master CSVs and distribution outputs remain available through the analysis
+export helper functions for developer/API workflows.

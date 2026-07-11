@@ -45,11 +45,11 @@ construction, project-folder behavior, GUI view-model logic, package metadata, o
 
 - `core/` owns settings, projects, validation, and manifests.
 - `runner/` owns Docker probing, command construction, and process execution.
-- `analysis/` owns parsing, enrichment, metrics, master exports, plots, and reports.
+- `analysis/` owns parsing, enrichment, metrics, graph caches, master exports, and distribution exports.
 - `gui/` owns PySide6 widgets and view-specific adapters. Keep business rules in pure helper modules when possible.
 
 Prefer small functions with clear names. Add a new helper module when it makes behavior reusable and testable. Avoid
-large GUI event handlers that also validate data, build Docker requests, parse outputs, or write reports.
+large GUI event handlers that also validate data, build Docker requests, parse outputs, or write analysis artifacts.
 
 ## Style Expectations
 

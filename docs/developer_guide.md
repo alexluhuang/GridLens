@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-cd /home/user/Documents/gridlens-dev
+cd /path/to/gridpack-workbench-dev
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
@@ -55,7 +55,7 @@ Build the product in this order:
 4. Confirm project folders, manifests, status files, and logs are correct.
 5. Use the GUI to run the same case.
 6. Add exact output parsers.
-7. Add polished reports and exports.
+7. Add graph data, analysis manifests, and exports.
 8. Package with PyInstaller.
 9. Wrap PyInstaller output in a `.deb`.
 10. Test on a clean DGX OS 7 account.
@@ -68,8 +68,8 @@ well-tested functions.
 Never build Docker commands as shell strings. Build a list of arguments and run it without `shell=True`.
 
 Keep modules organized around one responsibility. For example, parsed GridPACK data flows through `analysis/parsers.py`,
-`analysis/enrichment.py`, `analysis/metrics.py`, and `analysis/dataset.py` before reports or exports are written. Add
-small helper modules when they make behavior reusable and testable.
+`analysis/enrichment.py`, `analysis/metrics.py`, and `analysis/dataset.py` before graph data or exports are written.
+Add small helper modules when they make behavior reusable and testable.
 
 Use explicit, readable Python over clever shortcuts. Public functions and non-obvious helpers should have concise
 docstrings that explain behavior rather than repeat the function signature.

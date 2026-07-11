@@ -63,11 +63,11 @@ def test_prepare_project_save_allows_blank_xml_selection(tmp_path: Path) -> None
     assert prepared.xml_file_name == ""
 
 
-def test_prepare_project_save_requires_selected_xml_file(tmp_path: Path) -> None:
+def test_prepare_project_save_requires_saved_xml_file(tmp_path: Path) -> None:
     raw = tmp_path / "case.raw"
     raw.write_text("raw", encoding="utf-8")
 
-    with pytest.raises(ValidationError, match="selected XML file"):
+    with pytest.raises(ValidationError, match="saved XML file"):
         prepare_project_save(
             ProjectFormValues(
                 project_name="Pilot Project",

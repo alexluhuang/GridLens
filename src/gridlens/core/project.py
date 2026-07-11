@@ -223,7 +223,7 @@ def _validate_project_inputs(input_files: list[Path], xml_file_name: str) -> Non
     if not xml_file_name:
         return
     if xml_file_name not in file_names:
-        raise ValidationError("The selected XML file must be one of the project input files.")
+        raise ValidationError("The saved XML file must be one of the project input files.")
 
 
 def _validate_generated_xml_name(xml_file_name: str) -> None:

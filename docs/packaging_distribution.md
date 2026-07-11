@@ -31,7 +31,7 @@ sudo apt install python3 python3-venv python3-pip dpkg-dev
 Build:
 
 ```bash
-cd /home/alh360/Documents/gridpack-workbench-dev
+cd /path/to/gridpack-workbench-dev
 packaging/deb/build_deb.sh
 ```
 

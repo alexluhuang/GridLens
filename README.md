@@ -9,7 +9,7 @@ This app is local-only by design. Pull the GridPACK Docker image before opening 
 ## Quick Start For Development
 
 ```bash
-cd /home/alh360/Documents/gridlens-dev
+cd /path/to/gridpack-workbench-dev
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
@@ -17,10 +17,15 @@ python -m pip install -e ".[dev]"
 gridlens
 ```
 
-If you only want to verify the core code without installing GUI dependencies:
+The full test suite expects the development dependencies, including PySide6:
 
 ```bash
-PYTHONPATH=src python3 -m pytest
+python -m pytest
+```
+
+For a quick local environment smoke check:
+
+```bash
 python3 scripts/check_environment.py
 ```
 
@@ -57,7 +62,7 @@ tests/        core unit tests
 docs/         architecture, install, user, security, packaging notes
 packaging/    PyInstaller and Debian package files
 scripts/      local helper scripts
-samples/      small parser/reporting sample files
+samples/      small parser sample files
 ```
 
 ## Documentation

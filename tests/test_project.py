@@ -96,7 +96,7 @@ class ProjectTests(unittest.TestCase):
 
             project = Project("Missing XML Project", root / "project")
 
-            with self.assertRaisesRegex(ValidationError, "selected XML file"):
+            with self.assertRaisesRegex(ValidationError, "saved XML file"):
                 project.save([raw], "input.xml")
 
     def test_project_save_rejects_duplicate_input_file_names(self) -> None:

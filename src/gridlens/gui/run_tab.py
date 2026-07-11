@@ -209,7 +209,7 @@ class RunTab(QWidget):
             QMessageBox.warning(self, "No project", "Create or open a project first.")
             return
         if not self.project_data.xml_file_name:
-            QMessageBox.warning(self, "No XML configuration", "Generate or select an XML configuration before running.")
+            QMessageBox.warning(self, "No XML configuration", "Generate an XML configuration before running.")
             return
 
         values = self._run_form_values()

@@ -11,8 +11,8 @@ PySide6 GUI
   -> pnnl/gridpack Docker container
   -> local output files
   -> local analysis artifacts
-  -> run exports/master_cleaned.csv
-  -> utilization distribution plots and tables
+  -> embedded Branch Analysis / Transformer Analysis graphs
+  -> optional master CSV and distribution exports
 ```
 
 ## Project Folders
@@ -31,7 +31,7 @@ A regulator-facing project is stored under:
         work/
         logs/run.log
         reports/
-        exports/
+        exports/          optional, created by analysis export helpers
     exports/
 ```
 
@@ -73,8 +73,13 @@ The analysis layer is deliberately local and file-based. It can:
 - write `reports/analysis_manifest.json` and reusable normalized tables under `reports/tables/`;
 - write lightweight interactive chart caches under `reports/interactive_tables/`;
 - write `exports/master.csv`, `exports/master_cleaned.csv`, and `exports/outliers.csv`;
-- write distribution plot PNGs and companion CSV tables under `exports/distributions/`.
+- write distribution plot PNGs and companion CSV tables under `exports/distributions/`;
 - export a run ZIP.
+
+The GUI's `Generate Graphs` action calls the interactive analysis path. It first reuses a fresh
+`reports/analysis_manifest.json` when one already exists; otherwise it writes only
+`reports/interactive_analysis_manifest.json` and `reports/interactive_tables/`. Master CSVs and distribution plots are
+created by the lower-level export helpers, not by the embedded graph button.
 
 Analysis responsibilities are split by module:
 
@@ -86,7 +91,7 @@ Analysis responsibilities are split by module:
 - `enrichment.py`: adds RAW-derived bus names, areas, zones, and voltage classes to parsed tables.
 - `metrics.py`: computes decision-support metrics from already-parsed tables.
 - `dataset.py`: orchestrates parsing, enrichment, metrics, table exports, and the analysis manifest.
-- `interactive.py`: builds and caches the smaller data set used by the embedded Analysis tab graphs.
+- `interactive.py`: builds and caches the smaller data set used by the embedded Branch Analysis and Transformer Analysis graphs.
 - `utilization.py`: defines which branch-like RAW records are included in utilization calculations.
 - `master.py`: creates branch-level `master.csv`, `master_cleaned.csv`, and `outliers.csv`.
 - `distributions.py`: creates utilization distribution tables and plots from `master_cleaned.csv`.

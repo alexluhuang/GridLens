@@ -1,6 +1,14 @@
+# GridPACK Output Reference
+
+This file summarizes GridPACK contingency-analysis inputs and output files that GridLens can generate, run, or parse.
+GridPACK itself performs the power-flow and contingency calculations inside the Docker container. GridLens prepares XML
+inputs, records run metadata, and parses the output files that appear in the run's `work/` directory.
+
 ## Configuration Options
 
-The contingency analysis application is configured via XML input files. Key options include:
+GridPACK contingency analysis is configured via XML input files. GridLens generates that XML from the Configuration tab
+and stores it with the project's original inputs. Existing projects that already contain a saved XML configuration can
+still be opened and run. Key options include:
 
 ### Contingency Specification
 
@@ -29,29 +37,38 @@ You can specify contingencies in two ways (or combine both):
   <contingencyList>custom_nk_contingencies.xml</contingencyList>
 </Contingency_analysis>
 ```
-When combined, duplicates from the file are automatically skipped.
+When combined, GridPACK may skip duplicate contingency definitions from the file.
 
 ### Other Options
+
+The defaults below are the values GridLens uses when generating XML. Imported XML files can override them.
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `groupSize` | Number of MPI processes per contingency (parallelization) | 1 |
-| `printCalcFiles` | Write detailed output for each contingency | true |
+| `printCalcFiles` | Write detailed output for each contingency | false |
 | `minVoltage` | Minimum voltage threshold for violations (p.u.) | 0.9 |
 | `maxVoltage` | Maximum voltage threshold for violations (p.u.) | 1.1 |
-| `qlim` | Enable reactive power limit enforcement (PV to PQ bus conversion) | false |
+| `contingencyRating` | Branch rating set used for contingency loading checks | C |
+| `qlim` | Enable reactive power limit enforcement (PV to PQ bus conversion) | true |
+| `outputFormat` | Contingency-analysis output format | csv_flat |
 
 ### Contingency File Format
 
-See `contingencies_nk_example.xml` for examples of N-1, N-2, and N-3 contingency definitions.
+GridLens does not currently ship a sample contingency-list XML file. Add a custom contingency-list file to the project
+inputs when an imported or generated XML references one.
 
 ---
 
 ## Advanced Features
 
+The behaviors in this section are GridPACK/container calculation behaviors, not Python algorithms implemented by
+GridLens. GridLens records and parses the resulting output when GridPACK writes it.
+
 ### Automatic Slack Bus Transfer
 
-When a generator contingency trips the slack bus generator, the application automatically transfers the slack bus role to the largest remaining online generator. This mimics commercial power flow tools (PSS/E, PowerWorld) behavior.
+When a generator contingency trips the slack bus generator, GridPACK may transfer the slack bus role to the largest
+remaining online generator. This mimics commercial power flow tools (PSS/E, PowerWorld) behavior.
 
 **Example output:**
 ```
@@ -62,7 +79,8 @@ After the contingency analysis completes, the slack bus is restored to its origi
 
 ### Slack Capacity Check
 
-After the power flow solves, the application checks if the slack bus generator output exceeds its Pmax rating. If the required generation exceeds capacity, the contingency is marked as failed with a warning message:
+After the power flow solves, GridPACK may check if the slack bus generator output exceeds its Pmax rating. If the
+required generation exceeds capacity, the contingency is marked as failed with a warning message:
 
 ```
 WARNING: Slack bus 80 generator output (475.3 MW) exceeds capacity (400.0 MW)
@@ -73,7 +91,7 @@ This ensures realistic results - a contingency that requires more generation tha
 
 ### Island Detection
 
-The application detects network islands (disconnected portions) caused by branch contingencies:
+GridPACK may detect network islands (disconnected portions) caused by branch contingencies:
 
 - **Lone bus**: A bus with no active branches is marked as isolated
 - **Island**: A group of buses disconnected from the main network
@@ -84,7 +102,7 @@ When isolation is detected, the isolated buses are excluded from the power flow 
 
 ## Output Files
 
-The contingency analysis calculation produces a number of files summarize the
+The contingency analysis calculation produces a number of files summarizing the
 results of the entire set of individual contingency simulations. Only results
 for contingencies that ran to completion are included. Calculations that failed
 either because of a numerical instability or because the calculations failed to
@@ -153,7 +171,7 @@ in this data.
 stored values all represent the phase angle at each bus. PV buses are included
 in this data.
 
-**pq\_changed\_cnt.txt** This file is only created if the qlim flag is
+**pq\_change\_cnt.txt** This file is only created if the qlim flag is
 set to true in the input file. It counts the number of times a PV bus is
 changed to a PQ bus during the simulation.
 
