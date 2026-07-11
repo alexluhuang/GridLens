@@ -12,3 +12,4 @@ dist/
 *.tar.gz
 .DS_Store
 GridLensProjects/
+third_party/

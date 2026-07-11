@@ -2,7 +2,7 @@
 
 GridLens separates the consumer GUI from the execution engine. The GUI gathers input files and settings. The
 core layer creates a local project and run folder. The runner layer builds a Docker argument list and runs GridPACK. The
-analysis layer reads local outputs and creates reports.
+analysis layer reads local outputs and creates graph data and exports.
 
 ```text
 PySide6 GUI
@@ -10,7 +10,7 @@ PySide6 GUI
   -> Docker/GridPACK runner
   -> pnnl/gridpack Docker container
   -> local output files
-  -> local analysis and reports
+  -> local analysis artifacts
   -> run exports/master_cleaned.csv
   -> utilization distribution plots and tables
 ```
@@ -69,13 +69,12 @@ The analysis layer is deliberately local and file-based. It can:
 
 - list output files;
 - estimate success/failure counts from `success.txt`;
-- write `output_inventory.csv`;
-- write `analysis_summary.json`;
-- create `success_summary.svg`;
-- write `report.html`;
-- export a run ZIP.
+- parse, normalize, and enrich GridPACK outputs;
+- write `reports/analysis_manifest.json` and reusable normalized tables under `reports/tables/`;
+- write lightweight interactive chart caches under `reports/interactive_tables/`;
 - write `exports/master.csv`, `exports/master_cleaned.csv`, and `exports/outliers.csv`;
 - write distribution plot PNGs and companion CSV tables under `exports/distributions/`.
+- export a run ZIP.
 
 Analysis responsibilities are split by module:
 
@@ -87,9 +86,13 @@ Analysis responsibilities are split by module:
 - `enrichment.py`: adds RAW-derived bus names, areas, zones, and voltage classes to parsed tables.
 - `metrics.py`: computes decision-support metrics from already-parsed tables.
 - `dataset.py`: orchestrates parsing, enrichment, metrics, table exports, and the analysis manifest.
+- `interactive.py`: builds and caches the smaller data set used by the embedded Analysis tab graphs.
+- `utilization.py`: defines which branch-like RAW records are included in utilization calculations.
 - `master.py`: creates branch-level `master.csv`, `master_cleaned.csv`, and `outliers.csv`.
 - `distributions.py`: creates utilization distribution tables and plots from `master_cleaned.csv`.
-- `report_html.py`: renders the local decision-support HTML report from a pure view model.
+- `summary.py`: exports a selected run directory as a ZIP package.
+- `gpu_pandas.py`: imports pandas through `cuDF.pandas` when RAPIDS is available, with a regular pandas fallback for development and tests.
+- `table_helpers.py`: centralizes CSV-safe value conversion for table export.
 
 The branch master and distribution exporters use `cuDF.pandas` when RAPIDS cuDF is available, then import pandas through
 that accelerated layer. Development systems without cuDF fall back to pandas so the code remains testable.

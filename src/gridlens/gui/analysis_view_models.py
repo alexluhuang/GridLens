@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
-import html
-from pathlib import Path
-from typing import Protocol
 
 from gridlens.analysis.enrichment import voltage_class
 from gridlens.analysis.parser_models import ParsedTable
@@ -15,47 +12,6 @@ from gridlens.analysis.utilization import (
 )
 
 
-DEFAULT_DISTRIBUTION_VARIABLES = frozenset(
-    {
-        "area",
-        "voltage_class",
-        "from_area",
-        "to_area",
-        "rate_c",
-        "raw_branch_type",
-    }
-)
-DISTRIBUTION_OUTPUT_COLUMNS = ["variable", "table_csv", "graph_png", "code_path"]
-THERMAL_TABLE_COLUMNS = [
-    "row_index",
-    "from_bus",
-    "to_bus",
-    "line_id",
-    "voltage_class",
-    "area",
-    "base_utilization_pct",
-    "max_utilization_pct",
-    "max_utilization_contingency",
-    "max_contingency",
-]
-VOLTAGE_TABLE_COLUMNS = [
-    "row_index",
-    "bus_id",
-    "bus_name",
-    "base_kv",
-    "area",
-    "min_value",
-    "min_voltage_margin",
-    "min_contingency",
-]
-CONTINGENCY_TABLE_COLUMNS = [
-    "contingency_index",
-    "success",
-    "violation",
-    "isolated_warning",
-    "performance_index_sum",
-    "performance_index_average",
-]
 VOLTAGE_GROUP_ORDER = {
     "<50 kV": 0,
     "50-99 kV": 1,
@@ -75,54 +31,6 @@ BRANCH_KEY_COLUMNS = ("from_bus", "to_bus", "line_id", "section")
 MIN_BRANCH_ANALYSIS_VOLTAGE_KV = 50.0
 
 
-class DistributionExportLike(Protocol):
-    independent_variable: str
-    table_csv: Path
-    graph_png: Path
-    code_path: Path
-
-
-def should_select_distribution_variable(variable: str) -> bool:
-    return variable in DEFAULT_DISTRIBUTION_VARIABLES
-
-
-def distribution_output_row(result: DistributionExportLike) -> dict[str, object]:
-    return {
-        "variable": result.independent_variable,
-        "table_csv": str(result.table_csv),
-        "graph_png": str(result.graph_png),
-        "code_path": str(result.code_path),
-    }
-
-
-def distribution_output_rows(results: Iterable[DistributionExportLike]) -> list[dict[str, object]]:
-    return [distribution_output_row(result) for result in results]
-
-
-def control_area_utilization_rows(
-    tables: Mapping[str, ParsedTable],
-    branch_options: UtilizationBranchOptions | None = None,
-) -> list[dict[str, object]]:
-    """Mean maximum branch utilization by control area for branches at or above 50 kV."""
-    return summarize_control_area_utilization(max_line_utilization_rows(tables, branch_options))
-
-
-def average_n1_utilization_rows(
-    tables: Mapping[str, ParsedTable],
-    branch_options: UtilizationBranchOptions | None = None,
-) -> list[dict[str, object]]:
-    """Average N-1 branch utilization rows with area and voltage labels attached."""
-    duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
-    rows = []
-    for row in _average_n1_utilization_rows(tables, branch_options):
-        area_labels = _endpoint_control_area_labels(row, duplicate_area_names)
-        enriched = dict(row)
-        enriched["control_areas"] = area_labels
-        enriched["voltage_group"] = _row_voltage_group(row)
-        rows.append(enriched)
-    return rows
-
-
 def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
     """Summarize mean maximum branch utilization by actual endpoint control area."""
     buckets: dict[str, list[float]] = {}
@@ -137,14 +45,6 @@ def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> 
     return summaries
 
 
-def voltage_group_utilization_rows(
-    tables: Mapping[str, ParsedTable],
-    branch_options: UtilizationBranchOptions | None = None,
-) -> list[dict[str, object]]:
-    """Mean maximum branch utilization by voltage group."""
-    return summarize_voltage_group_utilization(max_line_utilization_rows(tables, branch_options))
-
-
 def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
     """Summarize mean maximum branch utilization by voltage group."""
     buckets: dict[str, list[float]] = {}
@@ -155,16 +55,6 @@ def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) ->
     summaries = _group_average_rows(buckets, "voltage_group")
     summaries.sort(key=lambda row: _voltage_group_sort_key(str(row["voltage_group"])))
     return summaries
-
-
-def max_230kv_line_utilization_rows(
-    tables: Mapping[str, ParsedTable],
-    branch_options: UtilizationBranchOptions | None = None,
-) -> list[dict[str, object]]:
-    """Maximum observed utilization for 230 kV lines, sorted from lowest to highest."""
-    rows = [row for row in max_line_utilization_rows(tables, branch_options) if _is_230kv_line(row)]
-    rows.sort(key=lambda item: numeric_value(item.get("max_utilization_pct")))
-    return rows
 
 
 def max_line_utilization_rows(
@@ -219,34 +109,6 @@ def _line_utilization_row(
         "utilization_source": utilization_source,
         "raw_branch_type": context.get("raw_branch_type", ""),
     }
-
-
-def _average_n1_utilization_rows(
-    tables: Mapping[str, ParsedTable],
-    branch_options: UtilizationBranchOptions | None = None,
-) -> list[dict[str, object]]:
-    branches = _table_index(tables.get("branch_metadata"))
-    pflow_mm = _table_index(tables.get("pflow_mm"))
-    rows: list[dict[str, object]] = []
-
-    for row in _table_rows(tables, "pflow"):
-        key = _branch_key(row)
-        branch = branches.get(key)
-        if not _is_utilizable_branch(branch, branch_options):
-            continue
-        context = _merge_rows(branch, pflow_mm.get(key, {}), row)
-        if _line_voltage_kv(context) < MIN_BRANCH_ANALYSIS_VOLTAGE_KV:
-            continue
-        utilization = _finite_float(row.get("average_utilization_pct"))
-        if utilization is None:
-            rating = _line_rating(context)
-            real_flow = _finite_float(row.get("average"))
-            utilization = _pflow_utilization_pct(real_flow, rating)
-        if utilization is None:
-            continue
-        context["utilization_pct"] = round(utilization, 6)
-        rows.append(context)
-    return rows
 
 
 def _group_average_rows(buckets: Mapping[str, list[float]], key_column: str) -> list[dict[str, object]]:
@@ -360,16 +222,6 @@ def _merge_rows(*rows: Mapping[str, object]) -> dict[str, object]:
     return merged
 
 
-def _pflow_utilization_pct(real_flow: float | None, rating: float | None) -> float | None:
-    if real_flow is None or rating is None or rating <= 0:
-        return None
-    return abs(real_flow) / rating * 100
-
-
-def _max_utilization_pct(row: Mapping[str, object]) -> float | None:
-    return _pflow_mm_max_utilization_pct(row)
-
-
 def _pflow_mm_max_utilization_pct(row: Mapping[str, object]) -> float | None:
     direct_utilization = _finite_float(row.get("max_utilization_pct"))
     if direct_utilization is not None:
@@ -453,13 +305,6 @@ def _voltage_values(row: Mapping[str, object]) -> list[float]:
     return values
 
 
-def _is_230kv_line(row: Mapping[str, object]) -> bool:
-    values = _voltage_values(row)
-    if values:
-        return any(abs(value - 230.0) <= 0.5 for value in values)
-    return str(row.get("voltage_class") or "") == "230-344 kV"
-
-
 def _line_label(row: Mapping[str, object]) -> str:
     from_label = str(row.get("from_bus_name") or row.get("from_bus") or "").strip()
     to_label = str(row.get("to_bus_name") or row.get("to_bus") or "").strip()
@@ -482,32 +327,6 @@ def _positive_float(value: object) -> float | None:
     return parsed if parsed is not None and parsed > 0 else None
 
 
-def filter_performance_rows(
-    rows: Iterable[dict[str, object]],
-    area: object = "",
-    voltage_class: object = "",
-) -> list[dict[str, object]]:
-    filtered = list(rows)
-    if area:
-        filtered = [row for row in filtered if str(row.get("area")) == str(area)]
-    if voltage_class:
-        filtered = [row for row in filtered if str(row.get("voltage_class")) == str(voltage_class)]
-    return filtered
-
-
-def top_numeric_rows(
-    rows: Iterable[dict[str, object]],
-    column: str,
-    limit: int,
-    *,
-    reverse: bool,
-    missing_value: float,
-) -> list[dict[str, object]]:
-    ranked = list(rows)
-    ranked.sort(key=lambda row: numeric_value(row.get(column), missing_value), reverse=reverse)
-    return ranked[:limit]
-
-
 def numeric_value(value: object, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -515,88 +334,10 @@ def numeric_value(value: object, default: float = 0.0) -> float:
         return default
 
 
-def render_analysis_overview_html(
-    run_dir: Path,
-    manifest_path: Path,
-    metrics: Mapping[str, object],
-    master: Mapping[str, object],
-) -> str:
-    success = metric_mapping(metrics, "success")
-    thermal = metric_mapping(metrics, "thermal")
-    voltage = metric_mapping(metrics, "voltage")
-    notes = metric_notes(metrics)
-    master_cleaned = master.get("master_cleaned_csv", "")
-
-    return f"""
-            <h2>Decision Support Overview</h2>
-            <p><b>Run:</b> {_html_value(run_dir)}</p>
-            <p><b>Manifest:</b> {_html_value(manifest_path)}</p>
-            <table>
-              <tr><th>Metric</th><th>Value</th></tr>
-              <tr><td>Contingencies</td><td>{_html_value(success.get('total', 0))}</td></tr>
-              <tr><td>Success rate</td><td>{_html_value(success.get('success_rate_pct', 0))}%</td></tr>
-              <tr><td>Failures</td><td>{_html_value(success.get('failure', 0))}</td></tr>
-              <tr><td>Thermal facilities</td><td>{_html_value(thermal.get('facility_count', 0))}</td></tr>
-              <tr><td>Mean worst utilization</td><td>
-                {_html_value(thermal.get('mean_worst_utilization_pct', 'n/a'))}%
-              </td></tr>
-              <tr><td>Stress Gini</td><td>{_html_value(thermal.get('gini_worst_utilization', 'n/a'))}</td></tr>
-              <tr><td>Top 20% stress share</td><td>
-                {_html_value(thermal.get('top_20_pct_stress_share', 'n/a'))}
-              </td></tr>
-              <tr><td>Low voltage violations</td><td>
-                {_html_value(voltage.get('low_voltage_violations', 0))}
-              </td></tr>
-              <tr><td>High voltage violations</td><td>
-                {_html_value(voltage.get('high_voltage_violations', 0))}
-              </td></tr>
-            </table>
-            <p><b>Master cleaned CSV:</b> {_html_value(master_cleaned)}</p>
-            <h3>Assumptions and Data Notes</h3>
-            <ul>{''.join(f'<li>{_html_value(note)}</li>' for note in notes)}</ul>
-            """
-
-
-def metric_mapping(metrics: Mapping[str, object], key: str) -> Mapping[str, object]:
-    value = metrics.get(key, {})
-    return value if isinstance(value, Mapping) else {}
-
-
-def metric_notes(metrics: Mapping[str, object]) -> list[object]:
-    notes = metrics.get("notes", [])
-    if isinstance(notes, str):
-        return [notes]
-    if isinstance(notes, Iterable):
-        return list(notes)
-    return []
-
-
-def _html_value(value: object) -> str:
-    return html.escape(str(value))
-
-
 __all__ = [
-    "CONTINGENCY_TABLE_COLUMNS",
-    "DEFAULT_DISTRIBUTION_VARIABLES",
-    "DISTRIBUTION_OUTPUT_COLUMNS",
-    "DistributionExportLike",
-    "THERMAL_TABLE_COLUMNS",
     "UtilizationBranchOptions",
-    "VOLTAGE_TABLE_COLUMNS",
-    "average_n1_utilization_rows",
-    "control_area_utilization_rows",
-    "distribution_output_row",
-    "distribution_output_rows",
-    "filter_performance_rows",
-    "max_230kv_line_utilization_rows",
     "max_line_utilization_rows",
-    "metric_mapping",
-    "metric_notes",
     "numeric_value",
-    "render_analysis_overview_html",
-    "should_select_distribution_variable",
     "summarize_control_area_utilization",
     "summarize_voltage_group_utilization",
-    "top_numeric_rows",
-    "voltage_group_utilization_rows",
 ]

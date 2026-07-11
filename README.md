@@ -50,8 +50,8 @@ src/gridlens/
   gui/        PySide6 tabs and main window
   core/       settings, projects, validation, run manifests
   runner/     Docker probing, command construction, GridPACK execution
-  analysis/   local output parsing, reports, charts, exports
-  resources/  default settings and icon
+  analysis/   local output parsing, graph data, metrics, exports
+  resources/  application icon
 
 tests/        core unit tests
 docs/         architecture, install, user, security, packaging notes

@@ -30,4 +30,4 @@ Depends: adduser,
 Description: Local GUI for GridPACK contingency analysis
  GridLens is a local PySide6 desktop application that runs GridPACK Docker
  containers against regulator-selected project inputs and stores run logs,
- manifests, outputs, charts, and reports on the local machine.
+ manifests, outputs, charts, and exports on the local machine.

@@ -78,12 +78,8 @@ a RAW file is not available.
 
 ## Parquet Conversion
 
-The full branch result CSV can be very large. GridLens now has a parquet
-conversion path modeled on the scripts cloned at:
-
-```text
-third_party/GridPACK-file-conversion/
-```
+The full branch result CSV can be very large. GridLens now has an internal
+parquet conversion path in `src/gridlens/analysis/csv_flat.py`.
 
 When the optional analysis dependencies are installed, GridLens converts the
 large csv-flat result file to:

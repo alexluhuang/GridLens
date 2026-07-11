@@ -29,6 +29,7 @@ status.json
 work/
 logs/run.log
 reports/
+exports/
 ```
 
 The same terminal stream is also tee'd into `work/terminal.log`, so it appears with the run outputs in the Results tab and exported ZIPs.
@@ -53,15 +54,15 @@ Use `Export ZIP` to create a local package containing the run files.
 
 ## Generate Analysis
 
-Go to Analysis, choose a run, and click `Generate Report`.
+Go to Analysis, choose a run, and click `Generate Graphs`.
 
 The app creates:
 
 ```text
-reports/output_inventory.csv
-reports/analysis_summary.json
-reports/success_summary.svg
-reports/report.html
+reports/analysis_manifest.json
+reports/tables/
+reports/interactive_analysis_manifest.json
+reports/interactive_tables/
 exports/master.csv
 exports/master_cleaned.csv
 exports/outliers.csv

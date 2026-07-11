@@ -10,12 +10,11 @@ from gridlens.analysis.distributions import generate_distribution_exports
 from gridlens.analysis.dataset import build_run_analysis, gini, top_share
 from gridlens.analysis.master import ensure_branch_master_exports
 from gridlens.analysis.parsers import parse_input_xml, parse_success_file, summarize_success_file
-from gridlens.analysis.summary import generate_run_report
 
 
 class AnalysisTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("pandas"), "pandas is required for export generation")
-    def test_success_summary_report_and_master_exports(self) -> None:
+    def test_success_summary_analysis_manifest_and_master_exports(self) -> None:
         with TemporaryDirectory() as tmp:
             run_dir = _sample_run(Path(tmp))
 
@@ -24,17 +23,16 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(summary.success_count, 3)
             self.assertEqual(summary.failure_count, 1)
 
-            report = generate_run_report(run_dir)
-            self.assertTrue(Path(report["html_report"]).exists())
-            self.assertTrue(Path(report["inventory_csv"]).exists())
-            self.assertTrue(Path(report["chart_svg"]).exists())
-            self.assertTrue(Path(report["analysis_manifest"]).exists())
-            self.assertTrue(Path(report["master"]["master_csv"]).exists())
-            self.assertTrue(Path(report["master"]["master_cleaned_csv"]).exists())
-            self.assertTrue(Path(report["master"]["outliers_csv"]).exists())
-            self.assertEqual(report["master"]["row_count"], 2)
-            self.assertEqual(report["master"]["cleaned_row_count"], 1)
-            self.assertEqual(report["master"]["outlier_row_count"], 1)
+            dataset = build_run_analysis(run_dir)
+            master = ensure_branch_master_exports(run_dir, dataset)
+            self.assertTrue(dataset.manifest_path.exists())
+            self.assertTrue((dataset.table_dir / "perf_mm.csv").exists())
+            self.assertTrue(master.master_csv.exists())
+            self.assertTrue(master.master_cleaned_csv.exists())
+            self.assertTrue(master.outliers_csv.exists())
+            self.assertEqual(master.row_count, 2)
+            self.assertEqual(master.cleaned_row_count, 1)
+            self.assertEqual(master.outlier_row_count, 1)
 
     def test_schema_parsers_metrics_manifest_and_raw_enrichment(self) -> None:
         with TemporaryDirectory() as tmp:
