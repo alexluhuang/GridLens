@@ -431,4 +431,24 @@ QTextBrowser#documentPane {
     border: 0;
     padding: 12px;
 }
+
+QLabel#progressStatus {
+    color: #111111;
+    font-weight: 600;
+}
+
+QProgressBar {
+    background: #e9eaec;
+    border: 1px solid #c4c6ca;
+    border-radius: 4px;
+    height: 18px;
+    text-align: center;
+    color: #111111;
+    font-size: 9pt;
+}
+
+QProgressBar::chunk {
+    background: #0039a6;
+    border-radius: 3px;
+}
 """

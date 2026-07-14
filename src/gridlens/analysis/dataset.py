@@ -11,6 +11,14 @@ from gridlens.analysis.enrichment import enrich_with_bus_metadata, voltage_class
 from gridlens.analysis.metrics import compute_metrics, gini, top_share
 from gridlens.analysis.parser_models import PARSER_VERSION, ParsedTable
 from gridlens.analysis.parsers import parse_all_output_tables
+from gridlens.analysis.progress import (
+    PHASE_ARTIFACTS,
+    PHASE_ENRICH,
+    PHASE_METRICS,
+    PHASE_PARSE,
+    ProgressCallback,
+    report,
+)
 from gridlens.analysis.table_helpers import cell_value
 
 
@@ -67,6 +75,7 @@ def build_run_analysis(
     convert_csv_flat_parquet: bool = True,
     write_artifacts: bool = True,
     compute_metric_summary: bool = True,
+    progress: ProgressCallback | None = None,
 ) -> RunAnalysisDataset:
     """Parse a run directory and write reusable CSV/JSON analysis artifacts."""
 
@@ -77,10 +86,18 @@ def build_run_analysis(
         report_dir.mkdir(parents=True, exist_ok=True)
         table_dir.mkdir(parents=True, exist_ok=True)
 
+    report(progress, PHASE_PARSE, "Parsing GridPACK contingency outputs...")
     tables = parse_all_output_tables(run_path)
+    report(progress, PHASE_ENRICH, "Enriching branches with RAW bus metadata...")
     enrich_with_bus_metadata(tables)
+    if compute_metric_summary:
+        report(progress, PHASE_METRICS, "Computing summary metrics...")
     metrics = compute_metrics(tables) if compute_metric_summary else {}
+    if convert_csv_flat_parquet:
+        report(progress, PHASE_ARTIFACTS, "Converting csv-flat results to Parquet...")
     parquet_files = ensure_csv_flat_parquet(run_path, tables) if convert_csv_flat_parquet else {}
+    if write_artifacts:
+        report(progress, PHASE_ARTIFACTS, "Writing analysis tables...")
     table_files = _write_tables(table_dir, tables) if write_artifacts else {}
     for name, paths in parquet_files.items():
         table_files.setdefault(name, {}).update(paths)

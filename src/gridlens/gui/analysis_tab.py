@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import suppress
 import multiprocessing
 import os
 from pathlib import Path
+from queue import Empty
 import textwrap
 import traceback
 from typing import Callable
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -44,6 +47,7 @@ from gridlens.analysis.interactive import (
     AnalysisBuildResult,
     build_interactive_analysis_result as _build_analysis_result,
 )
+from gridlens.analysis.progress import AnalysisProgress, ProgressCallback
 from gridlens.analysis.utilization import UtilizationBranchOptions
 from gridlens.core.project import Project
 from gridlens.gui.analysis_view_models import (
@@ -82,15 +86,54 @@ def _csv_flat_runtime_status(dataset: RunAnalysisDataset | None) -> str:
     return ""
 
 
-def _build_analysis_result_in_process(run_dir: Path, branch_options: UtilizationBranchOptions) -> AnalysisBuildResult:
+def _build_analysis_result_with_queue(
+    run_dir: Path,
+    branch_options: UtilizationBranchOptions,
+    progress_queue: object,
+) -> AnalysisBuildResult:
+    """Run the build in the worker subprocess, forwarding progress over a queue."""
+
+    def _forward(update: AnalysisProgress) -> None:
+        with suppress(Exception):
+            progress_queue.put(update)  # type: ignore[attr-defined]
+
+    return _build_analysis_result(run_dir, branch_options, _forward)
+
+
+def _build_analysis_result_in_process(
+    run_dir: Path,
+    branch_options: UtilizationBranchOptions,
+    progress_callback: ProgressCallback | None = None,
+) -> AnalysisBuildResult:
     context = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=1, mp_context=context) as executor:
-        return executor.submit(_build_analysis_result, run_dir, branch_options).result()
+    with context.Manager() as manager, ProcessPoolExecutor(max_workers=1, mp_context=context) as executor:
+        progress_queue = manager.Queue()
+        future = executor.submit(_build_analysis_result_with_queue, run_dir, branch_options, progress_queue)
+        while True:
+            update = _drain_one(progress_queue)
+            if update is not None and progress_callback is not None:
+                progress_callback(update)
+            if future.done():
+                if progress_callback is not None:
+                    while (update := _drain_one(progress_queue, block=False)) is not None:
+                        progress_callback(update)
+                break
+        return future.result()
+
+
+def _drain_one(progress_queue: object, *, block: bool = True) -> AnalysisProgress | None:
+    try:
+        if block:
+            return progress_queue.get(timeout=0.15)  # type: ignore[attr-defined]
+        return progress_queue.get_nowait()  # type: ignore[attr-defined]
+    except (Empty, EOFError, OSError):
+        return None
 
 
 class AnalysisWorker(QThread):
     finished_analysis = Signal(object)
     failed_analysis = Signal(str)
+    progress_analysis = Signal(object)
 
     def __init__(self, run_dir: Path, branch_options: UtilizationBranchOptions) -> None:
         super().__init__()
@@ -99,7 +142,10 @@ class AnalysisWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.finished_analysis.emit(_build_analysis_result_in_process(self.run_dir, self.branch_options))
+            result = _build_analysis_result_in_process(
+                self.run_dir, self.branch_options, self.progress_analysis.emit
+            )
+            self.finished_analysis.emit(result)
         except Exception:
             self.failed_analysis.emit(traceback.format_exc())
 
@@ -156,6 +202,14 @@ class AnalysisTab(QWidget):
         set_muted_label(self.status_label)
         layout.addWidget(self.status_label)
 
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("analysisProgress")
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setRange(0, 0)  # busy indicator until a phase reports a fraction
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setToolTip("Live progress of graph generation.")
+        layout.addWidget(self.progress_bar)
+
         if FigureCanvas and Figure and NavigationToolbar:
             self._build_chart_area(layout)
         else:
@@ -206,9 +260,11 @@ class AnalysisTab(QWidget):
             os.environ[CSV_FLAT_ALLOW_CPU_DASK_ENV] = "1"
         self.status_label.setText("Parsing GridPACK outputs and RAW metadata in the background...")
         self._set_analysis_controls_enabled(False)
+        self._begin_progress()
         self.analysis_worker = AnalysisWorker(run_dir, self._utilization_branch_options())
         self.analysis_worker.finished_analysis.connect(self._on_analysis_ready)
         self.analysis_worker.failed_analysis.connect(self._on_analysis_failed)
+        self.analysis_worker.progress_analysis.connect(self._on_analysis_progress)
         self.analysis_worker.finished.connect(self._on_analysis_worker_finished)
         self.analysis_worker.start()
 
@@ -236,15 +292,34 @@ class AnalysisTab(QWidget):
         self._update_generated_status()
 
     def _on_analysis_failed(self, error_text: str) -> None:
+        self._end_progress()
         QMessageBox.critical(self, "Analysis failed", error_text)
         self.status_label.setText("Analysis failed.")
+
+    def _on_analysis_progress(self, update: AnalysisProgress) -> None:
+        if update.detail:
+            self.status_label.setText(update.detail)
+        if update.fraction is None:
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, 1000)
+            self.progress_bar.setValue(int(max(0.0, min(1.0, update.fraction)) * 1000))
 
     def _on_analysis_worker_finished(self) -> None:
         worker = self.analysis_worker
         self.analysis_worker = None
         self._set_analysis_controls_enabled(True)
+        self._end_progress()
         if worker:
             worker.deleteLater()
+
+    def _begin_progress(self) -> None:
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+
+    def _end_progress(self) -> None:
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setRange(0, 0)
 
     def _set_analysis_controls_enabled(self, enabled: bool) -> None:
         self.run_combo.setEnabled(enabled)

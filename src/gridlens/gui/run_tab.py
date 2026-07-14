@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QTextEdit,
@@ -39,10 +40,12 @@ from gridlens.runner.gridpack_runner import (
     run_gridpack_case,
     terminate_gridpack_run,
 )
+from gridlens.runner.run_progress import GridpackProgressParser
 
 
 class RunWorker(QThread):
     log_line = Signal(str)
+    progress = Signal(object)
     finished_run = Signal(object)
     failed_run = Signal(str)
 
@@ -51,8 +54,16 @@ class RunWorker(QThread):
         self.request = request
 
     def run(self) -> None:
+        parser = GridpackProgressParser()
+
+        def on_line(line: str) -> None:
+            self.log_line.emit(line)
+            update = parser.feed(line)
+            if update is not None:
+                self.progress.emit(update)
+
         try:
-            result = run_gridpack_case(self.request, log_callback=self.log_line.emit)
+            result = run_gridpack_case(self.request, log_callback=on_line)
             self.finished_run.emit(result)
         except Exception:
             self.failed_run.emit(traceback.format_exc())
@@ -164,6 +175,22 @@ class RunTab(QWidget):
 
         self.project_label = QLabel("No project loaded.")
         set_context_label(self.project_label)
+
+        self.progress_group = QGroupBox("Run Progress")
+        progress_layout = QVBoxLayout(self.progress_group)
+        progress_layout.setContentsMargins(12, 10, 12, 12)
+        progress_layout.setSpacing(6)
+        self.progress_label = QLabel("Waiting to start...")
+        self.progress_label.setObjectName("progressStatus")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("runProgress")
+        self.progress_bar.setRange(0, 0)  # busy until GridPACK reports a total
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        progress_layout.addWidget(self.progress_label)
+        progress_layout.addWidget(self.progress_bar)
+        self.progress_group.setVisible(False)
+
         self.log = QTextEdit()
         self.log.setObjectName("logPane")
         self.log.setReadOnly(True)
@@ -172,6 +199,7 @@ class RunTab(QWidget):
         layout.addWidget(self.project_label)
         layout.addWidget(config_box)
         layout.addLayout(action_row)
+        layout.addWidget(self.progress_group)
         log_label = QLabel("Run log")
         log_label.setObjectName("sectionTitle")
         layout.addWidget(log_label)
@@ -232,15 +260,45 @@ class RunTab(QWidget):
         self.open_run_button.setEnabled(False)
         self.active_request = request
         self.termination_requested = False
+        self._begin_progress()
 
         self.worker = RunWorker(request)
         self.worker.log_line.connect(self.append_log)
+        self.worker.progress.connect(self.on_progress)
         self.worker.finished_run.connect(self.on_finished)
         self.worker.failed_run.connect(self.on_failed)
         self.worker.start()
 
     def append_log(self, text: str) -> None:
         self.log.append(text.rstrip())
+
+    def _begin_progress(self) -> None:
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Starting Docker run...")
+        self.progress_group.setVisible(True)
+
+    def on_progress(self, update: object) -> None:
+        from gridlens.runner.run_progress import RunProgress
+
+        if not isinstance(update, RunProgress):
+            return
+        self.progress_label.setText(update.message)
+        if update.total:
+            self.progress_bar.setRange(0, update.total)
+            self.progress_bar.setValue(min(update.completed, update.total))
+        else:
+            # Total not yet known: keep the indeterminate busy animation.
+            self.progress_bar.setRange(0, 0)
+
+    def _finalize_progress(self, message: str, *, complete: bool) -> None:
+        self.progress_label.setText(message)
+        if complete:
+            total = self.progress_bar.maximum()
+            if total <= 0:
+                self.progress_bar.setRange(0, 1)
+                total = 1
+            self.progress_bar.setValue(total)
 
     def terminate_run(self) -> None:
         if not self.active_request:
@@ -287,12 +345,15 @@ class RunTab(QWidget):
         self.last_run_dir = result.run_dir
         self.open_run_button.setEnabled(True)
         if self.termination_requested:
+            self._finalize_progress("Run terminated.", complete=False)
             self.append_log(f"Run terminated with return code {result.return_code}.")
             QMessageBox.information(self, "Run terminated", "The GridPACK Docker run was terminated.")
         elif result.return_code == 0:
+            self._finalize_progress("Run completed successfully.", complete=True)
             self.append_log("Run completed successfully.")
             QMessageBox.information(self, "Run completed", "GridPACK completed successfully.")
         else:
+            self._finalize_progress(f"Run failed with return code {result.return_code}.", complete=False)
             self.append_log(f"Run failed with return code {result.return_code}.")
             QMessageBox.warning(self, "Run failed", f"GridPACK exited with return code {result.return_code}.")
         self.active_request = None
@@ -304,6 +365,7 @@ class RunTab(QWidget):
         self.terminate_button.setEnabled(False)
         self.active_request = None
         self.termination_requested = False
+        self._finalize_progress("Run error.", complete=False)
         self.append_log(error_text)
         QMessageBox.critical(self, "Run error", error_text)
 

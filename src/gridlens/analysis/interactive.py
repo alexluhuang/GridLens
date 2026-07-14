@@ -10,6 +10,14 @@ from gridlens.analysis.csv_flat import CSV_FLAT_RESULTS_TABLE
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.dataset import RunAnalysisDataset, build_run_analysis
 from gridlens.analysis.parser_models import PARSER_VERSION, ParsedTable
+from gridlens.analysis.progress import (
+    PHASE_CACHE,
+    PHASE_CHARTS,
+    PHASE_DONE,
+    PHASE_PARSE,
+    ProgressCallback,
+    report,
+)
 from gridlens.analysis.table_helpers import cell_value
 from gridlens.analysis.utilization import UtilizationBranchOptions
 from gridlens.gui.analysis_view_models import (
@@ -38,8 +46,10 @@ class AnalysisBuildResult:
 def build_interactive_analysis_result(
     run_dir: Path,
     branch_options: UtilizationBranchOptions,
+    progress: ProgressCallback | None = None,
 ) -> AnalysisBuildResult:
     run_path = Path(run_dir).expanduser().resolve()
+    report(progress, PHASE_PARSE, "Loading analysis data...")
     dataset = _load_cached_interactive_dataset(run_path)
     if dataset is None:
         dataset = build_run_analysis(
@@ -47,13 +57,17 @@ def build_interactive_analysis_result(
             convert_csv_flat_parquet=False,
             write_artifacts=False,
             compute_metric_summary=False,
+            progress=progress,
         )
+        report(progress, PHASE_CACHE, "Caching parsed results for next time...")
         with suppress(Exception):
             _write_cached_interactive_dataset(dataset)
+    report(progress, PHASE_CHARTS, "Computing utilization charts...")
     max_line_rows = max_line_utilization_rows(dataset.tables, branch_options)
     group_branch_rows = list(max_line_rows)
     control_area_rows = summarize_control_area_utilization(group_branch_rows)
     voltage_group_rows = summarize_voltage_group_utilization(group_branch_rows)
+    report(progress, PHASE_DONE, "Rendering charts...")
     return AnalysisBuildResult(
         dataset=dataset,
         max_line_rows=max_line_rows,

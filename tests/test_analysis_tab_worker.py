@@ -72,6 +72,7 @@ def test_build_analysis_result_uses_interactive_dataset_flags(tmp_path, monkeypa
         convert_csv_flat_parquet: bool = True,
         write_artifacts: bool = True,
         compute_metric_summary: bool = True,
+        progress=None,
     ):
         calls.append((run_dir, convert_csv_flat_parquet, write_artifacts, compute_metric_summary))
         return fake_dataset
@@ -233,8 +234,10 @@ def test_analysis_worker_builds_result_in_process(tmp_path, monkeypatch) -> None
     calls: list[tuple[object, UtilizationBranchOptions]] = []
     fake_dataset = SimpleNamespace(tables={"pflow_mm": object()})
 
-    def fake_build_analysis_result_in_process(run_dir, branch_options):
+    def fake_build_analysis_result_in_process(run_dir, branch_options, progress_callback=None):
         calls.append((run_dir, branch_options))
+        if progress_callback is not None:
+            progress_callback(analysis_tab.AnalysisProgress(phase="parse", detail="Parsing..."))
         row = {
             "control_areas": ["North"],
             "utilization_pct": 42.0,
@@ -253,10 +256,12 @@ def test_analysis_worker_builds_result_in_process(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(analysis_tab, "_build_analysis_result_in_process", fake_build_analysis_result_in_process)
     results = []
     failures = []
+    updates = []
     options = UtilizationBranchOptions()
     worker = analysis_tab.AnalysisWorker(tmp_path, options)
     worker.finished_analysis.connect(results.append)
     worker.failed_analysis.connect(failures.append)
+    worker.progress_analysis.connect(updates.append)
 
     worker.run()
 
@@ -265,6 +270,7 @@ def test_analysis_worker_builds_result_in_process(tmp_path, monkeypatch) -> None
     assert len(results) == 1
     assert results[0].dataset is fake_dataset
     assert results[0].line_rows[0]["max_utilization_pct"] == 42.0
+    assert [update.detail for update in updates] == ["Parsing..."]
 
 
 def _interactive_dataset(run_dir) -> RunAnalysisDataset:
