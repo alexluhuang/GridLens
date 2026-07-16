@@ -53,6 +53,48 @@ def test_parser_counts_by_occurrence_not_index_order() -> None:
     assert update.total == 100
 
 
+def test_parser_counts_controller_iteration_marker() -> None:
+    # ca-scalability builds print no contingency index; each contingency's
+    # Q-limit controller loop starts with "Controller iteration = 1".
+    parser = GridpackProgressParser()
+    parser.feed("Total contingencies to analyze: 8891")
+    first = parser.feed(" Controller iteration = 1 ")
+    second = parser.feed(" Controller iteration = 1 ")
+    assert first.phase == PHASE_SOLVING
+    assert first.completed == 1
+    assert first.latest_index is None
+    assert second.completed == 2
+    assert "8,891" in second.message
+    # Later controller iterations of the same contingency are NOT counted.
+    assert parser.feed(" Controller iteration = 2 ") is None
+
+
+def test_parser_locks_first_marker_family_and_avoids_double_counting() -> None:
+    # Once "controller" locks, power-flow-converged lines must not also count.
+    parser = GridpackProgressParser()
+    parser.feed(" Controller iteration = 1 ")
+    assert parser.completed == 1
+    assert parser.feed("Power flow converged in 4 iterations") is None
+    parser.feed(" Controller iteration = 1 ")
+    assert parser.completed == 2
+
+
+def test_parser_falls_back_to_power_flow_solves() -> None:
+    parser = GridpackProgressParser()
+    first = parser.feed("Power flow converged in 5 iterations")
+    second = parser.feed("Power flow did NOT converge after 50 iterations")
+    assert first.completed == 1
+    assert second.completed == 2
+
+
+def test_parser_ignores_contingency_generation_lines() -> None:
+    # Setup lines mention "contingencies" (plural) and must not start counting.
+    parser = GridpackProgressParser()
+    assert parser.feed("Auto-generated 8160 N-1 branch contingencies") is None
+    assert parser.feed("Auto-generated 731 N-1 generator contingencies") is None
+    assert parser.completed == 0
+
+
 def test_parser_detects_postprocessing_phase() -> None:
     parser = GridpackProgressParser()
     parser.feed("contingency: 1 success: true")
