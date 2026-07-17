@@ -13,6 +13,7 @@ from gridlens.analysis.csv_flat import (
     parse_csv_flat_success,
 )
 from gridlens.analysis.parser_models import OutputFile, PARSER_VERSION, ParsedTable, SuccessSummary
+from gridlens.analysis.progress import ProgressCallback
 from gridlens.analysis.raw_parsers import (
     parse_raw_area_metadata,
     parse_raw_branch_metadata,
@@ -270,7 +271,7 @@ def _looks_like_gridpack_input_xml(path: Path) -> bool:
     return bool(_xml_first_text(root, [".//networkConfiguration_v33", ".//networkConfiguration_v34", ".//networkConfiguration"], ""))
 
 
-def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
+def parse_all_output_tables(run_dir: str | Path, progress: ProgressCallback | None = None) -> dict[str, ParsedTable]:
     success_file = find_success_file(run_dir)
     tables = {
         "success": parse_success_file(run_dir) if success_file else _empty_success_table()
@@ -278,7 +279,7 @@ def parse_all_output_tables(run_dir: str | Path) -> dict[str, ParsedTable]:
     for table_name in TABLE_SCHEMAS:
         tables[table_name] = parse_gridpack_table(run_dir, table_name)
 
-    csv_flat_tables = parse_csv_flat_outputs(run_dir)
+    csv_flat_tables = parse_csv_flat_outputs(run_dir, progress=progress)
     for table_name, table in csv_flat_tables.items():
         if table_name == "success" and tables["success"].rows:
             continue

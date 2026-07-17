@@ -87,7 +87,7 @@ def build_run_analysis(
         table_dir.mkdir(parents=True, exist_ok=True)
 
     report(progress, PHASE_PARSE, "Parsing GridPACK contingency outputs...")
-    tables = parse_all_output_tables(run_path)
+    tables = parse_all_output_tables(run_path, progress=progress)
     report(progress, PHASE_ENRICH, "Enriching branches with RAW bus metadata...")
     enrich_with_bus_metadata(tables)
     if compute_metric_summary:

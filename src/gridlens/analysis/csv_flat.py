@@ -7,9 +7,12 @@ import math
 import os
 from pathlib import Path
 import re
-from typing import Iterable
+import threading
+import time
+from typing import Callable, Iterable
 
 from gridlens.analysis.parser_models import ParsedTable
+from gridlens.analysis.progress import PHASE_PARSE, ProgressCallback, report
 from gridlens.analysis.raw_parsers import AREA_METADATA_COLUMNS, BRANCH_METADATA_COLUMNS, BUS_METADATA_COLUMNS
 from gridlens.analysis.utilization import NONTRANSFORMER_BRANCH
 
@@ -208,7 +211,7 @@ class _BranchAggregate:
         return self.sum_loading / self.count
 
 
-def parse_csv_flat_outputs(run_dir: str | Path) -> dict[str, ParsedTable]:
+def parse_csv_flat_outputs(run_dir: str | Path, progress: ProgressCallback | None = None) -> dict[str, ParsedTable]:
     """Parse GridPACK ca-scalability-v2 csv_flat outputs into GridLens logical tables."""
 
     work_dir = Path(run_dir) / "work"
@@ -226,7 +229,7 @@ def parse_csv_flat_outputs(run_dir: str | Path) -> dict[str, ParsedTable]:
 
     tables: dict[str, ParsedTable] = {}
     if flat_path:
-        tables.update(_parse_flat_results(flat_path, backend_decision_path))
+        tables.update(_parse_flat_results(flat_path, backend_decision_path, progress=progress))
     if convergence_path:
         convergence, success = _parse_convergence(convergence_path)
         tables[CSV_FLAT_CONVERGENCE_TABLE] = convergence
@@ -373,25 +376,47 @@ def convert_csv_to_parquet(csv_path: str | Path, output_dir: str | Path, blocksi
     return ConversionResult(destination, backend=backend.name)
 
 
-def _parse_flat_results(path: Path, backend_decision_path: Path | None = None) -> dict[str, ParsedTable]:
+def _parse_flat_results(
+    path: Path,
+    backend_decision_path: Path | None = None,
+    progress: ProgressCallback | None = None,
+) -> dict[str, ParsedTable]:
     lookup = _column_lookup(_header(path))
-    accelerated, fallback_note = _parse_flat_results_accelerated(path, lookup, backend_decision_path or path)
+    total_estimate = _estimate_total_rows(path) if progress is not None else None
+    accelerated, fallback_note = _parse_flat_results_accelerated(
+        path, lookup, backend_decision_path or path, progress=progress, total_estimate=total_estimate
+    )
     if accelerated:
         return accelerated
 
-    return _parse_flat_results_streaming(path, lookup, fallback_note)
+    return _parse_flat_results_streaming(
+        path, lookup, fallback_note, progress=progress, total_estimate=total_estimate
+    )
 
 
 def _parse_flat_results_streaming(
     path: Path,
     lookup: dict[str, str],
     fallback_note: str = "",
+    progress: ProgressCallback | None = None,
+    total_estimate: int | None = None,
 ) -> dict[str, ParsedTable]:
     aggregates: dict[tuple[object, object, str, str], _BranchAggregate] = {}
     preview_rows: list[dict[str, object]] = []
     rejected = 0
 
+    total_text = _format_rows(total_estimate)
+    seen = 0
     for raw_row in _dict_rows(path):
+        seen += 1
+        if progress is not None and seen % _PROGRESS_ROW_INTERVAL == 0:
+            fraction = min(0.99, seen / total_estimate) if total_estimate else None
+            report(
+                progress,
+                PHASE_PARSE,
+                f"Parsing GridPACK contingency outputs - row {seen:,} of ~{total_text} rows...",
+                fraction,
+            )
         row = _normalize_flat_result_row(raw_row, lookup)
         if row is None:
             rejected += 1
@@ -436,6 +461,8 @@ def _parse_flat_results_accelerated(
     path: Path,
     lookup: dict[str, str],
     backend_decision_path: Path,
+    progress: ProgressCallback | None = None,
+    total_estimate: int | None = None,
 ) -> tuple[dict[str, ParsedTable] | None, str]:
     try:
         backend = _lazy_backend(backend_decision_path)
@@ -444,18 +471,27 @@ def _parse_flat_results_accelerated(
             raise RuntimeError(f"GPU csv_flat aggregation was required but {_requested_backend()} could not be used: {exc}") from exc
         return None, f"Accelerated csv_flat aggregation was skipped: {exc}"
 
+    total_text = _format_rows(total_estimate)
+
+    def _heartbeat_message(elapsed: float) -> str:
+        return (
+            f"Aggregating ~{total_text} contingency rows on the {_backend_label(backend.name)}... "
+            f"(elapsed {_format_elapsed(elapsed)})"
+        )
+
     try:
         if backend.name == "cudf":
-            data = _normalized_eager_flat_frame(path, lookup, backend)
-            preview_rows = _preview_rows(path, lookup)
-            keys = ["from_bus", "to_bus", "line_id", "section"]
-            grouped = _flat_grouped_frame(data, keys)
-            label_frame = _lazy_extreme_label_frame(data, keys)
-            labels = _extreme_labels_from_frame(label_frame)
-            aggregates = _aggregates_from_frame(grouped, labels)
+            with _progress_heartbeat(progress, _heartbeat_message):
+                data = _normalized_eager_flat_frame(path, lookup, backend)
+                preview_rows = _preview_rows(path, lookup)
+                keys = ["from_bus", "to_bus", "line_id", "section"]
+                grouped = _flat_grouped_frame(data, keys)
+                label_frame = _lazy_extreme_label_frame(data, keys)
+                labels = _extreme_labels_from_frame(label_frame)
+                aggregates = _aggregates_from_frame(grouped, labels)
             runtime_note = ""
         else:
-            with _dask_runtime(backend) as runtime:
+            with _dask_runtime(backend) as runtime, _progress_heartbeat(progress, _heartbeat_message):
                 data = _normalized_lazy_flat_frame(path, lookup, backend, backend_decision_path)
                 preview_rows = _preview_rows(path, lookup)
                 keys = ["from_bus", "to_bus", "line_id", "section"]
@@ -1328,6 +1364,109 @@ def _dict_rows(path: Path):
         reader = csv.DictReader(handle)
         for row in reader:
             yield row
+
+
+# --- Progress reporting for the (often very large) csv_flat aggregation --------
+#
+# The flat results file can be many gigabytes / tens of millions of rows, so the
+# "Parsing GridPACK contingency outputs" phase is the longest single step of
+# analysis. We report fine-grained progress two ways, depending on which backend
+# runs:
+#   * Python streaming path (a loop we own): real "row n of ~N" updates.
+#   * Accelerated GPU/Dask path (one opaque bulk compute): a heartbeat with the
+#     data scale and elapsed time, since a distributed groupby does not expose a
+#     row cursor. The progress bar animates in busy mode meanwhile.
+
+_PROGRESS_ROW_INTERVAL = 250_000
+_HEARTBEAT_SECONDS = 1.0
+
+
+def _estimate_total_rows(path: Path, sample_bytes: int = 2_000_000) -> int | None:
+    """Estimate the data-row count of a CSV cheaply, without a full read.
+
+    Reads a small head sample, derives the average bytes-per-line, and scales by
+    the file size. Returns ``None`` if it cannot be estimated. The result is an
+    estimate (hence the "~" the UI shows), not an exact count -- an exact count
+    would require a second full pass over a multi-gigabyte file.
+    """
+    try:
+        file_size = path.stat().st_size
+        with path.open("rb") as handle:
+            sample = handle.read(sample_bytes)
+    except OSError:
+        return None
+    if not sample:
+        return None
+    newlines = sample.count(b"\n")
+    if newlines <= 1:
+        return None
+    # Bytes consumed up to the last complete line in the sample.
+    consumed = sample.rfind(b"\n") + 1
+    if consumed <= 0:
+        return None
+    avg_line_bytes = consumed / newlines
+    if avg_line_bytes <= 0:
+        return None
+    estimated_lines = file_size / avg_line_bytes
+    # Subtract the header row; never report a negative or absurdly small value.
+    return max(int(estimated_lines) - 1, 0) or None
+
+
+def _format_rows(count: int | None) -> str:
+    if not count:
+        return "many"
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M"
+    if count >= 1_000:
+        return f"{count / 1_000:.0f}K"
+    return f"{count:,}"
+
+
+@contextmanager
+def _progress_heartbeat(progress: ProgressCallback | None, message_factory: Callable[[float], str]):
+    """Emit a periodic progress update while a blocking step runs.
+
+    ``message_factory`` receives elapsed seconds and returns the status text.
+    Used for the accelerated aggregation, whose single ``dask.compute`` call
+    would otherwise leave the status frozen for minutes.
+    """
+    if progress is None:
+        yield
+        return
+
+    start = time.monotonic()
+    stop = threading.Event()
+
+    def _beat() -> None:
+        # Emit immediately, then every _HEARTBEAT_SECONDS until told to stop.
+        while True:
+            elapsed = time.monotonic() - start
+            with suppress(Exception):
+                report(progress, PHASE_PARSE, message_factory(elapsed), None)
+            if stop.wait(_HEARTBEAT_SECONDS):
+                return
+
+    thread = threading.Thread(target=_beat, name="csv-flat-progress", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=_HEARTBEAT_SECONDS)
+
+
+def _format_elapsed(seconds: float) -> str:
+    total = int(seconds)
+    minutes, secs = divmod(total, 60)
+    return f"{minutes}:{secs:02d}" if minutes else f"{secs}s"
+
+
+def _backend_label(backend_name: str) -> str:
+    return {
+        "cudf": "GPU (cuDF)",
+        "dask_cudf": "GPU (dask-cuDF)",
+        "dask": "CPU (Dask)",
+    }.get(backend_name, backend_name or "accelerated backend")
 
 
 def _header(path: Path) -> list[str]:
