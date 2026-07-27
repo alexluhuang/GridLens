@@ -29,6 +29,29 @@ For a quick local environment smoke check:
 python3 scripts/check_environment.py
 ```
 
+## Web API Mode
+
+GridLens now also includes a backend API layer for a browser-based frontend. Install the web dependencies and run:
+
+```bash
+python -m pip install -e ".[dev,web]"
+gridlens-api
+```
+
+The API defaults to `http://0.0.0.0:8000` and stores uploaded web projects under `~/GridLensWebProjects`.
+
+- `GET /health`
+- `GET /api/projects`
+- `POST /api/projects`
+- `GET /api/projects/{project_id}`
+- `POST /api/projects/{project_id}/runs`
+- `GET /api/projects/{project_id}/runs/{run_id}`
+- `GET /api/projects/{project_id}/runs/{run_id}/log`
+- `POST /api/projects/{project_id}/runs/{run_id}/analysis/interactive`
+
+Set `GRIDLENS_API_CORS_ORIGINS` to allow a local frontend such as Vite or Next.js to call an API hosted on AWS.
+The browser client scaffold lives in [webapp/README.md](webapp/README.md).
+
 ## Manual Docker Equivalent
 
 The GUI builds a Docker command equivalent to:
