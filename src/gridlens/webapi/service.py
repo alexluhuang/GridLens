@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any
+import logging
 
 from gridlens.analysis.interactive import AnalysisBuildResult
 from gridlens.analysis.utilization import UtilizationBranchOptions
@@ -12,6 +13,7 @@ from gridlens.runner.gridpack_runner import GridpackRunRequest
 
 
 DEFAULT_WEB_PROJECTS_ROOT = Path("~/GridLensWebProjects").expanduser()
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -37,7 +39,11 @@ def list_projects(projects_root: str | Path) -> list[dict[str, Any]]:
     root = ensure_projects_root(projects_root)
     projects: list[dict[str, Any]] = []
     for project_file in sorted(root.glob(f"*/{PROJECT_FILE_NAME}")):
-        project, project_data = open_project(project_file)
+        try:
+            project, project_data = open_project(project_file)
+        except Exception as exc:
+            LOGGER.warning("Skipping unreadable GridLens project file %s: %s", project_file, exc)
+            continue
         projects.append(project_summary(project, project_data))
     projects.sort(key=lambda item: str(item["updated_at"]), reverse=True)
     return projects
@@ -188,4 +194,3 @@ def interactive_analysis_payload(
         "report_dir": str(analysis.dataset.report_dir),
         "manifest_path": str(analysis.dataset.manifest_path),
     }
-
