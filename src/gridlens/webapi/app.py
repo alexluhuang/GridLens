@@ -126,7 +126,7 @@ def create_app() -> FastAPI:
         image: str = Form("pnnl/gridpack:latest"),
         executable: str = Form("ca.x"),
         xml_file_name: str = Form(""),
-        mpi_processes: int = Form(4),
+        mpi_processes: int = Form(2),
         network_mode: str = Form("none"),
         pull_policy: str = Form("never"),
         use_host_user: bool = Form(True),
@@ -225,4 +225,3 @@ def _cleanup_finished_job(job_store: dict[str, Future[Any]], lock: Lock, job_key
         future = job_store.get(job_key)
         if future is not None and future.done():
             job_store.pop(job_key, None)
-

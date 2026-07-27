@@ -24,7 +24,7 @@ const defaultRunForm = {
   image: "pnnl/gridpack:latest",
   executable: "ca.x",
   xmlFileName: "",
-  mpiProcesses: 4,
+  mpiProcesses: 2,
   notes: "",
 };
 
