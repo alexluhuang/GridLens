@@ -32,9 +32,12 @@ export type BranchOptions = {
   include_transformer_equivalents: boolean;
 };
 
+export type ThemeMode = "light" | "dark";
+
 export type UtilizationRow = {
   line_label: string;
   control_area?: string;
+  control_areas?: string[];
   voltage_group?: string;
   max_contingency?: string;
   max_utilization_pct: number;
@@ -65,3 +68,8 @@ export type InteractiveAnalysis = {
   manifest_path: string;
 };
 
+export type VoltageGroupSummary = {
+  voltage_group: string;
+  average_utilization_pct: number;
+  line_count: number;
+};
