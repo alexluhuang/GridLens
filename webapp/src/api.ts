@@ -14,6 +14,19 @@ function apiUrl(path: string): string {
   return configuredBaseUrl ? `${configuredBaseUrl}${path}` : path;
 }
 
+function healthUrl(): string {
+  if (!configuredBaseUrl) {
+    return "/health";
+  }
+  if (configuredBaseUrl === "/api") {
+    return "/health";
+  }
+  if (configuredBaseUrl.endsWith("/api")) {
+    return `${configuredBaseUrl.slice(0, -4)}/health`;
+  }
+  return `${configuredBaseUrl}/health`;
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
@@ -23,7 +36,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 export async function fetchHealth(): Promise<{ status: string }> {
-  return parseResponse(await fetch(apiUrl("/health")));
+  return parseResponse(await fetch(healthUrl()));
 }
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {
