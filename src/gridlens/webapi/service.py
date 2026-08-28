@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 from typing import Any
 import logging
 
 from gridlens.analysis.interactive import AnalysisBuildResult
+from gridlens.analysis.parser_models import OutputFile
+from gridlens.analysis.parsers import list_output_files
 from gridlens.analysis.utilization import UtilizationBranchOptions
 from gridlens.core.project import PROJECT_FILE_NAME, Project, ProjectData, open_project, safe_folder_name
+from gridlens.gui.configuration_view_models import (
+    InputConfigurationValues,
+    default_input_configuration_values,
+    load_input_configuration_values,
+    project_network_file_names,
+)
 from gridlens.runner.gridpack_runner import GridpackRunRequest
 
 
@@ -130,6 +138,58 @@ def run_summary(project: Project, project_data: ProjectData, run_dir: str | Path
         "work_dir": str(path / "work"),
         "report_dir": str(path / "reports"),
     }
+
+
+def load_project_configuration(project: Project, project_data: ProjectData) -> tuple[InputConfigurationValues, list[str], list[str], str]:
+    network_names = project_network_file_names(project_data)
+    selected_network = network_names[0] if network_names else ""
+    xml_file_name = project_data.xml_file_name or ""
+    values = default_input_configuration_values(selected_network, xml_file_name, project_data.name)
+    warning = ""
+
+    if project_data.xml_file_name:
+        xml_path = project.original_inputs_dir / project_data.xml_file_name
+        if xml_path.exists():
+            try:
+                values = load_input_configuration_values(
+                    xml_path,
+                    selected_network,
+                    project_data.xml_file_name,
+                    project_data.name,
+                )
+            except Exception as exc:
+                warning = f"Existing XML could not be parsed: {exc}"
+
+    if values.network_file_name and values.network_file_name not in network_names:
+        network_names = [values.network_file_name, *network_names]
+
+    monitor_branches = [record.file_name for record in project_data.input_files if Path(record.file_name).suffix.lower() == ".csv"]
+    return values, network_names, monitor_branches, warning
+
+
+def input_configuration_payload(values: InputConfigurationValues) -> dict[str, Any]:
+    return asdict(values)
+
+
+def list_run_outputs(run_dir: str | Path) -> list[dict[str, Any]]:
+    return [output_file_payload(item) for item in list_output_files(run_dir)]
+
+
+def output_file_payload(output_file: OutputFile) -> dict[str, Any]:
+    return {
+        "file_name": output_file.file_name,
+        "relative_path": output_file.relative_path,
+        "size_bytes": output_file.size_bytes,
+        "suffix": output_file.suffix,
+    }
+
+
+def resolve_run_file(run_dir: str | Path, relative_path: str) -> Path:
+    base = Path(run_dir).expanduser().resolve()
+    candidate = (base / relative_path).resolve()
+    if not candidate.is_file() or base not in candidate.parents:
+        raise FileNotFoundError(f"Run file not found: {relative_path}")
+    return candidate
 
 
 def build_run_request(

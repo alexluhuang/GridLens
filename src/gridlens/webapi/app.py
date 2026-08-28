@@ -9,9 +9,11 @@ from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
+from pydantic import BaseModel
 
 from gridlens.analysis.interactive import build_interactive_analysis_result
+from gridlens.analysis.summary import export_run_zip
 from gridlens.analysis.utilization import UtilizationBranchOptions
 from gridlens.core.project import Project
 from gridlens.core.validation import (
@@ -20,18 +22,23 @@ from gridlens.core.validation import (
     validate_executable,
     validate_mpi_processes,
 )
+from gridlens.gui.configuration_view_models import InputConfigurationValues, render_input_configuration_xml, save_input_configuration
 from gridlens.runner.gridpack_runner import run_gridpack_case
 from gridlens.webapi.service import (
     build_run_request,
     ensure_projects_root,
+    input_configuration_payload,
     interactive_analysis_payload,
     list_projects,
+    list_run_outputs,
     list_runs,
+    load_project_configuration,
     load_project,
     load_run,
     project_root_for_name,
     project_summary,
     read_text_file,
+    resolve_run_file,
     run_summary,
 )
 
@@ -54,6 +61,46 @@ class ApiRuntimeState:
     lock: Lock = field(default_factory=Lock)
     run_jobs: dict[str, Future[Any]] = field(default_factory=dict)
     analysis_jobs: dict[str, Future[Any]] = field(default_factory=dict)
+
+
+class ConfigurationPayload(BaseModel):
+    xml_file_name: str = "input.xml"
+    network_file_name: str = ""
+    network_configuration_tag: str = "networkConfiguration"
+    full_branch_n1: bool = True
+    full_generator_n1: bool = False
+    contingency_rating: str = "C"
+    enforce_reactive_power_limit: bool = True
+    print_calc_files: bool = False
+    group_size: str = "1"
+    max_voltage: str = "1.1"
+    min_voltage: str = "0.9"
+    contingency_qlim_deadband: str = "0.1"
+    contingency_ltc: bool = False
+    write_stats: bool = False
+    contingency_output_format: str = "csv_flat"
+    contingency_output_file: str = "ca_results"
+    contingency_list: str = ""
+    monitor_branches_file: str = ""
+    monitor_areas: str = ""
+    monitor_kv_min: str = "0"
+    monitor_kv_max: str = "0"
+    init_start: str = "warm"
+    switched_shunt: bool = False
+    powerflow_qlim_deadband: str = "0.1"
+    powerflow_ltc: bool = False
+    area_interchange: bool = False
+    max_controller_iterations: str = "10"
+    max_iteration: str = "50"
+    tolerance: str = "1.0e-4"
+    max_qlim_iterations: str = "3"
+    damping_factor: str = "1.0"
+    phase_shift_sign: str = "1.0"
+    petsc_prefix: str = ""
+    petsc_options: str = ""
+
+    def to_values(self) -> InputConfigurationValues:
+        return InputConfigurationValues(**self.model_dump())
 
 
 def create_app() -> FastAPI:
@@ -79,7 +126,7 @@ def create_app() -> FastAPI:
     @app.post("/api/projects")
     async def create_project(
         name: str = Form(...),
-        xml_file_name: str = Form(...),
+        xml_file_name: str = Form(""),
         input_files: list[UploadFile] = File(...),
     ) -> dict[str, Any]:
         try:
@@ -109,6 +156,40 @@ def create_app() -> FastAPI:
         return {
             "project": project_summary(project, project_data),
             "runs": list_runs(project, project_data),
+        }
+
+    @app.get("/api/projects/{project_id}/configuration")
+    def get_project_configuration(project_id: str) -> dict[str, Any]:
+        try:
+            project, project_data = load_project(app.state.projects_root, project_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        values, network_names, monitor_branches, warning = load_project_configuration(project, project_data)
+        return {
+            "configuration": input_configuration_payload(values),
+            "network_file_options": network_names,
+            "monitor_branches_file_options": monitor_branches,
+            "xml_preview": render_input_configuration_xml(values) if values.network_file_name else "",
+            "warning": warning,
+        }
+
+    @app.post("/api/projects/{project_id}/configuration")
+    def save_project_configuration(project_id: str, payload: ConfigurationPayload) -> dict[str, Any]:
+        try:
+            project, project_data = load_project(app.state.projects_root, project_id)
+            updated = save_input_configuration(project, project_data, payload.to_values())
+            values, network_names, monitor_branches, warning = load_project_configuration(project, updated)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "project": project_summary(project, updated),
+            "configuration": input_configuration_payload(values),
+            "network_file_options": network_names,
+            "monitor_branches_file_options": monitor_branches,
+            "xml_preview": render_input_configuration_xml(values),
+            "warning": warning,
         }
 
     @app.get("/api/projects/{project_id}/runs")
@@ -182,6 +263,32 @@ def create_app() -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return read_text_file(reference.run_dir / "logs" / "run.log")
+
+    @app.get("/api/projects/{project_id}/runs/{run_id}/outputs")
+    def get_run_outputs(project_id: str, run_id: str) -> dict[str, Any]:
+        try:
+            reference = load_run(app.state.projects_root, project_id, run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"files": list_run_outputs(reference.run_dir)}
+
+    @app.get("/api/projects/{project_id}/runs/{run_id}/outputs/download/{relative_path:path}")
+    def download_run_output(project_id: str, run_id: str, relative_path: str) -> FileResponse:
+        try:
+            reference = load_run(app.state.projects_root, project_id, run_id)
+            target = resolve_run_file(reference.run_dir, relative_path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(target, filename=target.name)
+
+    @app.get("/api/projects/{project_id}/runs/{run_id}/export")
+    def download_run_export(project_id: str, run_id: str) -> FileResponse:
+        try:
+            reference = load_run(app.state.projects_root, project_id, run_id)
+            zip_path = export_run_zip(reference.run_dir)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(zip_path, filename=zip_path.name, media_type="application/zip")
 
     @app.post("/api/projects/{project_id}/runs/{run_id}/analysis/interactive")
     def create_interactive_analysis(

@@ -6,14 +6,21 @@ import {
   createInteractiveAnalysis,
   createProject,
   createRun,
+  fetchProjectConfiguration,
   fetchProject,
   fetchProjects,
   fetchRun,
   fetchRunLog,
+  fetchRunOutputs,
+  runExportDownloadUrl,
+  runOutputDownloadUrl,
+  saveProjectConfiguration,
 } from "./api";
 import type {
   BranchOptions,
+  InputConfigurationValues,
   InteractiveAnalysis,
+  OutputFileSummary,
   ProjectSummary,
   RunSummary,
   ThemeMode,
@@ -36,8 +43,52 @@ const defaultRunForm = {
   notes: "",
 };
 
+const defaultConfigurationForm: InputConfigurationValues = {
+  xml_file_name: "input.xml",
+  network_file_name: "",
+  network_configuration_tag: "networkConfiguration",
+  full_branch_n1: true,
+  full_generator_n1: false,
+  contingency_rating: "C",
+  enforce_reactive_power_limit: true,
+  print_calc_files: false,
+  group_size: "1",
+  max_voltage: "1.1",
+  min_voltage: "0.9",
+  contingency_qlim_deadband: "0.1",
+  contingency_ltc: false,
+  write_stats: false,
+  contingency_output_format: "csv_flat",
+  contingency_output_file: "ca_results",
+  contingency_list: "",
+  monitor_branches_file: "",
+  monitor_areas: "",
+  monitor_kv_min: "0",
+  monitor_kv_max: "0",
+  init_start: "warm",
+  switched_shunt: false,
+  powerflow_qlim_deadband: "0.1",
+  powerflow_ltc: false,
+  area_interchange: false,
+  max_controller_iterations: "10",
+  max_iteration: "50",
+  tolerance: "1.0e-4",
+  max_qlim_iterations: "3",
+  damping_factor: "1.0",
+  phase_shift_sign: "1.0",
+  petsc_prefix: "",
+  petsc_options: "-ksp_type preonly\n-pc_type lu\n-pc_factor_mat_solver_type klu",
+};
+
 const themeStorageKey = "gridlens-theme";
+const modeStorageKey = "gridlens-app-mode";
+const graphVisibilityStorageKey = "gridlens-visible-graphs";
 const voltageOrder = ["<50 kV", "50-99 kV", "100-229 kV", "230-344 kV", "345-499 kV", "500+ kV", "unknown"];
+const graphDefinitions = [
+  { key: "controlArea", label: "Control area averages" },
+  { key: "voltageGroup", label: "Voltage group averages" },
+  { key: "maxUtilization", label: "Maximum observed utilization" },
+] as const;
 const guideSections = [
   {
     title: "Project setup",
@@ -57,6 +108,16 @@ const guideSections = [
   },
 ];
 
+type AppMode = "developer" | "viewer";
+type GraphKey = (typeof graphDefinitions)[number]["key"];
+type GraphVisibility = Record<GraphKey, boolean>;
+
+const defaultGraphVisibility: GraphVisibility = {
+  controlArea: true,
+  voltageGroup: true,
+  maxUtilization: true,
+};
+
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -71,8 +132,16 @@ export default function App() {
   const [error, setError] = useState("");
   const [guideOpen, setGuideOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
+  const [appMode, setAppMode] = useState<AppMode>(readInitialMode);
   const [selectedControlAreas, setSelectedControlAreas] = useState<string[]>([]);
   const [selectedVoltageGroups, setSelectedVoltageGroups] = useState<string[]>([]);
+  const [graphVisibility, setGraphVisibility] = useState<GraphVisibility>(readInitialGraphVisibility);
+  const [configurationForm, setConfigurationForm] = useState<InputConfigurationValues>(defaultConfigurationForm);
+  const [networkFileOptions, setNetworkFileOptions] = useState<string[]>([]);
+  const [monitorBranchOptions, setMonitorBranchOptions] = useState<string[]>([]);
+  const [configurationWarning, setConfigurationWarning] = useState("");
+  const [xmlPreview, setXmlPreview] = useState("");
+  const [runOutputs, setRunOutputs] = useState<OutputFileSummary[]>([]);
 
   const [projectName, setProjectName] = useState("");
   const [projectXmlFileName, setProjectXmlFileName] = useState("");
@@ -83,6 +152,14 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(themeStorageKey, theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem(modeStorageKey, appMode);
+  }, [appMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(graphVisibilityStorageKey, JSON.stringify(graphVisibility));
+  }, [graphVisibility]);
 
   useEffect(() => {
     void refreshProjects();
@@ -124,6 +201,9 @@ export default function App() {
     ? `${selectedVoltageGroups.join(", ")} selected`
     : "Driven by the current control-area selection";
 
+  const visibleGraphCount = Object.values(graphVisibility).filter(Boolean).length;
+  const canStartRun = Boolean(selectedProject?.xml_file_name);
+
   async function refreshProjects() {
     setLoading(true);
     setError("");
@@ -151,7 +231,7 @@ export default function App() {
       setRuns(payload.runs);
       setRunForm((current) => ({
         ...current,
-        xmlFileName: current.xmlFileName || payload.project.xml_file_name,
+        xmlFileName: payload.project.xml_file_name,
       }));
       if (payload.runs[0]) {
         setSelectedRun((current) => (current?.run_id === payload.runs[0].run_id ? current : payload.runs[0]));
@@ -160,7 +240,9 @@ export default function App() {
         setSelectedRun(null);
         setRunLog("");
         setAnalysis(null);
+        setRunOutputs([]);
       }
+      await refreshProjectConfiguration(projectId);
       setMessage(`Loaded ${payload.project.name}.`);
     } catch (nextError) {
       setError(errorMessage(nextError));
@@ -184,7 +266,27 @@ export default function App() {
         setSelectedControlAreas([]);
         setSelectedVoltageGroups([]);
       }
+      const outputs = await fetchRunOutputs(projectId, runId);
+      setRunOutputs(outputs);
     } catch (nextError) {
+      setError(errorMessage(nextError));
+    }
+  }
+
+  async function refreshProjectConfiguration(projectId: string) {
+    try {
+      const payload = await fetchProjectConfiguration(projectId);
+      setConfigurationForm(payload.configuration);
+      setNetworkFileOptions(payload.network_file_options);
+      setMonitorBranchOptions(payload.monitor_branches_file_options);
+      setConfigurationWarning(payload.warning);
+      setXmlPreview(payload.xml_preview);
+      setRunForm((current) => ({ ...current, xmlFileName: payload.configuration.xml_file_name }));
+    } catch (nextError) {
+      setConfigurationWarning("");
+      setXmlPreview("");
+      setNetworkFileOptions([]);
+      setMonitorBranchOptions([]);
       setError(errorMessage(nextError));
     }
   }
@@ -192,7 +294,7 @@ export default function App() {
   async function handleCreateProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectInputFiles.length) {
-      setError("Choose at least the input.xml file and one network file.");
+      setError("Choose at least one project input file, such as a RAW network file.");
       return;
     }
     setLoading(true);
@@ -204,7 +306,7 @@ export default function App() {
         inputFiles: projectInputFiles,
       });
       setProjectName("");
-      setProjectXmlFileName(project.xml_file_name);
+      setProjectXmlFileName("");
       setProjectInputFiles([]);
       setSelectedProjectId(project.project_id);
       await refreshProjects();
@@ -272,6 +374,39 @@ export default function App() {
     }
   }
 
+  async function handleSaveConfiguration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProject) {
+      setError("Select a project before generating XML.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const payload = await saveProjectConfiguration({
+        projectId: selectedProject.project_id,
+        configuration: configurationForm,
+      });
+      setSelectedProject(payload.project);
+      setProjects((current) => current.map((item) => (item.project_id === payload.project.project_id ? payload.project : item)));
+      setConfigurationForm(payload.configuration);
+      setNetworkFileOptions(payload.network_file_options);
+      setMonitorBranchOptions(payload.monitor_branches_file_options);
+      setConfigurationWarning(payload.warning);
+      setXmlPreview(payload.xml_preview);
+      setRunForm((current) => ({ ...current, xmlFileName: payload.project.xml_file_name }));
+      setMessage(`Saved XML configuration ${payload.project.xml_file_name}.`);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateConfigurationField<K extends keyof InputConfigurationValues>(key: K, value: InputConfigurationValues[K]) {
+    setConfigurationForm((current) => ({ ...current, [key]: value }));
+  }
+
   function toggleControlArea(area: string) {
     setSelectedVoltageGroups([]);
     setSelectedControlAreas((current) => (current.includes(area) ? current.filter((item) => item !== area) : [...current, area]));
@@ -286,42 +421,50 @@ export default function App() {
       <header className="hero">
         <div className="hero-copy-block">
           <div className="hero-topline">
-            <p className="eyebrow">Operating Manual Style</p>
-            <button type="button" className="guide-button subtle-button" onClick={() => setGuideOpen(true)}>
-              Open User Guide
-            </button>
+            <p className="eyebrow"></p>
+            <div className="hero-actions">
+              <label className="mode-switch" aria-label="Developer mode toggle">
+                <span className="mode-switch-label">Developer Mode</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={appMode === "developer"}
+                  className={appMode === "developer" ? "mode-switch-track active" : "mode-switch-track"}
+                  onClick={() => setAppMode((current) => (current === "developer" ? "viewer" : "developer"))}
+                >
+                  <span className="mode-switch-state">{appMode === "developer" ? "On" : "Off"}</span>
+                  <span className="mode-switch-thumb" aria-hidden="true" />
+                </button>
+              </label>
+              <button type="button" className="guide-button subtle-button" onClick={() => setGuideOpen(true)}>
+                Open User Guide
+              </button>
+            </div>
           </div>
           <div className="brand-lockup">
             <img src="/gridlens.svg" alt="GridLens logo" className="brand-logo" />
             <div>
               <h1>GridLens</h1>
-              <p className="brand-subtitle">GridPACK execution, results review, and interactive analysis.</p>
+              <p className="brand-subtitle">High Performance Power Grid Simulation and Contingency Analysis.</p>
             </div>
           </div>
           <p className="hero-copy">
-            Upload project files, launch EC2-backed GridPACK runs, and review linked utilization charts in a restrained
-            black-and-white interface inspired by the NYCTA manual.
+            Build projects from uploaded RAW inputs, generate GridPACK XML in the browser, launch runs on the API host,
+            and download the outputs you need.
           </p>
-          <div className="theme-toggle" role="tablist" aria-label="Theme mode selector">
+          <label className="mode-switch theme-switch" aria-label="Theme mode toggle">
+            <span className="mode-switch-label">Dark Mode</span>
             <button
               type="button"
-              role="tab"
-              aria-selected={theme === "light"}
-              className={theme === "light" ? "theme-option active" : "theme-option"}
-              onClick={() => setTheme("light")}
+              role="switch"
+              aria-checked={theme === "dark"}
+              className={theme === "dark" ? "mode-switch-track active" : "mode-switch-track"}
+              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
             >
-              Light
+              <span className="mode-switch-state">{theme === "dark" ? "On" : "Off"}</span>
+              <span className="mode-switch-thumb" aria-hidden="true" />
             </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={theme === "dark"}
-              className={theme === "dark" ? "theme-option active" : "theme-option"}
-              onClick={() => setTheme("dark")}
-            >
-              Dark
-            </button>
-          </div>
+          </label>
         </div>
         <div className="hero-status">
           <span className={`status-pill ${loading ? "busy" : "ready"}`}>{loading ? "Working" : "Ready"}</span>
@@ -343,12 +486,11 @@ export default function App() {
               <input value={projectName} onChange={(event) => setProjectName(event.target.value)} required />
             </label>
             <label>
-              XML file name
+              Existing XML file name
               <input
                 value={projectXmlFileName}
                 onChange={(event) => setProjectXmlFileName(event.target.value)}
-                placeholder="input.xml"
-                required
+                placeholder="Optional if you plan to generate XML in the web app"
               />
             </label>
             <label>
@@ -381,6 +523,285 @@ export default function App() {
             ))}
             {!projects.length ? <p className="muted">No projects yet.</p> : null}
           </div>
+        </section>
+
+        <section className="panel panel-wide">
+          <div className="panel-header">
+            <div>
+              <h2>XML Configuration</h2>
+              <p className="muted">
+                {selectedProject
+                  ? "Generate or update the GridPACK XML from the uploaded network inputs."
+                  : "Select a project to configure its XML file."}
+              </p>
+            </div>
+          </div>
+          {selectedProject ? (
+            <form className="stack" onSubmit={handleSaveConfiguration}>
+              <div className="form-grid">
+                <label>
+                  Generated XML file
+                  <input
+                    value={configurationForm.xml_file_name}
+                    onChange={(event) => updateConfigurationField("xml_file_name", event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Network file
+                  <select
+                    value={configurationForm.network_file_name}
+                    onChange={(event) => updateConfigurationField("network_file_name", event.target.value)}
+                    required
+                  >
+                    <option value="">Select a network file</option>
+                    {networkFileOptions.map((fileName) => (
+                      <option key={fileName} value={fileName}>
+                        {fileName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Network configuration tag
+                  <select
+                    value={configurationForm.network_configuration_tag}
+                    onChange={(event) => updateConfigurationField("network_configuration_tag", event.target.value)}
+                  >
+                    {["networkConfiguration", "networkConfiguration_v33", "networkConfiguration_v34", "networkConfiguration_v35", "networkConfiguration_v36", "networkConfiguration_mat", "networkConfiguration_GOSS"].map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Output format
+                  <select
+                    value={configurationForm.contingency_output_format}
+                    onChange={(event) => updateConfigurationField("contingency_output_format", event.target.value)}
+                  >
+                    {["csv_flat", "csv_delta", "text", "csv", "json"].map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Output file base name
+                  <input
+                    value={configurationForm.contingency_output_file}
+                    onChange={(event) => updateConfigurationField("contingency_output_file", event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Contingency rating
+                  <select
+                    value={configurationForm.contingency_rating}
+                    onChange={(event) => updateConfigurationField("contingency_rating", event.target.value)}
+                  >
+                    {["A", "B", "C"].map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="checkbox-grid compact-grid">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.full_branch_n1}
+                    onChange={(event) => updateConfigurationField("full_branch_n1", event.target.checked)}
+                  />
+                  Full branch N-1
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.full_generator_n1}
+                    onChange={(event) => updateConfigurationField("full_generator_n1", event.target.checked)}
+                  />
+                  Full generator N-1
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.enforce_reactive_power_limit}
+                    onChange={(event) => updateConfigurationField("enforce_reactive_power_limit", event.target.checked)}
+                  />
+                  Enforce reactive power limit
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.print_calc_files}
+                    onChange={(event) => updateConfigurationField("print_calc_files", event.target.checked)}
+                  />
+                  Print calculation files
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.contingency_ltc}
+                    onChange={(event) => updateConfigurationField("contingency_ltc", event.target.checked)}
+                  />
+                  Contingency LTC
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.write_stats}
+                    onChange={(event) => updateConfigurationField("write_stats", event.target.checked)}
+                  />
+                  Write stats
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.switched_shunt}
+                    onChange={(event) => updateConfigurationField("switched_shunt", event.target.checked)}
+                  />
+                  Switched shunt
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.powerflow_ltc}
+                    onChange={(event) => updateConfigurationField("powerflow_ltc", event.target.checked)}
+                  />
+                  Powerflow LTC
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={configurationForm.area_interchange}
+                    onChange={(event) => updateConfigurationField("area_interchange", event.target.checked)}
+                  />
+                  Area interchange
+                </label>
+              </div>
+
+              <details className="advanced-section">
+                <summary>Advanced XML settings</summary>
+                <div className="form-grid advanced-grid">
+                  <label>
+                    Group size
+                    <input value={configurationForm.group_size} onChange={(event) => updateConfigurationField("group_size", event.target.value)} />
+                  </label>
+                  <label>
+                    Maximum voltage
+                    <input value={configurationForm.max_voltage} onChange={(event) => updateConfigurationField("max_voltage", event.target.value)} />
+                  </label>
+                  <label>
+                    Minimum voltage
+                    <input value={configurationForm.min_voltage} onChange={(event) => updateConfigurationField("min_voltage", event.target.value)} />
+                  </label>
+                  <label>
+                    Contingency q-limit deadband
+                    <input value={configurationForm.contingency_qlim_deadband} onChange={(event) => updateConfigurationField("contingency_qlim_deadband", event.target.value)} />
+                  </label>
+                  <label>
+                    Contingency list file
+                    <input value={configurationForm.contingency_list} onChange={(event) => updateConfigurationField("contingency_list", event.target.value)} />
+                  </label>
+                  <label>
+                    Monitor branches CSV
+                    <select
+                      value={configurationForm.monitor_branches_file}
+                      onChange={(event) => updateConfigurationField("monitor_branches_file", event.target.value)}
+                    >
+                      <option value="">None</option>
+                      {monitorBranchOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Monitor areas
+                    <input value={configurationForm.monitor_areas} onChange={(event) => updateConfigurationField("monitor_areas", event.target.value)} />
+                  </label>
+                  <label>
+                    Monitor kV minimum
+                    <input value={configurationForm.monitor_kv_min} onChange={(event) => updateConfigurationField("monitor_kv_min", event.target.value)} />
+                  </label>
+                  <label>
+                    Monitor kV maximum
+                    <input value={configurationForm.monitor_kv_max} onChange={(event) => updateConfigurationField("monitor_kv_max", event.target.value)} />
+                  </label>
+                  <label>
+                    Init start
+                    <select value={configurationForm.init_start} onChange={(event) => updateConfigurationField("init_start", event.target.value)}>
+                      {["warm", "flat"].map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Powerflow q-limit deadband
+                    <input value={configurationForm.powerflow_qlim_deadband} onChange={(event) => updateConfigurationField("powerflow_qlim_deadband", event.target.value)} />
+                  </label>
+                  <label>
+                    Maximum controller iterations
+                    <input value={configurationForm.max_controller_iterations} onChange={(event) => updateConfigurationField("max_controller_iterations", event.target.value)} />
+                  </label>
+                  <label>
+                    Maximum iterations
+                    <input value={configurationForm.max_iteration} onChange={(event) => updateConfigurationField("max_iteration", event.target.value)} />
+                  </label>
+                  <label>
+                    Tolerance
+                    <input value={configurationForm.tolerance} onChange={(event) => updateConfigurationField("tolerance", event.target.value)} />
+                  </label>
+                  <label>
+                    Maximum q-limit iterations
+                    <input value={configurationForm.max_qlim_iterations} onChange={(event) => updateConfigurationField("max_qlim_iterations", event.target.value)} />
+                  </label>
+                  <label>
+                    Damping factor
+                    <input value={configurationForm.damping_factor} onChange={(event) => updateConfigurationField("damping_factor", event.target.value)} />
+                  </label>
+                  <label>
+                    Phase shift sign
+                    <input value={configurationForm.phase_shift_sign} onChange={(event) => updateConfigurationField("phase_shift_sign", event.target.value)} />
+                  </label>
+                  <label>
+                    PETSc prefix
+                    <input value={configurationForm.petsc_prefix} onChange={(event) => updateConfigurationField("petsc_prefix", event.target.value)} />
+                  </label>
+                  <label className="wide-field">
+                    PETSc options
+                    <textarea
+                      rows={4}
+                      value={configurationForm.petsc_options}
+                      onChange={(event) => updateConfigurationField("petsc_options", event.target.value)}
+                    />
+                  </label>
+                </div>
+              </details>
+
+              {configurationWarning ? <p className="muted">{configurationWarning}</p> : null}
+              <div className="panel-actions">
+                <button type="submit" disabled={!networkFileOptions.length}>
+                  Generate / Save XML
+                </button>
+              </div>
+              <label>
+                XML preview
+                <pre className="xml-preview">{xmlPreview || "Choose a network file and save the configuration to generate XML."}</pre>
+              </label>
+            </form>
+          ) : (
+            <p className="muted">No project selected.</p>
+          )}
         </section>
 
         <section className="panel">
@@ -430,9 +851,10 @@ export default function App() {
                 placeholder="Optional notes for the manifest."
               />
             </label>
-            <button type="submit" disabled={!selectedProject}>
+            <button type="submit" disabled={!selectedProject || !canStartRun}>
               Start GridPACK Run
             </button>
+            {!canStartRun ? <p className="muted">Generate or upload an XML file before starting a run.</p> : null}
           </form>
         </section>
 
@@ -486,7 +908,48 @@ export default function App() {
               Refresh Run
             </button>
           </div>
+          {selectedProject && selectedRun ? (
+            <div className="panel-actions">
+              <a
+                className="button-link"
+                href={runExportDownloadUrl(selectedProject.project_id, selectedRun.run_id)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Export Run ZIP
+              </a>
+            </div>
+          ) : null}
           <pre className="log-viewer">{runLog || "No log output yet."}</pre>
+          <div className="stack">
+            <h3>Run Output Files</h3>
+            {runOutputs.length ? (
+              <div className="output-file-list">
+                {runOutputs.map((file) => (
+                  <div key={file.relative_path} className="output-file-row">
+                    <div>
+                      <strong>{file.file_name}</strong>
+                      <p className="muted">
+                        {file.relative_path} • {formatBytes(file.size_bytes)}
+                      </p>
+                    </div>
+                    {selectedProject && selectedRun ? (
+                      <a
+                        className="subtle-link"
+                        href={runOutputDownloadUrl(selectedProject.project_id, selectedRun.run_id, file.relative_path)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Download
+                      </a>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">No output files discovered for this run yet.</p>
+            )}
+          </div>
         </section>
 
         <section className="panel panel-wide">
@@ -503,6 +966,36 @@ export default function App() {
               Generate Charts
             </button>
           </div>
+          {appMode === "developer" ? (
+            <div className="developer-controls">
+              <div>
+                <h3>Developer Mode</h3>
+                <p className="muted">
+                  Choose which graphs remain visible when the app is switched into viewer mode.
+                </p>
+              </div>
+              <div className="checkbox-grid graph-visibility-grid">
+                {graphDefinitions.map((graph) => (
+                  <label key={graph.key}>
+                    <input
+                      type="checkbox"
+                      checked={graphVisibility[graph.key]}
+                      onChange={(event) =>
+                        setGraphVisibility((current) => ({
+                          ...current,
+                          [graph.key]: event.target.checked,
+                        }))
+                      }
+                    />
+                    {graph.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {visibleGraphCount === 0 ? (
+            <p className="muted">No graphs are enabled. Switch to developer mode and check at least one graph to display it.</p>
+          ) : null}
           <div className="checkbox-grid">
             <label>
               <input
@@ -560,6 +1053,7 @@ export default function App() {
           {analysis ? (
             <AnalysisView
               analysis={analysis}
+              graphVisibility={graphVisibility}
               controlAreaRows={controlAreaRows}
               filteredLineRows={filteredLineRows}
               selectedControlAreas={selectedControlAreas}
@@ -585,6 +1079,7 @@ export default function App() {
 
 type AnalysisViewProps = {
   analysis: InteractiveAnalysis;
+  graphVisibility: GraphVisibility;
   controlAreaRows: { control_area: string; average_utilization_pct: number; line_count: number }[];
   filteredLineRows: UtilizationRow[];
   selectedControlAreas: string[];
@@ -600,6 +1095,7 @@ type AnalysisViewProps = {
 
 function AnalysisView({
   analysis,
+  graphVisibility,
   controlAreaRows,
   filteredLineRows,
   selectedControlAreas,
@@ -617,9 +1113,13 @@ function AnalysisView({
   const selectedAreaSet = new Set(selectedControlAreas);
   const selectedVoltageSet = new Set(selectedVoltageGroups);
   const controlAreaLeftMargin = controlAreaMargin(controlAreaRows.map((row) => row.control_area));
+  const showControlArea = graphVisibility.controlArea;
+  const showVoltageGroup = graphVisibility.voltageGroup;
+  const showMaxUtilization = graphVisibility.maxUtilization;
 
   return (
     <div className="analysis-grid">
+      {showControlArea ? (
       <div className="chart-card">
         <div className="chart-card-header">
           <div>
@@ -693,7 +1193,9 @@ function AnalysisView({
           }}
         />
       </div>
+      ) : null}
 
+      {showVoltageGroup ? (
       <div className="chart-card">
         <div className="chart-card-header">
           <div>
@@ -744,7 +1246,9 @@ function AnalysisView({
           }}
         />
       </div>
+      ) : null}
 
+      {showMaxUtilization ? (
       <div className="chart-card chart-card-wide">
         <div className="chart-card-header">
           <div>
@@ -788,6 +1292,7 @@ function AnalysisView({
           style={{ width: "100%", height: "480px" }}
         />
       </div>
+      ) : null}
 
       <div className="table-card">
         <h3>Selection Details</h3>
@@ -942,9 +1447,49 @@ function readInitialTheme(): ThemeMode {
   return stored === "dark" ? "dark" : "light";
 }
 
+function readInitialMode(): AppMode {
+  if (typeof window === "undefined") {
+    return "viewer";
+  }
+  return window.localStorage.getItem(modeStorageKey) === "developer" ? "developer" : "viewer";
+}
+
+function readInitialGraphVisibility(): GraphVisibility {
+  if (typeof window === "undefined") {
+    return defaultGraphVisibility;
+  }
+  try {
+    const stored = window.localStorage.getItem(graphVisibilityStorageKey);
+    if (!stored) {
+      return defaultGraphVisibility;
+    }
+    const parsed = JSON.parse(stored) as Partial<GraphVisibility>;
+    return {
+      controlArea: parsed.controlArea ?? true,
+      voltageGroup: parsed.voltageGroup ?? true,
+      maxUtilization: parsed.maxUtilization ?? true,
+    };
+  } catch {
+    return defaultGraphVisibility;
+  }
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
   return "Something went wrong.";
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  if (size < 1024 * 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }

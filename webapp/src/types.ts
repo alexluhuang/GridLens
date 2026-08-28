@@ -34,6 +34,58 @@ export type BranchOptions = {
 
 export type ThemeMode = "light" | "dark";
 
+export type InputConfigurationValues = {
+  xml_file_name: string;
+  network_file_name: string;
+  network_configuration_tag: string;
+  full_branch_n1: boolean;
+  full_generator_n1: boolean;
+  contingency_rating: string;
+  enforce_reactive_power_limit: boolean;
+  print_calc_files: boolean;
+  group_size: string;
+  max_voltage: string;
+  min_voltage: string;
+  contingency_qlim_deadband: string;
+  contingency_ltc: boolean;
+  write_stats: boolean;
+  contingency_output_format: string;
+  contingency_output_file: string;
+  contingency_list: string;
+  monitor_branches_file: string;
+  monitor_areas: string;
+  monitor_kv_min: string;
+  monitor_kv_max: string;
+  init_start: string;
+  switched_shunt: boolean;
+  powerflow_qlim_deadband: string;
+  powerflow_ltc: boolean;
+  area_interchange: boolean;
+  max_controller_iterations: string;
+  max_iteration: string;
+  tolerance: string;
+  max_qlim_iterations: string;
+  damping_factor: string;
+  phase_shift_sign: string;
+  petsc_prefix: string;
+  petsc_options: string;
+};
+
+export type ProjectConfigurationResponse = {
+  configuration: InputConfigurationValues;
+  network_file_options: string[];
+  monitor_branches_file_options: string[];
+  xml_preview: string;
+  warning: string;
+};
+
+export type OutputFileSummary = {
+  file_name: string;
+  relative_path: string;
+  size_bytes: number;
+  suffix: string;
+};
+
 export type UtilizationRow = {
   line_label: string;
   control_area?: string;

@@ -2,9 +2,12 @@
 
 This frontend talks to the GridLens API and lets you:
 
-- upload `input.xml` plus the network file
+- upload project input files such as `.raw`, `.csv`, `.con`, `.mon`, and existing `.xml`
+- generate or update the GridPACK XML configuration in the browser
 - start GridPACK runs
 - poll run status and logs
+- download individual run output files
+- export full runs as ZIP archives
 - build interactive browser charts from the GridLens interactive analysis endpoint
 
 ## Local Development Against A Local API
@@ -13,7 +16,13 @@ This frontend talks to the GridLens API and lets you:
 
 ```bash
 cd /Users/hannah/Documents/GridLens
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[web]"
+export GRIDLENS_API_HOST=127.0.0.1
+export GRIDLENS_API_PORT=8000
+export GRIDLENS_API_CORS_ORIGINS=http://localhost:5173
 gridlens-api
 ```
 
@@ -37,6 +46,7 @@ Because the Vite dev server proxies `/api` to `http://localhost:8000`, you do no
 export GRIDLENS_API_CORS_ORIGINS=http://localhost:5173
 export GRIDLENS_API_HOST=0.0.0.0
 export GRIDLENS_API_PORT=8000
+export GRIDLENS_API_PROJECTS_ROOT=/home/ubuntu/GridLensWebProjects
 gridlens-api
 ```
 
@@ -55,6 +65,28 @@ npm run dev
 ```
 
 4. Open `http://localhost:5173`.
+
+## Production Build
+
+Build the static frontend bundle with:
+
+```bash
+cd /Users/hannah/Documents/GridLens/webapp
+npm install
+npm run build
+```
+
+The published assets are written to `webapp/dist`.
+
+## Publish On An EC2 Host
+
+The simplest hosted setup is:
+
+- `uvicorn` / `gridlens-api` on the EC2 instance
+- `nginx` serving `webapp/dist`
+- `nginx` reverse-proxying `/api` to `127.0.0.1:8000`
+
+See [docs/web_deployment.md](../docs/web_deployment.md) for the full deployment checklist.
 
 ## Suggested Frontend Next Steps
 

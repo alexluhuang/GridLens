@@ -44,13 +44,19 @@ The API defaults to `http://0.0.0.0:8000` and stores uploaded web projects under
 - `GET /api/projects`
 - `POST /api/projects`
 - `GET /api/projects/{project_id}`
+- `GET /api/projects/{project_id}/configuration`
+- `POST /api/projects/{project_id}/configuration`
 - `POST /api/projects/{project_id}/runs`
 - `GET /api/projects/{project_id}/runs/{run_id}`
 - `GET /api/projects/{project_id}/runs/{run_id}/log`
+- `GET /api/projects/{project_id}/runs/{run_id}/outputs`
+- `GET /api/projects/{project_id}/runs/{run_id}/outputs/download/{relative_path}`
+- `GET /api/projects/{project_id}/runs/{run_id}/export`
 - `POST /api/projects/{project_id}/runs/{run_id}/analysis/interactive`
 
 Set `GRIDLENS_API_CORS_ORIGINS` to allow a local frontend such as Vite or Next.js to call an API hosted on AWS.
 The browser client scaffold lives in [webapp/README.md](webapp/README.md).
+Deployment guidance for a hosted web app lives in [docs/web_deployment.md](docs/web_deployment.md).
 
 ## Manual Docker Equivalent
 

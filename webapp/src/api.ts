@@ -1,4 +1,12 @@
-import type { BranchOptions, InteractiveAnalysis, ProjectSummary, RunSummary } from "./types";
+import type {
+  BranchOptions,
+  InputConfigurationValues,
+  InteractiveAnalysis,
+  OutputFileSummary,
+  ProjectConfigurationResponse,
+  ProjectSummary,
+  RunSummary,
+} from "./types";
 
 const configuredBaseUrl = (import.meta.env.VITE_GRIDLENS_API_BASE_URL || "").trim().replace(/\/$/, "");
 
@@ -23,6 +31,10 @@ export async function fetchProject(projectId: string): Promise<{ project: Projec
   return parseResponse(await fetch(apiUrl(`/api/projects/${projectId}`)));
 }
 
+export async function fetchProjectConfiguration(projectId: string): Promise<ProjectConfigurationResponse> {
+  return parseResponse(await fetch(apiUrl(`/api/projects/${projectId}/configuration`)));
+}
+
 export async function createProject(data: {
   name: string;
   xmlFileName: string;
@@ -38,6 +50,19 @@ export async function createProject(data: {
     await fetch(apiUrl("/api/projects"), { method: "POST", body: formData }),
   );
   return payload.project;
+}
+
+export async function saveProjectConfiguration(data: {
+  projectId: string;
+  configuration: InputConfigurationValues;
+}): Promise<{ project: ProjectSummary } & ProjectConfigurationResponse> {
+  return parseResponse(
+    await fetch(apiUrl(`/api/projects/${data.projectId}/configuration`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data.configuration),
+    }),
+  );
 }
 
 export async function createRun(data: {
@@ -79,6 +104,25 @@ export async function fetchRunLog(projectId: string, runId: string): Promise<str
   return response.text();
 }
 
+export async function fetchRunOutputs(projectId: string, runId: string): Promise<OutputFileSummary[]> {
+  const payload = await parseResponse<{ files: OutputFileSummary[] }>(
+    await fetch(apiUrl(`/api/projects/${projectId}/runs/${runId}/outputs`)),
+  );
+  return payload.files;
+}
+
+export function runOutputDownloadUrl(projectId: string, runId: string, relativePath: string): string {
+  const encodedPath = relativePath
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  return apiUrl(`/api/projects/${projectId}/runs/${runId}/outputs/download/${encodedPath}`);
+}
+
+export function runExportDownloadUrl(projectId: string, runId: string): string {
+  return apiUrl(`/api/projects/${projectId}/runs/${runId}/export`);
+}
+
 export async function createInteractiveAnalysis(data: {
   projectId: string;
   runId: string;
@@ -109,4 +153,3 @@ export async function createInteractiveAnalysis(data: {
   );
   return payload.analysis;
 }
-
