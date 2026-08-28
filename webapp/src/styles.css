@@ -70,6 +70,34 @@ button {
   padding: 20px;
 }
 
+.outage-shell {
+  display: grid;
+  place-items: center;
+}
+
+.outage-card {
+  width: min(920px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border: 2px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.outage-panel {
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel-strong);
+}
+
+.outage-panel h2 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+  text-transform: uppercase;
+}
+
 .hero {
   display: grid;
   grid-template-columns: 2fr 1fr;

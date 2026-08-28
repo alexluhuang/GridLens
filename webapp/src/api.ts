@@ -22,6 +22,10 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export async function fetchHealth(): Promise<{ status: string }> {
+  return parseResponse(await fetch(apiUrl("/health")));
+}
+
 export async function fetchProjects(): Promise<ProjectSummary[]> {
   const payload = await parseResponse<{ projects: ProjectSummary[] }>(await fetch(apiUrl("/api/projects")));
   return payload.projects;

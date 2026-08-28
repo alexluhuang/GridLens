@@ -211,7 +211,7 @@ sudo mkdir -p /var/www/gridlens
 sudo cp -r /home/ubuntu/GridLens/webapp/dist/* /var/www/gridlens/
 ```
 
-Create `/etc/nginx/sites-available/gridlens`:
+Create `/etc/nginx/sites-available/gridlens` for the initial HTTP-only setup:
 
 ```nginx
 server {
@@ -256,17 +256,178 @@ Then open:
 
 - `http://3.18.103.82`
 
+## 5. Add Basic Auth, HTTPS, And Rate Limiting
+
+This is the recommended protection layer for the current internal deployment.
+
+### Prerequisite: Use A Real Domain Name
+
+HTTPS with Let's Encrypt works best with a real DNS name such as:
+
+- `gridlens.example.com`
+- `internal-gridlens.example.org`
+
+Point your domain's `A` record to:
+
+- `3.18.103.82`
+
+Update the `server_name` in the nginx config before requesting the certificate.
+
+### Step 1: Install Certbot And htpasswd Tools
+
+```bash
+sudo apt update
+sudo apt install -y certbot python3-certbot-nginx apache2-utils
+```
+
+### Step 2: Create A Basic Auth User
+
+Create the password file and your first user:
+
+```bash
+sudo htpasswd -c /etc/nginx/.htpasswd gridlensadmin
+```
+
+If you need to add more users later:
+
+```bash
+sudo htpasswd /etc/nginx/.htpasswd anotheruser
+```
+
+### Step 3: Add Rate Limiting And Basic Auth To Nginx
+
+Edit `/etc/nginx/sites-available/gridlens` to use your real domain and add auth plus rate limiting:
+
+```nginx
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+server {
+    listen 80;
+    server_name gridlens.example.com;
+
+    root /var/www/gridlens;
+    index index.html;
+
+    auth_basic "GridLens";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    location / {
+        try_files $uri /index.html;
+    }
+
+    location /api/ {
+        limit_req zone=api_limit burst=20 nodelay;
+        proxy_pass http://127.0.0.1:8000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 600s;
+    }
+
+    location /health {
+        allow 127.0.0.1;
+        deny all;
+        proxy_pass http://127.0.0.1:8000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Check and reload nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### Step 4: Request The HTTPS Certificate
+
+Run certbot:
+
+```bash
+sudo certbot --nginx -d gridlens.example.com
+```
+
+Choose the redirect-to-HTTPS option when prompted.
+
+After certbot finishes, nginx will be updated to listen on `443` with the certificate paths added automatically.
+
+### Step 5: Confirm HTTPS And Authentication
+
+Open:
+
+- `https://gridlens.example.com`
+
+You should see:
+
+1. a browser username/password prompt
+2. the GridLens app after successful login
+3. HTTPS enabled with a valid certificate
+
+You can also verify from the EC2 host:
+
+```bash
+curl -I https://gridlens.example.com
+```
+
+### Step 6: Tighten The Security Group
+
+Once nginx is serving the app and proxying the API, your EC2 security group should allow:
+
+- `TCP 22` from your admin IP only
+- `TCP 80` from `0.0.0.0/0`
+- `TCP 443` from `0.0.0.0/0`
+
+Remove public access to:
+
+- `TCP 8000`
+
+The FastAPI service should remain bound to:
+
+- `127.0.0.1:8000`
+
+### Notes On Rate Limiting
+
+The example above uses:
+
+- `rate=10r/s`
+- `burst=20`
+
+That is a reasonable starting point for an internal tool. If legitimate users trigger too many API requests while browsing logs or refreshing results, raise the burst first before raising the sustained rate.
+
+For very long-running requests, nginx rate limiting only controls request frequency. It does not limit how much compute GridPACK jobs consume once the API accepts them. For that, add job queueing or run-concurrency limits later.
+
+### Optional Hardening
+
+For a slightly safer internal release, also add:
+
+1. upload size limits in nginx with `client_max_body_size`
+2. log rotation for nginx and GridLens API logs
+3. fail2ban or AWS WAF later if the site becomes more broadly exposed
+
+Example upload limit:
+
+```nginx
+client_max_body_size 500m;
+```
+
+Add that inside the `server` block if your RAW files are large.
+
 ### Security Group
 
 For a published web app, allow:
 
 - `TCP 80` from `0.0.0.0/0`
-- `TCP 443` from `0.0.0.0/0` once HTTPS is added
+- `TCP 443` from `0.0.0.0/0`
 - `TCP 22` from your admin IP
 
 Do not leave `TCP 8000` publicly open once `nginx` is proxying requests.
 
-## 5. Recommended Next Production Steps
+## 6. Recommended Next Production Steps
 
 Before broad public rollout, add:
 

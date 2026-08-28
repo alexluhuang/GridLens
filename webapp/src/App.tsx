@@ -6,6 +6,7 @@ import {
   createInteractiveAnalysis,
   createProject,
   createRun,
+  fetchHealth,
   fetchProjectConfiguration,
   fetchProject,
   fetchProjects,
@@ -119,6 +120,7 @@ const defaultGraphVisibility: GraphVisibility = {
 };
 
 export default function App() {
+  const [apiOffline, setApiOffline] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(null);
@@ -162,7 +164,7 @@ export default function App() {
   }, [graphVisibility]);
 
   useEffect(() => {
-    void refreshProjects();
+    void bootstrapApp();
   }, []);
 
   useEffect(() => {
@@ -204,11 +206,27 @@ export default function App() {
   const visibleGraphCount = Object.values(graphVisibility).filter(Boolean).length;
   const canStartRun = Boolean(selectedProject?.xml_file_name);
 
+  async function bootstrapApp() {
+    setLoading(true);
+    setError("");
+    try {
+      await fetchHealth();
+      setApiOffline(false);
+      await refreshProjects();
+    } catch (nextError) {
+      setApiOffline(true);
+      setError(errorMessage(nextError));
+      setMessage("The GridLens API is not running.");
+      setLoading(false);
+    }
+  }
+
   async function refreshProjects() {
     setLoading(true);
     setError("");
     try {
       const nextProjects = await fetchProjects();
+      setApiOffline(false);
       setProjects(nextProjects);
       if (!selectedProjectId && nextProjects[0]) {
         setSelectedProjectId(nextProjects[0].project_id);
@@ -227,6 +245,7 @@ export default function App() {
     setError("");
     try {
       const payload = await fetchProject(projectId);
+      setApiOffline(false);
       setSelectedProject(payload.project);
       setRuns(payload.runs);
       setRunForm((current) => ({
@@ -255,6 +274,7 @@ export default function App() {
   async function refreshRun(projectId: string, runId: string, options: { includeLog: boolean }) {
     try {
       const run = await fetchRun(projectId, runId);
+      setApiOffline(false);
       setSelectedRun(run);
       setRuns((current) => current.map((item) => (item.run_id === run.run_id ? run : item)));
       if (options.includeLog) {
@@ -276,6 +296,7 @@ export default function App() {
   async function refreshProjectConfiguration(projectId: string) {
     try {
       const payload = await fetchProjectConfiguration(projectId);
+      setApiOffline(false);
       setConfigurationForm(payload.configuration);
       setNetworkFileOptions(payload.network_file_options);
       setMonitorBranchOptions(payload.monitor_branches_file_options);
@@ -305,6 +326,7 @@ export default function App() {
         xmlFileName: projectXmlFileName,
         inputFiles: projectInputFiles,
       });
+      setApiOffline(false);
       setProjectName("");
       setProjectXmlFileName("");
       setProjectInputFiles([]);
@@ -336,6 +358,7 @@ export default function App() {
         mpiProcesses: runForm.mpiProcesses,
         notes: runForm.notes,
       });
+      setApiOffline(false);
       setSelectedRun(run);
       setAnalysis(null);
       setSelectedControlAreas([]);
@@ -363,6 +386,7 @@ export default function App() {
         runId: selectedRun.run_id,
         branchOptions,
       });
+      setApiOffline(false);
       setAnalysis(nextAnalysis);
       setSelectedControlAreas([]);
       setSelectedVoltageGroups([]);
@@ -387,6 +411,7 @@ export default function App() {
         projectId: selectedProject.project_id,
         configuration: configurationForm,
       });
+      setApiOffline(false);
       setSelectedProject(payload.project);
       setProjects((current) => current.map((item) => (item.project_id === payload.project.project_id ? payload.project : item)));
       setConfigurationForm(payload.configuration);
@@ -405,6 +430,36 @@ export default function App() {
 
   function updateConfigurationField<K extends keyof InputConfigurationValues>(key: K, value: InputConfigurationValues[K]) {
     setConfigurationForm((current) => ({ ...current, [key]: value }));
+  }
+
+  if (apiOffline) {
+    return (
+      <div className="app-shell outage-shell">
+        <section className="outage-card">
+          <div className="hero-topline">
+            <p className="eyebrow">GridLens Status</p>
+          </div>
+          <div className="brand-lockup">
+            <img src="/gridlens.svg" alt="GridLens logo" className="brand-logo" />
+            <div>
+              <h1>GridLens</h1>
+              <p className="brand-subtitle">High Performance Power Grid Simulation and Contingency Analysis.</p>
+            </div>
+          </div>
+          <div className="outage-panel">
+            <span className="status-pill ready">API Offline</span>
+            <h2>The API is not running.</h2>
+            <p className="hero-copy">The GridLens web service is temporarily unavailable and will be back soon.</p>
+            {error ? <p className="muted">{error}</p> : null}
+            <div className="panel-actions">
+              <button type="button" onClick={() => void bootstrapApp()}>
+                Retry Connection
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
   }
 
   function toggleControlArea(area: string) {
@@ -791,7 +846,7 @@ export default function App() {
               {configurationWarning ? <p className="muted">{configurationWarning}</p> : null}
               <div className="panel-actions">
                 <button type="submit" disabled={!networkFileOptions.length}>
-                  Generate / Save XML
+                  Generate XML
                 </button>
               </div>
               <label>
