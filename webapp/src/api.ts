@@ -11,7 +11,13 @@ import type {
 const configuredBaseUrl = (import.meta.env.VITE_GRIDLENS_API_BASE_URL || "").trim().replace(/\/$/, "");
 
 function apiUrl(path: string): string {
-  return configuredBaseUrl ? `${configuredBaseUrl}${path}` : path;
+  if (!configuredBaseUrl) {
+    return path;
+  }
+  if (configuredBaseUrl === "/api" && path.startsWith("/api/")) {
+    return path;
+  }
+  return `${configuredBaseUrl}${path}`;
 }
 
 function healthUrl(): string {
