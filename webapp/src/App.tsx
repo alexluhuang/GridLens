@@ -119,6 +119,8 @@ const defaultGraphVisibility: GraphVisibility = {
   maxUtilization: true,
 };
 
+const maxHostedMpiProcesses = 18;
+
 export default function App() {
   const [apiOffline, setApiOffline] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -892,11 +894,18 @@ export default function App() {
               <input
                 type="number"
                 min={1}
+                max={maxHostedMpiProcesses}
                 value={runForm.mpiProcesses}
-                onChange={(event) => setRunForm({ ...runForm, mpiProcesses: Number(event.target.value) })}
+                onChange={(event) =>
+                  setRunForm({
+                    ...runForm,
+                    mpiProcesses: clampMpiProcesses(Number(event.target.value)),
+                  })
+                }
                 required
               />
             </label>
+            <p className="hint-text">Runs launched from the web app are limited to {maxHostedMpiProcesses} MPI processes.</p>
             <label>
               Run notes
               <textarea
@@ -963,48 +972,7 @@ export default function App() {
               Refresh Run
             </button>
           </div>
-          {selectedProject && selectedRun ? (
-            <div className="panel-actions">
-              <a
-                className="button-link"
-                href={runExportDownloadUrl(selectedProject.project_id, selectedRun.run_id)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Export Run ZIP
-              </a>
-            </div>
-          ) : null}
           <pre className="log-viewer">{runLog || "No log output yet."}</pre>
-          <div className="stack">
-            <h3>Run Output Files</h3>
-            {runOutputs.length ? (
-              <div className="output-file-list">
-                {runOutputs.map((file) => (
-                  <div key={file.relative_path} className="output-file-row">
-                    <div>
-                      <strong>{file.file_name}</strong>
-                      <p className="muted">
-                        {file.relative_path} • {formatBytes(file.size_bytes)}
-                      </p>
-                    </div>
-                    {selectedProject && selectedRun ? (
-                      <a
-                        className="subtle-link"
-                        href={runOutputDownloadUrl(selectedProject.project_id, selectedRun.run_id, file.relative_path)}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Download
-                      </a>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="muted">No output files discovered for this run yet.</p>
-            )}
-          </div>
         </section>
 
         <section className="panel panel-wide">
@@ -1108,6 +1076,9 @@ export default function App() {
           {analysis ? (
             <AnalysisView
               analysis={analysis}
+              selectedProjectId={selectedProject?.project_id ?? ""}
+              selectedRunId={selectedRun?.run_id ?? ""}
+              runOutputs={runOutputs}
               graphVisibility={graphVisibility}
               controlAreaRows={controlAreaRows}
               filteredLineRows={filteredLineRows}
@@ -1134,6 +1105,9 @@ export default function App() {
 
 type AnalysisViewProps = {
   analysis: InteractiveAnalysis;
+  selectedProjectId: string;
+  selectedRunId: string;
+  runOutputs: OutputFileSummary[];
   graphVisibility: GraphVisibility;
   controlAreaRows: { control_area: string; average_utilization_pct: number; line_count: number }[];
   filteredLineRows: UtilizationRow[];
@@ -1150,6 +1124,9 @@ type AnalysisViewProps = {
 
 function AnalysisView({
   analysis,
+  selectedProjectId,
+  selectedRunId,
+  runOutputs,
   graphVisibility,
   controlAreaRows,
   filteredLineRows,
@@ -1171,6 +1148,7 @@ function AnalysisView({
   const showControlArea = graphVisibility.controlArea;
   const showVoltageGroup = graphVisibility.voltageGroup;
   const showMaxUtilization = graphVisibility.maxUtilization;
+  const selectionTableRows = sortedDetailRows.slice(-25).reverse();
 
   return (
     <div className="analysis-grid">
@@ -1181,11 +1159,28 @@ function AnalysisView({
             <h3>Average Line Utilization by Control Area</h3>
             <p className="muted">{controlAreaSubtitle}</p>
           </div>
-          {selectedControlAreas.length ? (
-            <button type="button" className="subtle-button" onClick={onClearControlAreas}>
-              Clear Area Filters
+          <div className="chart-card-actions">
+            <button
+              type="button"
+              className="subtle-button"
+              onClick={() =>
+                downloadCsvFile(
+                  `${analysis.project_name}-${analysis.run_id}-control-area-averages.csv`,
+                  toCsv([
+                    ["control_area", "average_utilization_pct", "line_count"],
+                    ...controlAreaRows.map((row) => [row.control_area, row.average_utilization_pct.toFixed(3), String(row.line_count)]),
+                  ]),
+                )
+              }
+            >
+              Download CSV
             </button>
-          ) : null}
+            {selectedControlAreas.length ? (
+              <button type="button" className="subtle-button" onClick={onClearControlAreas}>
+                Clear Area Filters
+              </button>
+            ) : null}
+          </div>
         </div>
         <AnalysisPlot
           data={[
@@ -1257,11 +1252,28 @@ function AnalysisView({
             <h3>Average N-1 Branch Loading by Voltage Group</h3>
             <p className="muted">{voltageSubtitle}</p>
           </div>
-          {selectedVoltageGroups.length ? (
-            <button type="button" className="subtle-button" onClick={onClearVoltageGroups}>
-              Clear Voltage Filters
+          <div className="chart-card-actions">
+            <button
+              type="button"
+              className="subtle-button"
+              onClick={() =>
+                downloadCsvFile(
+                  `${analysis.project_name}-${analysis.run_id}-voltage-group-averages.csv`,
+                  toCsv([
+                    ["voltage_group", "average_utilization_pct", "line_count"],
+                    ...voltageGroupRows.map((row) => [row.voltage_group, row.average_utilization_pct.toFixed(3), String(row.line_count)]),
+                  ]),
+                )
+              }
+            >
+              Download CSV
             </button>
-          ) : null}
+            {selectedVoltageGroups.length ? (
+              <button type="button" className="subtle-button" onClick={onClearVoltageGroups}>
+                Clear Voltage Filters
+              </button>
+            ) : null}
+          </div>
         </div>
         <AnalysisPlot
           data={[
@@ -1314,6 +1326,30 @@ function AnalysisView({
               {selectedVoltageGroups.length ? ` • voltage: ${selectedVoltageGroups.join(", ")}` : ""}
             </p>
           </div>
+          <div className="chart-card-actions">
+            <button
+              type="button"
+              className="subtle-button"
+              onClick={() =>
+                downloadCsvFile(
+                  `${analysis.project_name}-${analysis.run_id}-maximum-utilization.csv`,
+                  toCsv([
+                    ["line_label", "control_area", "voltage_group", "max_contingency", "max_utilization_pct", "utilization_pct"],
+                    ...sortedDetailRows.map((row) => [
+                      row.line_label,
+                      row.control_area || "unknown",
+                      row.voltage_group || "unknown",
+                      row.max_contingency || "",
+                      row.max_utilization_pct.toFixed(3),
+                      row.utilization_pct.toFixed(3),
+                    ]),
+                  ]),
+                )
+              }
+            >
+              Download CSV
+            </button>
+          </div>
         </div>
         <AnalysisPlot
           data={[
@@ -1350,7 +1386,32 @@ function AnalysisView({
       ) : null}
 
       <div className="table-card">
-        <h3>Selection Details</h3>
+        <div className="table-card-header">
+          <h3>Selection Details</h3>
+          <div className="table-card-actions">
+            <button
+              type="button"
+              className="subtle-button"
+              onClick={() =>
+                downloadCsvFile(
+                  `${analysis.project_name}-${analysis.run_id}-selection-details.csv`,
+                  toCsv([
+                    ["line_label", "control_area", "voltage_group", "contingency", "max_utilization_pct"],
+                    ...selectionTableRows.map((row) => [
+                      row.line_label,
+                      row.control_area || "-",
+                      row.voltage_group || "-",
+                      row.max_contingency || "-",
+                      row.max_utilization_pct.toFixed(3),
+                    ]),
+                  ]),
+                )
+              }
+            >
+              Download CSV
+            </button>
+          </div>
+        </div>
         <div className="table-wrapper">
           <table>
             <thead>
@@ -1363,7 +1424,7 @@ function AnalysisView({
               </tr>
             </thead>
             <tbody>
-              {sortedDetailRows.slice(-25).reverse().map((row) => (
+              {selectionTableRows.map((row) => (
                 <tr key={`${row.line_label}-${row.max_contingency || ""}`}>
                   <td>{row.line_label}</td>
                   <td>{row.control_area || "-"}</td>
@@ -1374,6 +1435,53 @@ function AnalysisView({
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div className="table-card chart-card-wide">
+        <div className="download-section-header">
+          <div>
+            <h3>Run Downloads</h3>
+            <p className="muted">Export the full run package or download individual output files after reviewing the charts and tables.</p>
+          </div>
+          {selectedProjectId && selectedRunId ? (
+            <a
+              className="button-link"
+              href={runExportDownloadUrl(selectedProjectId, selectedRunId)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Export Run ZIP
+            </a>
+          ) : null}
+        </div>
+        <div className="download-section">
+          {runOutputs.length ? (
+            <div className="download-grid">
+              {runOutputs.map((file) => (
+                <div key={file.relative_path} className="output-file-row">
+                  <div>
+                    <strong>{file.file_name}</strong>
+                    <p className="muted">
+                      {file.relative_path} • {formatBytes(file.size_bytes)}
+                    </p>
+                  </div>
+                  {selectedProjectId && selectedRunId ? (
+                    <a
+                      className="subtle-link"
+                      href={runOutputDownloadUrl(selectedProjectId, selectedRunId, file.relative_path)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Download
+                    </a>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">No output files discovered for this run yet.</p>
+          )}
         </div>
       </div>
     </div>
@@ -1470,6 +1578,35 @@ function average(values: number[]) {
 function controlAreaMargin(labels: string[]) {
   const longest = labels.reduce((max, label) => Math.max(max, label.length), 0);
   return Math.min(340, Math.max(210, 80 + longest * 10));
+}
+
+function clampMpiProcesses(value: number) {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(maxHostedMpiProcesses, Math.max(1, Math.round(value)));
+}
+
+function toCsv(rows: string[][]) {
+  return rows
+    .map((row) =>
+      row
+        .map((value) => `"${String(value).replace(/"/g, "\"\"")}"`)
+        .join(","),
+    )
+    .join("\n");
+}
+
+function downloadCsvFile(fileName: string, csvText: string) {
+  const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 function sharedLayout(layout: Record<string, unknown>) {

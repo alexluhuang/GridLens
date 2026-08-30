@@ -10,6 +10,7 @@
   --text-main: #101010;
   --text-muted: #4d4d4d;
   --text-inverse: #f8f8f8;
+  --text-log: #f8f8f8;
   --accent: #111111;
   --accent-hover: #333333;
   --accent-soft: #ececeb;
@@ -34,6 +35,7 @@
   --text-main: #f4f4f1;
   --text-muted: #c9c9c4;
   --text-inverse: #0b0b0b;
+  --text-log: #f4f4f1;
   --accent: #ffffff;
   --accent-hover: #dfdfdb;
   --accent-soft: #212121;
@@ -118,7 +120,9 @@ button {
 .hero-topline,
 .status-meta,
 .chart-card-header,
-.guide-header {
+.guide-header,
+.download-section-header,
+.table-card-header {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -493,7 +497,7 @@ button:disabled {
   padding: 18px;
   border-radius: 0;
   background: var(--bg-log);
-  color: var(--text-inverse);
+  color: var(--text-log);
   font-family: var(--font-mono);
   font-size: 0.88rem;
   border: 1px solid var(--border-soft);
@@ -502,6 +506,20 @@ button:disabled {
 .output-file-list {
   display: grid;
   gap: 10px;
+}
+
+.download-section {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .output-file-row {
@@ -594,6 +612,20 @@ button:disabled {
   border: 1px solid var(--border-soft);
 }
 
+.chart-card-actions,
+.table-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hint-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
 .chart-loading {
   display: grid;
   place-items: center;
@@ -669,6 +701,7 @@ th {
   .hero,
   .content-grid,
   .analysis-grid,
+  .download-grid,
   .checkbox-grid,
   .guide-grid,
   .form-grid {
@@ -682,7 +715,9 @@ th {
   .hero-topline,
   .panel-header,
   .chart-card-header,
-  .guide-header {
+  .guide-header,
+  .download-section-header,
+  .table-card-header {
     align-items: start;
     flex-direction: column;
   }

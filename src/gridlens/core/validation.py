@@ -41,8 +41,8 @@ def validate_existing_files(paths: list[str | Path]) -> list[Path]:
 def validate_mpi_processes(value: int) -> int:
     if value < 1:
         raise ValidationError("MPI process count must be at least 1.")
-    if value > 4096:
-        raise ValidationError("MPI process count is unexpectedly high. Use 4096 or fewer.")
+    if value > 18:
+        raise ValidationError("MPI process count must be 18 or fewer for the hosted web app.")
     return value
 
 

@@ -178,3 +178,32 @@ def test_webapi_configuration_and_export_endpoints(tmp_path, monkeypatch) -> Non
     export_response = client.get(f"/api/projects/Pilot_Study/runs/{run_dir.name}/export")
     assert export_response.status_code == 200
     assert export_response.headers["content-type"] == "application/zip"
+
+
+def test_webapi_rejects_more_than_18_mpi_processes(tmp_path, monkeypatch) -> None:
+    if TestClient is None or create_app is None:
+        pytest.skip("FastAPI test client dependencies are not installed.")
+    projects_root = tmp_path / "api-projects"
+    monkeypatch.setenv("GRIDLENS_API_PROJECTS_ROOT", str(projects_root))
+    client = TestClient(create_app())
+
+    xml = tmp_path / "input.xml"
+    xml.write_text("<Configuration />", encoding="utf-8")
+    network = tmp_path / "network.raw"
+    network.write_text("0 / END", encoding="utf-8")
+
+    project = Project("Pilot Study", projects_root / "Pilot_Study")
+    project.save([xml, network], "input.xml")
+
+    response = client.post(
+        "/api/projects/Pilot_Study/runs",
+        data={
+            "image": "pnnl/gridpack:latest",
+            "executable": "ca.x",
+            "xml_file_name": "input.xml",
+            "mpi_processes": "19",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "MPI process count must be 18 or fewer for the hosted web app."
