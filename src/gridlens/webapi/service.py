@@ -18,6 +18,7 @@ from gridlens.gui.configuration_view_models import (
     project_network_file_names,
 )
 from gridlens.runner.gridpack_runner import GridpackRunRequest
+from gridlens.webapi.security import AuthenticatedUser
 
 
 DEFAULT_WEB_PROJECTS_ROOT = Path("~/GridLensWebProjects").expanduser()
@@ -37,6 +38,15 @@ def ensure_projects_root(root: str | Path | None = None) -> Path:
     projects_root = Path(root or DEFAULT_WEB_PROJECTS_ROOT).expanduser().resolve()
     projects_root.mkdir(parents=True, exist_ok=True)
     return projects_root
+
+
+def projects_root_for_user(root: str | Path, user: AuthenticatedUser) -> Path:
+    base_root = ensure_projects_root(root)
+    if not user.is_authenticated:
+        return base_root
+    user_root = base_root / "users" / user.storage_namespace
+    user_root.mkdir(parents=True, exist_ok=True)
+    return user_root
 
 
 def project_root_for_name(projects_root: str | Path, project_name: str) -> Path:

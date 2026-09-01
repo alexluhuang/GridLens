@@ -1,9 +1,10 @@
 # GridLens Web Deployment
 
-This guide covers two paths:
+This guide covers three paths:
 
 1. local testing on a development machine
-2. publishing the web app on an EC2 host that also runs the GridLens API
+2. local or GitHub Pages frontend against an EC2 API
+3. publishing the frontend on GitHub Pages while EC2 runs the API and GridPACK
 
 The instructions below assume the repository lives at `/Users/hannah/Documents/GridLens` locally and `/home/ubuntu/GridLens` on Ubuntu EC2.
 
@@ -107,7 +108,69 @@ Open:
 
 - `http://localhost:5173`
 
-## 3. Can It Be Published Now?
+## 3. Frontend On GitHub Pages, API On EC2
+
+This is the recommended public architecture:
+
+- GitHub Pages hosts the static React frontend
+- EC2 runs the GridLens FastAPI backend and GridPACK Docker jobs
+- Amazon Cognito handles email-and-password authentication
+- the API stores each authenticated user under a private per-user folder on EC2
+
+### Backend Environment On EC2
+
+Add these environment variables to the API service:
+
+```ini
+Environment=GRIDLENS_API_HOST=0.0.0.0
+Environment=GRIDLENS_API_PORT=8000
+Environment=GRIDLENS_API_PROJECTS_ROOT=/home/ubuntu/GridLensWebProjects
+Environment=GRIDLENS_API_CORS_ORIGINS=https://<github-username>.github.io
+Environment=GRIDLENS_AUTH_MODE=cognito
+Environment=GRIDLENS_COGNITO_REGION=<aws-region>
+Environment=GRIDLENS_COGNITO_USER_POOL_ID=<user-pool-id>
+Environment=GRIDLENS_COGNITO_CLIENT_ID=<app-client-id>
+```
+
+If your GitHub Pages site is repo-scoped, use the full Pages origin such as:
+
+```ini
+Environment=GRIDLENS_API_CORS_ORIGINS=https://<github-username>.github.io
+```
+
+### Frontend Repository Variables For GitHub Actions
+
+Set these repository variables in GitHub:
+
+```text
+VITE_GRIDLENS_API_BASE_URL=http://3.18.103.82:8000
+VITE_GRIDLENS_AUTH_MODE=cognito
+VITE_GRIDLENS_COGNITO_DOMAIN=https://<your-domain>.auth.<region>.amazoncognito.com
+VITE_GRIDLENS_COGNITO_CLIENT_ID=<app-client-id>
+VITE_PUBLIC_BASE_PATH=/<repo-name>/
+```
+
+Use `VITE_PUBLIC_BASE_PATH=/` only if you later attach a custom domain.
+
+### Cognito Configuration
+
+In the Cognito app client:
+
+1. Enable the authorization code grant.
+2. Enable a hosted UI domain.
+3. Add your GitHub Pages URL as an allowed callback URL.
+4. Add your GitHub Pages URL as an allowed sign-out URL.
+5. Use email as the sign-in identifier.
+
+### GitHub Pages Workflow
+
+This repository now includes:
+
+- [`.github/workflows/github-pages.yml`](/Users/hannah/Documents/GridLens/.github/workflows/github-pages.yml)
+
+Enable `Pages -> Build and deployment -> Source: GitHub Actions`, then push to `main`.
+
+## 4. Can It Be Published Now?
 
 Yes. The repository now has the pieces needed for a working hosted web app:
 
@@ -123,7 +186,7 @@ The main remaining work is operational:
 - add DNS and HTTPS
 - optionally add authentication before broad public access
 
-## 4. Publish On EC2
+## 5. Publish On EC2
 
 This is the simplest deployment shape for now:
 
@@ -200,6 +263,15 @@ Enable it:
 sudo systemctl daemon-reload
 sudo systemctl enable --now gridlens-api
 sudo systemctl status gridlens-api
+```
+
+To protect the API with Cognito in this EC2-served mode, add:
+
+```ini
+Environment=GRIDLENS_AUTH_MODE=cognito
+Environment=GRIDLENS_COGNITO_REGION=<aws-region>
+Environment=GRIDLENS_COGNITO_USER_POOL_ID=<user-pool-id>
+Environment=GRIDLENS_COGNITO_CLIENT_ID=<app-client-id>
 ```
 
 ### Publish The Frontend With Nginx

@@ -10,6 +10,12 @@ This frontend talks to the GridLens API and lets you:
 - export full runs as ZIP archives
 - build interactive browser charts from the GridLens interactive analysis endpoint
 
+It can now also run as a static GitHub Pages frontend backed by:
+
+- an EC2-hosted GridLens API
+- Amazon Cognito for email-and-password sign-in
+- per-user project isolation enforced by the API
+
 ## Local Development Against A Local API
 
 1. Start the GridLens API:
@@ -38,6 +44,14 @@ npm run dev
 
 Because the Vite dev server proxies `/api` to `http://localhost:8000`, you do not need a frontend env var in this mode.
 
+If you want to test the Cognito login flow locally, also set:
+
+```bash
+VITE_GRIDLENS_AUTH_MODE=cognito
+VITE_GRIDLENS_COGNITO_DOMAIN=https://<your-cognito-domain>.auth.<region>.amazoncognito.com
+VITE_GRIDLENS_COGNITO_CLIENT_ID=<your-cognito-app-client-id>
+```
+
 ## Local Development Against The EC2 API
 
 1. Run the API on the EC2 instance with CORS enabled for local dev:
@@ -54,6 +68,9 @@ gridlens-api
 
 ```bash
 VITE_GRIDLENS_API_BASE_URL=http://<your-ec2-host-or-ip>:8000
+VITE_GRIDLENS_AUTH_MODE=cognito
+VITE_GRIDLENS_COGNITO_DOMAIN=https://<your-cognito-domain>.auth.<region>.amazoncognito.com
+VITE_GRIDLENS_COGNITO_CLIENT_ID=<your-cognito-app-client-id>
 ```
 
 3. Start the frontend:
@@ -78,6 +95,31 @@ npm run build
 
 The published assets are written to `webapp/dist`.
 
+## GitHub Pages Deployment
+
+The repository now includes [`.github/workflows/github-pages.yml`](/Users/hannah/Documents/GridLens/.github/workflows/github-pages.yml), which builds and deploys the frontend to GitHub Pages.
+
+Set these GitHub repository variables before enabling the workflow:
+
+- `VITE_GRIDLENS_API_BASE_URL`
+  Example: `http://3.18.103.82:8000`
+- `VITE_GRIDLENS_AUTH_MODE`
+  Use `cognito` for the protected multi-user deployment
+- `VITE_GRIDLENS_COGNITO_DOMAIN`
+  Example: `https://your-domain.auth.us-east-2.amazoncognito.com`
+- `VITE_GRIDLENS_COGNITO_CLIENT_ID`
+  Your Cognito app client ID
+- `VITE_PUBLIC_BASE_PATH`
+  Use `/` for a custom domain or `/<repo-name>/` for repo-scoped GitHub Pages
+
+After that:
+
+1. Enable GitHub Pages in the repository settings and choose `GitHub Actions` as the source.
+2. Push to `main`, or manually trigger the workflow.
+3. Add the resulting GitHub Pages URL to:
+   `GRIDLENS_API_CORS_ORIGINS` on EC2
+4. Add the same GitHub Pages URL as an allowed callback URL and logout URL in Cognito.
+
 ## Publish On An EC2 Host
 
 The simplest hosted setup is:
@@ -90,6 +132,6 @@ See [docs/web_deployment.md](../docs/web_deployment.md) for the full deployment 
 
 ## Suggested Frontend Next Steps
 
-- add authentication before exposing uploads publicly
+- add token refresh support so very long sessions do not require a fresh sign-in
 - add pagination or filtering for large run histories
 - add richer drill-down views for line metadata and contingency details

@@ -6,6 +6,10 @@ import {
   createInteractiveAnalysis,
   createProject,
   createRun,
+  downloadRunExport,
+  downloadRunOutput,
+  fetchAuthMetadata,
+  fetchCurrentUser,
   fetchHealth,
   fetchProjectConfiguration,
   fetchProject,
@@ -13,12 +17,12 @@ import {
   fetchRun,
   fetchRunLog,
   fetchRunOutputs,
-  runExportDownloadUrl,
-  runOutputDownloadUrl,
   saveProjectConfiguration,
 } from "./api";
+import { beginSignIn, clearAuthSession, initializeAuthSession, isAuthEnabled, signOut } from "./auth";
 import type {
   BranchOptions,
+  CurrentUser,
   InputConfigurationValues,
   InteractiveAnalysis,
   OutputFileSummary,
@@ -122,6 +126,10 @@ const defaultGraphVisibility: GraphVisibility = {
 const maxHostedMpiProcesses = 18;
 
 export default function App() {
+  const [authEnabled, setAuthEnabled] = useState(isAuthEnabled());
+  const [authReady, setAuthReady] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [authError, setAuthError] = useState("");
   const [apiOffline, setApiOffline] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -211,14 +219,43 @@ export default function App() {
   async function bootstrapApp() {
     setLoading(true);
     setError("");
+    setAuthError("");
     try {
       await fetchHealth();
       setApiOffline(false);
+      const authMetadata = await fetchAuthMetadata();
+      setAuthEnabled(authMetadata.enabled);
+      if (authMetadata.enabled) {
+        const signedInUser = await initializeAuthSession();
+        if (!signedInUser) {
+          setCurrentUser(null);
+          setAuthReady(true);
+          setMessage("Sign in to access your GridLens workspace.");
+          setLoading(false);
+          return;
+        }
+        try {
+          const verifiedUser = await fetchCurrentUser();
+          setCurrentUser(verifiedUser);
+        } catch (nextError) {
+          clearAuthSession();
+          setCurrentUser(null);
+          setAuthError(errorMessage(nextError));
+          setAuthReady(true);
+          setMessage("Sign in to access your GridLens workspace.");
+          setLoading(false);
+          return;
+        }
+      } else {
+        setCurrentUser(null);
+      }
+      setAuthReady(true);
       await refreshProjects();
     } catch (nextError) {
       setApiOffline(true);
       setError(errorMessage(nextError));
       setMessage("The GridLens API is not running.");
+      setAuthReady(true);
       setLoading(false);
     }
   }
@@ -434,6 +471,22 @@ export default function App() {
     setConfigurationForm((current) => ({ ...current, [key]: value }));
   }
 
+  if (!authReady) {
+    return (
+      <div className="app-shell outage-shell">
+        <section className="outage-card">
+          <div className="brand-lockup">
+            <img src={`${import.meta.env.BASE_URL}gridlens.svg`} alt="GridLens logo" className="brand-logo" />
+            <div>
+              <h1>GridLens</h1>
+              <p className="brand-subtitle">Checking API connectivity and authentication.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   if (apiOffline) {
     return (
       <div className="app-shell outage-shell">
@@ -442,7 +495,7 @@ export default function App() {
             <p className="eyebrow">GridLens Status</p>
           </div>
           <div className="brand-lockup">
-            <img src="/gridlens.svg" alt="GridLens logo" className="brand-logo" />
+            <img src={`${import.meta.env.BASE_URL}gridlens.svg`} alt="GridLens logo" className="brand-logo" />
             <div>
               <h1>GridLens</h1>
               <p className="brand-subtitle">High Performance Power Grid Simulation and Contingency Analysis.</p>
@@ -456,6 +509,39 @@ export default function App() {
             <div className="panel-actions">
               <button type="button" onClick={() => void bootstrapApp()}>
                 Retry Connection
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (authEnabled && authReady && !currentUser) {
+    return (
+      <div className="app-shell outage-shell">
+        <section className="outage-card">
+          <div className="hero-topline">
+            <p className="eyebrow">Secure Access</p>
+          </div>
+          <div className="brand-lockup">
+            <img src={`${import.meta.env.BASE_URL}gridlens.svg`} alt="GridLens logo" className="brand-logo" />
+            <div>
+              <h1>GridLens</h1>
+              <p className="brand-subtitle">Sign in with your email before viewing your private GridPACK runs and outputs.</p>
+            </div>
+          </div>
+          <div className="outage-panel">
+            <span className="status-pill ready">Authentication Required</span>
+            <h2>Sign in to continue.</h2>
+            <p className="hero-copy">
+              This deployment uses Amazon Cognito for email-and-password authentication and keeps each user limited to
+              their own projects, runs, and downloads.
+            </p>
+            {authError ? <p className="muted">{authError}</p> : null}
+            <div className="panel-actions">
+              <button type="button" onClick={() => void beginSignIn()}>
+                Sign In With Email
               </button>
             </div>
           </div>
@@ -496,10 +582,15 @@ export default function App() {
               <button type="button" className="guide-button subtle-button" onClick={() => setGuideOpen(true)}>
                 Open User Guide
               </button>
+              {authEnabled && currentUser ? (
+                <button type="button" className="subtle-button" onClick={() => signOut()}>
+                  Sign Out
+                </button>
+              ) : null}
             </div>
           </div>
           <div className="brand-lockup">
-            <img src="/gridlens.svg" alt="GridLens logo" className="brand-logo" />
+            <img src={`${import.meta.env.BASE_URL}gridlens.svg`} alt="GridLens logo" className="brand-logo" />
             <div>
               <h1>GridLens</h1>
               <p className="brand-subtitle">High Performance Power Grid Simulation and Contingency Analysis.</p>
@@ -509,6 +600,7 @@ export default function App() {
             Build projects from uploaded RAW inputs, generate GridPACK XML in the browser, launch runs on the API host,
             and download the outputs you need.
           </p>
+          {authEnabled && currentUser ? <p className="hero-copy auth-summary">Signed in as {currentUser.email || currentUser.username}.</p> : null}
           <label className="mode-switch theme-switch" aria-label="Theme mode toggle">
             <span className="mode-switch-label">Dark Mode</span>
             <button
@@ -528,6 +620,7 @@ export default function App() {
           <p>{message}</p>
           {error ? <p className="error-text">{error}</p> : null}
           <div className="status-meta">
+            {authEnabled && currentUser ? <span>{currentUser.email || currentUser.username}</span> : null}
             <span>{selectedProject ? selectedProject.name : "No project selected"}</span>
             <span>{selectedRun ? `${selectedRun.run_id} • ${selectedRun.status}` : "Pick a run to inspect analysis"}</span>
           </div>
@@ -1076,9 +1169,6 @@ export default function App() {
           {analysis ? (
             <AnalysisView
               analysis={analysis}
-              selectedProjectId={selectedProject?.project_id ?? ""}
-              selectedRunId={selectedRun?.run_id ?? ""}
-              runOutputs={runOutputs}
               graphVisibility={graphVisibility}
               controlAreaRows={controlAreaRows}
               filteredLineRows={filteredLineRows}
@@ -1093,8 +1183,16 @@ export default function App() {
               onClearVoltageGroups={() => setSelectedVoltageGroups([])}
             />
           ) : (
-            <p className="muted">No analysis loaded yet.</p>
+            <div className="empty-state-box">
+              <h3>No analysis loaded yet</h3>
+              <p className="muted">Generate charts for a completed run to view the linked graphs and selection table here.</p>
+            </div>
           )}
+          <RunDownloadsSection
+            selectedProjectId={selectedProject?.project_id ?? ""}
+            selectedRunId={selectedRun?.run_id ?? ""}
+            runOutputs={runOutputs}
+          />
         </section>
       </main>
 
@@ -1105,9 +1203,6 @@ export default function App() {
 
 type AnalysisViewProps = {
   analysis: InteractiveAnalysis;
-  selectedProjectId: string;
-  selectedRunId: string;
-  runOutputs: OutputFileSummary[];
   graphVisibility: GraphVisibility;
   controlAreaRows: { control_area: string; average_utilization_pct: number; line_count: number }[];
   filteredLineRows: UtilizationRow[];
@@ -1124,9 +1219,6 @@ type AnalysisViewProps = {
 
 function AnalysisView({
   analysis,
-  selectedProjectId,
-  selectedRunId,
-  runOutputs,
   graphVisibility,
   controlAreaRows,
   filteredLineRows,
@@ -1438,25 +1530,39 @@ function AnalysisView({
         </div>
       </div>
 
-      <div className="table-card chart-card-wide">
-        <div className="download-section-header">
-          <div>
-            <h3>Run Downloads</h3>
-            <p className="muted">Export the full run package or download individual output files after reviewing the charts and tables.</p>
-          </div>
-          {selectedProjectId && selectedRunId ? (
-            <a
-              className="button-link"
-              href={runExportDownloadUrl(selectedProjectId, selectedRunId)}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Export Run ZIP
-            </a>
-          ) : null}
+    </div>
+  );
+}
+
+function RunDownloadsSection({
+  selectedProjectId,
+  selectedRunId,
+  runOutputs,
+}: {
+  selectedProjectId: string;
+  selectedRunId: string;
+  runOutputs: OutputFileSummary[];
+}) {
+  return (
+    <div className="table-card">
+      <div className="download-section-header">
+        <div>
+          <h3>Run Downloads</h3>
+          <p className="muted">Export the full run package or download individual output files even if charts have not been generated yet.</p>
         </div>
-        <div className="download-section">
-          {runOutputs.length ? (
+        {selectedProjectId && selectedRunId ? (
+          <button
+            type="button"
+            className="button-link"
+            onClick={() => void downloadRunExport(selectedProjectId, selectedRunId)}
+          >
+            Export Run ZIP
+          </button>
+        ) : null}
+      </div>
+      <div className="download-section">
+        {selectedProjectId && selectedRunId ? (
+          runOutputs.length ? (
             <div className="download-grid">
               {runOutputs.map((file) => (
                 <div key={file.relative_path} className="output-file-row">
@@ -1466,23 +1572,22 @@ function AnalysisView({
                       {file.relative_path} • {formatBytes(file.size_bytes)}
                     </p>
                   </div>
-                  {selectedProjectId && selectedRunId ? (
-                    <a
-                      className="subtle-link"
-                      href={runOutputDownloadUrl(selectedProjectId, selectedRunId, file.relative_path)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Download
-                    </a>
-                  ) : null}
+                  <button
+                    type="button"
+                    className="subtle-link"
+                    onClick={() => void downloadRunOutput(selectedProjectId, selectedRunId, file.relative_path)}
+                  >
+                    Download
+                  </button>
                 </div>
               ))}
             </div>
           ) : (
             <p className="muted">No output files discovered for this run yet.</p>
-          )}
-        </div>
+          )
+        ) : (
+          <p className="muted">Select a run to enable the ZIP export and per-file downloads.</p>
+        )}
       </div>
     </div>
   );

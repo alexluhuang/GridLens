@@ -125,3 +125,15 @@ export type VoltageGroupSummary = {
   average_utilization_pct: number;
   line_count: number;
 };
+
+export type AuthMetadata = {
+  enabled: boolean;
+  mode: string;
+};
+
+export type CurrentUser = {
+  authenticated: boolean;
+  subject: string;
+  username: string;
+  email: string;
+};

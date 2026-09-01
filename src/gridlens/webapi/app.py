@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -36,10 +36,18 @@ from gridlens.webapi.service import (
     load_project,
     load_run,
     project_root_for_name,
+    projects_root_for_user,
     project_summary,
     read_text_file,
     resolve_run_file,
     run_summary,
+)
+from gridlens.webapi.security import (
+    AuthenticatedUser,
+    CognitoTokenVerifier,
+    auth_metadata,
+    get_current_user,
+    load_auth_settings,
 )
 
 
@@ -107,6 +115,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="GridLens API", version="0.1.0")
     app.state.projects_root = ensure_projects_root(os.environ.get("GRIDLENS_API_PROJECTS_ROOT"))
     app.state.runtime = ApiRuntimeState()
+    app.state.auth_settings = load_auth_settings()
+    app.state.token_verifier = CognitoTokenVerifier(app.state.auth_settings) if app.state.auth_settings.enabled else None
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins_from_env(),
@@ -119,18 +129,32 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/auth")
+    def get_auth() -> dict[str, Any]:
+        return auth_metadata(app.state.auth_settings)
+
+    @app.get("/api/me")
+    def get_me(user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
+        return {
+            "authenticated": user.is_authenticated,
+            "subject": user.subject,
+            "username": user.username,
+            "email": user.email,
+        }
+
     @app.get("/api/projects")
-    def get_projects() -> dict[str, Any]:
-        return {"projects": list_projects(app.state.projects_root)}
+    def get_projects(user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
+        return {"projects": list_projects(projects_root_for_user(app.state.projects_root, user))}
 
     @app.post("/api/projects")
     async def create_project(
         name: str = Form(...),
         xml_file_name: str = Form(""),
         input_files: list[UploadFile] = File(...),
+        user: AuthenticatedUser = Depends(get_current_user),
     ) -> dict[str, Any]:
         try:
-            root_dir = project_root_for_name(app.state.projects_root, name)
+            root_dir = project_root_for_name(projects_root_for_user(app.state.projects_root, user), name)
             project = Project(name, root_dir)
             root_dir.mkdir(parents=True, exist_ok=True)
             temp_dir = root_dir / ".uploads"
@@ -148,9 +172,9 @@ def create_app() -> FastAPI:
         return {"project": project_summary(project, project_data)}
 
     @app.get("/api/projects/{project_id}")
-    def get_project(project_id: str) -> dict[str, Any]:
+    def get_project(project_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
         try:
-            project, project_data = load_project(app.state.projects_root, project_id)
+            project, project_data = load_project(projects_root_for_user(app.state.projects_root, user), project_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {
@@ -159,9 +183,9 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/projects/{project_id}/configuration")
-    def get_project_configuration(project_id: str) -> dict[str, Any]:
+    def get_project_configuration(project_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
         try:
-            project, project_data = load_project(app.state.projects_root, project_id)
+            project, project_data = load_project(projects_root_for_user(app.state.projects_root, user), project_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         values, network_names, monitor_branches, warning = load_project_configuration(project, project_data)
@@ -174,9 +198,13 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/projects/{project_id}/configuration")
-    def save_project_configuration(project_id: str, payload: ConfigurationPayload) -> dict[str, Any]:
+    def save_project_configuration(
+        project_id: str,
+        payload: ConfigurationPayload,
+        user: AuthenticatedUser = Depends(get_current_user),
+    ) -> dict[str, Any]:
         try:
-            project, project_data = load_project(app.state.projects_root, project_id)
+            project, project_data = load_project(projects_root_for_user(app.state.projects_root, user), project_id)
             updated = save_input_configuration(project, project_data, payload.to_values())
             values, network_names, monitor_branches, warning = load_project_configuration(project, updated)
         except FileNotFoundError as exc:
@@ -193,9 +221,9 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/projects/{project_id}/runs")
-    def get_runs(project_id: str) -> dict[str, Any]:
+    def get_runs(project_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
         try:
-            project, project_data = load_project(app.state.projects_root, project_id)
+            project, project_data = load_project(projects_root_for_user(app.state.projects_root, user), project_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"runs": list_runs(project, project_data)}
@@ -216,9 +244,10 @@ def create_app() -> FastAPI:
         extra_docker_args: str = Form(""),
         container_name: str = Form(""),
         notes: str = Form(""),
+        user: AuthenticatedUser = Depends(get_current_user),
     ) -> dict[str, Any]:
         try:
-            project, project_data = load_project(app.state.projects_root, project_id)
+            project, project_data = load_project(projects_root_for_user(app.state.projects_root, user), project_id)
             request = build_run_request(
                 project_data,
                 project.create_run_folder(),
@@ -249,42 +278,47 @@ def create_app() -> FastAPI:
         return {"run": run_summary(project, project_data, request.run_dir)}
 
     @app.get("/api/projects/{project_id}/runs/{run_id}")
-    def get_run(project_id: str, run_id: str) -> dict[str, Any]:
+    def get_run(project_id: str, run_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
         try:
-            reference = load_run(app.state.projects_root, project_id, run_id)
+            reference = load_run(projects_root_for_user(app.state.projects_root, user), project_id, run_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"run": run_summary(reference.project, reference.project_data, reference.run_dir)}
 
     @app.get("/api/projects/{project_id}/runs/{run_id}/log", response_class=PlainTextResponse)
-    def get_run_log(project_id: str, run_id: str) -> str:
+    def get_run_log(project_id: str, run_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> str:
         try:
-            reference = load_run(app.state.projects_root, project_id, run_id)
+            reference = load_run(projects_root_for_user(app.state.projects_root, user), project_id, run_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return read_text_file(reference.run_dir / "logs" / "run.log")
 
     @app.get("/api/projects/{project_id}/runs/{run_id}/outputs")
-    def get_run_outputs(project_id: str, run_id: str) -> dict[str, Any]:
+    def get_run_outputs(project_id: str, run_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
         try:
-            reference = load_run(app.state.projects_root, project_id, run_id)
+            reference = load_run(projects_root_for_user(app.state.projects_root, user), project_id, run_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"files": list_run_outputs(reference.run_dir)}
 
     @app.get("/api/projects/{project_id}/runs/{run_id}/outputs/download/{relative_path:path}")
-    def download_run_output(project_id: str, run_id: str, relative_path: str) -> FileResponse:
+    def download_run_output(
+        project_id: str,
+        run_id: str,
+        relative_path: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+    ) -> FileResponse:
         try:
-            reference = load_run(app.state.projects_root, project_id, run_id)
+            reference = load_run(projects_root_for_user(app.state.projects_root, user), project_id, run_id)
             target = resolve_run_file(reference.run_dir, relative_path)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return FileResponse(target, filename=target.name)
 
     @app.get("/api/projects/{project_id}/runs/{run_id}/export")
-    def download_run_export(project_id: str, run_id: str) -> FileResponse:
+    def download_run_export(project_id: str, run_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> FileResponse:
         try:
-            reference = load_run(app.state.projects_root, project_id, run_id)
+            reference = load_run(projects_root_for_user(app.state.projects_root, user), project_id, run_id)
             zip_path = export_run_zip(reference.run_dir)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -298,9 +332,10 @@ def create_app() -> FastAPI:
         include_two_winding_transformers: bool = Form(False),
         include_three_winding_transformers: bool = Form(False),
         include_transformer_equivalents: bool = Form(False),
+        user: AuthenticatedUser = Depends(get_current_user),
     ) -> dict[str, Any]:
         try:
-            reference = load_run(app.state.projects_root, project_id, run_id)
+            reference = load_run(projects_root_for_user(app.state.projects_root, user), project_id, run_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

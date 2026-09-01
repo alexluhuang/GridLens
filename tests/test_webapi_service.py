@@ -5,7 +5,8 @@ import json
 import pytest
 
 from gridlens.core.project import Project
-from gridlens.webapi.service import list_projects, load_project_configuration, load_run, read_run_status, resolve_run_file
+from gridlens.webapi.security import AuthenticatedUser
+from gridlens.webapi.service import list_projects, load_project_configuration, load_run, projects_root_for_user, read_run_status, resolve_run_file
 
 try:
     from fastapi.testclient import TestClient
@@ -85,6 +86,19 @@ def test_load_project_configuration_supports_raw_only_project(tmp_path) -> None:
     assert network_names == ["network.raw"]
     assert monitor_branches == []
     assert warning == ""
+
+
+def test_projects_root_for_authenticated_user_is_namespaced(tmp_path) -> None:
+    user = AuthenticatedUser(
+        subject="user-subject-123",
+        username="person@example.com",
+        email="person@example.com",
+    )
+
+    resolved = projects_root_for_user(tmp_path / "api-projects", user)
+
+    assert resolved.parent.name == "users"
+    assert resolved.name == user.storage_namespace
 
 
 def test_resolve_run_file_rejects_escape_paths(tmp_path) -> None:

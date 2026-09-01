@@ -179,6 +179,13 @@ button {
   font-size: 0.98rem;
 }
 
+.auth-summary {
+  margin-top: -4px;
+  font-size: 0.88rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .hero-status {
   display: flex;
   flex-direction: column;
@@ -610,6 +617,24 @@ button:disabled {
   border-radius: 0;
   background: var(--bg-panel-strong);
   border: 1px solid var(--border-soft);
+}
+
+.empty-state-box {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  margin-bottom: 16px;
+  padding: 18px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel-strong);
+}
+
+.empty-state-box h3 {
+  margin: 0;
+}
+
+.empty-state-box p {
+  margin: 0;
 }
 
 .chart-card-actions,

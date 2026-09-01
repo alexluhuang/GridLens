@@ -39,8 +39,11 @@ gridlens-api
 ```
 
 The API defaults to `http://0.0.0.0:8000` and stores uploaded web projects under `~/GridLensWebProjects`.
+If `GRIDLENS_AUTH_MODE=cognito`, the API verifies Cognito bearer tokens and automatically scopes every user to a private per-user project root on disk.
 
 - `GET /health`
+- `GET /api/auth`
+- `GET /api/me`
 - `GET /api/projects`
 - `POST /api/projects`
 - `GET /api/projects/{project_id}`
@@ -57,6 +60,16 @@ The API defaults to `http://0.0.0.0:8000` and stores uploaded web projects under
 Set `GRIDLENS_API_CORS_ORIGINS` to allow a local frontend such as Vite or Next.js to call an API hosted on AWS.
 The browser client scaffold lives in [webapp/README.md](webapp/README.md).
 Deployment guidance for a hosted web app lives in [docs/web_deployment.md](docs/web_deployment.md).
+
+## Browser Deployment Pattern
+
+The recommended hosted architecture is:
+
+- GitHub Pages for the static React frontend
+- EC2 for the FastAPI backend, Docker, GridPACK execution, and user file storage
+- Amazon Cognito for email-and-password authentication
+
+In this setup, the frontend authenticates through Cognito and sends bearer tokens to the EC2 API. The API then limits each user to their own projects, runs, logs, ZIP exports, and output files.
 
 ## Manual Docker Equivalent
 
