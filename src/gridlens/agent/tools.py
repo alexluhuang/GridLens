@@ -82,6 +82,10 @@ def tool(method):
 
 
 class ToolService:
+    """The tool implementations, bound to one session.
+
+    Instances are cheap and short-lived. `sources` and `warnings` accumulate during a single call
+    and are reset by `_invoke`, so they belong to the call in flight rather than to the session."""
     def __init__(self, context: SessionContext) -> None:
         self.context = context
         self.sources: dict[str, dict] = {}
