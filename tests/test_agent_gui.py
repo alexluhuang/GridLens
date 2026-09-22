@@ -74,7 +74,7 @@ def test_streamed_answer_replaced_by_cited_final_and_sources_show_errors(agent_c
     tab.update_sources = update_sources
     assert "Agent\npartial" in tab.transcript.toPlainText()
     records = [
-        {"call_id": "T1", "phase": "completed", "tool": "rank_branch_loading", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 1, "truncated": False, "filters": {"facility": "line"}}, "warnings": ["failed cases included"], "provenance": {"sources": [{"path": "runs/run_a/reports/table.csv"}]}}},
+        {"call_id": "T1", "phase": "completed", "tool": "rank_branch_loading", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 3, "truncated": True, "requested_limit": 2, "max_rows_per_call": 50, "truncation_reasons": ["byte_limit"], "analyzed_facility_count": 3, "filters": {"facility": "line"}}, "warnings": ["failed cases included"], "provenance": {"sources": [{"path": "runs/run_a/reports/table.csv"}]}}},
         {"call_id": "T2", "phase": "completed", "tool": "get_run_method", "outcome": "error", "result": {"error": {"code": "INVALID_ARTIFACT", "remedy": "Rebuild the cache."}}},
     ]
     (agent_context.directory / "tool_calls.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n")
@@ -86,6 +86,9 @@ def test_streamed_answer_replaced_by_cited_final_and_sources_show_errors(agent_c
     assert "INVALID_ARTIFACT: Rebuild the cache." in tab.sources.toPlainText()
     assert "warning: failed cases included" in tab.sources.toPlainText()
     assert "facility" in tab.sources.toPlainText()
+    assert "requested limit: 2; maximum per call: 50" in tab.sources.toPlainText()
+    assert "truncation reason: byte_limit" in tab.sources.toPlainText()
+    assert "matching facilities used: 3" in tab.sources.toPlainText()
     tab.worker = None
     assert tab.shutdown()
     tab.deleteLater()

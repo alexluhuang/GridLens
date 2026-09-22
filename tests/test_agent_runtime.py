@@ -10,12 +10,14 @@ import time
 
 import pytest
 
-from gridlens.agent.controller import AgentController, cite_uncited_turn, disclose_tool_failures, disclose_truncated_results, normalize_citations, qualify_capacity_answer
+from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, verified_group_mean_answer
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
 from gridlens.agent.process import mcp_command, minimal_environment
 from gridlens.agent.prompt import SYSTEM_PROMPT
 from gridlens.agent.runtime import PreparedRuntime, RuntimeStatus
+from gridlens.agent.session import SessionContext
+from gridlens.agent.tools import ToolService
 
 
 @pytest.mark.parametrize("url", ["https://example.com", "http://192.168.1.2:11434", "http://user:pass@127.0.0.1:11434", "file:///tmp/model", "http://127.0.0.1:11434/proxy", "http://127.0.0.1:11434?url=remote"])
@@ -132,10 +134,78 @@ def test_uncited_model_answer_reports_only_current_successful_sources():
     assert cite_uncited_turn("120% [T2]", sources) == "120% [T2]"
     assert cite_uncited_turn("No data", []) == "No data"
     assert cite_uncited_turn("No data", [{"call_id": "T2", "outcome": "error"}]) == "No data"
-    assert disclose_truncated_results("120%", [{"call_id": "T2", "result": {"data": {"truncated": True}}}]).endswith("[T2] were truncated by row limits; other facilities may be omitted.")
+    note = disclose_truncated_results("120%", [{"call_id": "T2", "result": {"data": {"truncated": True, "returned": 10, "total_matching": 6823}}}])
+    assert "[T2] returned 10 of 6,823 matching rows" in note
+    assert "Omitted rows were not supplied to the model" in note
     assert disclose_truncated_results("No data", []) == "No data"
     assert "Build / refresh analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
+    capped = [{"call_id": "T2", "outcome": "error", "result": {"error": {"code": "LIMIT_EXCEEDS_CAP"}, "data": {"max_rows_per_call": 50}}}]
+    assert disclose_tool_failures("All 6,823 rows returned", capped) == "GridLens rejected [T2]: the requested limit exceeds 50 rows per call. No rows were returned. Use summarize_loading for full-run averages."
     assert qualify_capacity_answer("20 percentage points", "How much extra capacity?").endswith("requires a separate power-flow study.")
+
+
+def test_group_mean_answer_requires_complete_audited_summary(agent_context):
+    """Use a scoped fixture to reject ranked-row averages and format all-row voltage means."""
+    service = ToolService(agent_context)
+    question = "Rank all voltage categories by mean max utilization."
+    service.rank_branch_loading("run_a", limit=1)
+    ranked_only = verified_group_mean_answer("The mean is 120%", question, session_sources(agent_context.directory), ("run_a",))
+    assert "1 of 3 facilities" in ranked_only
+    assert "120%" not in ranked_only
+    service.summarize_loading("run_a", group_by="voltage")
+    complete = verified_group_mean_answer("The mean is 120%", question, session_sources(agent_context.directory), ("run_a",))
+    assert "across all 3 matching facilities" in complete
+    assert "230-344 kV: 103.3%" in complete
+    assert "The mean is 120%" not in complete
+    assert "[T2]" in complete
+
+
+def test_group_mean_scope_does_not_substitute_all_areas_for_filters():
+    """Leave area- and cutoff-filtered means to explicit tool calls instead of an all-area fallback."""
+    assert group_mean_request("Mean line utilization by voltage group in run_a") == ("voltage", "line")
+    assert group_mean_request("Mean line utilization by voltage group for lines at least 50 kV") == ("voltage", "line")
+    assert group_mean_request("Mean line utilization by voltage group in East") is None
+    assert group_mean_request("Mean line utilization by voltage group for area East") is None
+    assert group_mean_request("Mean line utilization by voltage group above 230 kV") is None
+
+
+def test_controller_repairs_wrong_facility_scope_for_group_means(agent_context, monkeypatch):
+    """Check that a model's all-facility summary is replaced by a line-only audited summary."""
+    context = SessionContext.create(agent_context.project_root, ("run_a",), "fixture:model", agent_context.endpoint)
+    adapter = StubAdapter('print(\'{"type":"result","exit_code":0,"text":"The mean is 95%"}\')')
+    controller = AgentController(context, adapter)
+
+    def model_answer(process, emit, buffers):
+        # Simulate a model using the right summary tool with the wrong facility filter.
+        ToolService(context).summarize_loading("run_a", group_by="voltage", facility="all")
+        process.wait(timeout=2)
+        return "The mean is 95%", 0
+
+    monkeypatch.setattr(controller, "_consume_output", model_answer)
+    answer = controller.run_turn("Rank all voltage groups by mean maximum observed line utilization.", lambda event: None)
+    summaries = [row for row in session_sources(context.directory) if row["tool"] == "summarize_loading"]
+    assert [row["arguments"]["facility"] for row in summaries] == ["all", "line"]
+    assert "across all 3 matching facilities" in answer
+    assert "230-344 kV: 103.3%" in answer
+    assert "95%" not in answer
+    assert "[T2]" in answer
+
+
+def test_row_scope_questions_use_audited_counts_and_refusals(agent_context):
+    """Read real fixture tool audits to correct model claims about rows, caps, and group populations."""
+    service = ToolService(agent_context)
+    service.rank_branch_loading("run_a", limit=1)
+    first = audited_row_scope_answer("All rows were returned", "How many rows were displayed?", session_sources(agent_context.directory))
+    assert "[T1] returned 1 of 3 matching facility rows; truncated: True" in first
+    assert "All rows were returned" not in first
+    service.rank_branch_loading("run_a", limit=7000)
+    second = audited_row_scope_answer("All rows were returned", "Did T2 return 7,000 rows?", session_sources(agent_context.directory))
+    assert "[T2] returned no rows because the call failed with LIMIT_EXCEEDS_CAP" in second
+    assert "Requested row limit: 7,000; maximum permitted per call: 50" in second
+    service.summarize_loading("run_a", group_by="voltage")
+    third = audited_row_scope_answer("The average used one row", "How many rows were used for T3?", session_sources(agent_context.directory))
+    assert "[T3] returned 1 of 1 matching category rows" in third
+    assert "all 3 matching facilities" in third
 
 
 class StubAdapter(HermesAdapter):

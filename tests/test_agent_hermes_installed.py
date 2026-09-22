@@ -1,6 +1,7 @@
 """Opt-in compatibility/evaluation tests; all model prompts use synthetic data."""
 from __future__ import annotations
 
+import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -173,6 +174,47 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
         and record["missing_cache"]["rebuild_instruction"]
         for record in records
     ), records
+
+
+@pytest.mark.skipif(os.environ.get("GRIDLENS_TEST_LOCAL_MODELS") != "1", reason="Set GRIDLENS_TEST_LOCAL_MODELS=1 for installed Ollama model evaluation.")
+def test_installed_local_models_use_complete_voltage_groups(agent_project):
+    """Use an 11-line fixture to check each installed model chooses the full-group tool and answer."""
+    run = agent_project / "runs/run_a"
+    for name in ("pflow_mm", "branch_metadata"):
+        path = run / "reports/interactive_tables" / f"{name}.csv"
+        with path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        template = rows[0]
+        for index in range(8):
+            kv, maximum = (69, 40) if index < 4 else (400, 60)
+            rows.append({**template, "line_id": f"extra-{index}", "section": "", "from_base_kv": kv, "to_base_kv": kv, "max_utilization_pct": maximum})
+        with path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(template))
+            writer.writeheader()
+            writer.writerows(rows)
+    manifest = run / "reports/interactive_analysis_manifest.json"
+    manifest.write_text(manifest.read_text())
+    adapter = HermesAdapter()
+    status = adapter.probe()
+    assert status.ready, status.message
+    selected = os.environ.get("GRIDLENS_TEST_MODEL_NAMES", "").split(",") if os.environ.get("GRIDLENS_TEST_MODEL_NAMES") else [model for model in PLAN_TARGET_MODELS if model in status.models]
+    if not selected:
+        pytest.skip("Neither target model is installed; set GRIDLENS_TEST_MODEL_NAMES to choose installed models.")
+    assert set(selected).issubset(status.models)
+    records = []
+    for model in selected:
+        context = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
+        events = []
+        answer = AgentController(context, HermesAdapter(status.endpoint)).run_turn("In run_a, rank all voltage groups by mean maximum observed line utilization across all monitored lines. Include the percentage for each group.", events.append)
+        summaries = [row for row in session_sources(context.directory) if row["tool"] == "summarize_loading" and row["outcome"] == "ok" and row["arguments"].get("group_by") == "voltage"]
+        repaired = any(event.kind == "tool_start" and event.text == "summarize_loading (verified scope)" for event in events)
+        correct = bool(summaries and summaries[-1]["result"]["data"].get("analyzed_facility_count") == 11 and not summaries[-1]["result"]["data"].get("truncated"))
+        record = {"model": model, "summary_tool": bool(summaries), "model_selected_correct_scope": bool(correct and not repaired), "controller_repaired_scope": repaired, "full_population": correct, "answer": answer}
+        records.append(record)
+        print(json.dumps(record))
+    output = Path(os.environ.get("GRIDLENS_TEST_GROUP_EVAL_OUTPUT", str(agent_project / "voltage_group_evaluation.json")))
+    output.write_text(json.dumps(records, indent=2))
+    assert all(record["summary_tool"] and record["full_population"] and all(value in record["answer"] for value in ("103.3%", "60.0%", "40.0%", "all 11 matching facilities")) for record in records), records
 
 
 @pytest.mark.skipif(not os.environ.get("GRIDLENS_TEST_SAMPLE_PROJECT"), reason="Set GRIDLENS_TEST_SAMPLE_PROJECT for a read-only cache benchmark.")

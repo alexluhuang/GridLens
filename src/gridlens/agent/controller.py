@@ -25,6 +25,7 @@ from gridlens.agent.policy import AgentError
 from gridlens.agent.prompt import turn_prompt
 from gridlens.agent.runtime import RuntimeAdapter, RuntimeEvent
 from gridlens.agent.session import SessionContext, append_event, scoped_path, write_json
+from gridlens.agent.tools import MAX_ROWS, ToolService
 
 
 MAX_PROMPT_CHARS = 12_000
@@ -163,11 +164,29 @@ class AgentController:
             if buffers["stdout"].strip() or return_code or final is None or not final.strip():
                 raise AgentError("RUNTIME_INCOMPLETE", f"{self.runtime_label} exited without a complete answer. Check the runtime and the selected model, then start a new session.")
             sources = session_sources(self.context.directory)
+            request = group_mean_request(prompt)
+            if request and len(self.context.run_ids) == 1:
+                group_by, facility = request
+                current = sources[prior_calls:]
+                complete = any(
+                    row.get("tool") == "summarize_loading" and row.get("outcome") == "ok"
+                    and row.get("arguments", {}).get("group_by") == group_by
+                    and row.get("arguments", {}).get("facility") == facility
+                    and not row["result"]["data"].get("truncated")
+                    for row in current
+                )
+                if not complete:
+                    emit(RuntimeEvent("tool_start", "summarize_loading (verified scope)"))
+                    summary = ToolService(self.context).summarize_loading(self.context.run_ids[0], group_by=group_by, facility=facility, limit=MAX_ROWS)
+                    emit(RuntimeEvent("tool_result", "summarize_loading (verified scope)", {"is_error": bool(summary["error"])}))
+                    sources = session_sources(self.context.directory)
             final = normalize_citations(final, sources)
             final = cite_uncited_turn(final, sources[prior_calls:])
             final = disclose_truncated_results(final, sources[prior_calls:])
             final = disclose_tool_failures(final, sources[prior_calls:])
             final = qualify_capacity_answer(final, prompt)
+            final = verified_group_mean_answer(final, prompt, sources[prior_calls:], self.context.run_ids)
+            final = audited_row_scope_answer(final, prompt, sources)
             self.history.append({"role": "assistant", "text": final})
             self.context.message("assistant", final)
             self.context.set_status("completed")
@@ -231,19 +250,130 @@ def cite_uncited_turn(answer: str, turn_sources: list[dict]) -> str:
 
 
 def disclose_truncated_results(answer: str, turn_sources: list[dict]) -> str:
-    """Return an answer with a scope note for truncated turn_sources in run_turn."""
-    ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("data") or {}).get("truncated")]
-    if not ids or "truncat" in answer.lower() or "partial" in answer.lower():
+    """Return answer with exact truncated turn_sources counts for run_turn."""
+    notes = []
+    for row in turn_sources:
+        data = ((row.get("result") or {}).get("data") or {})
+        if data.get("truncated"):
+            notes.append(f"[{row['call_id']}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching rows")
+    if not notes:
         return answer
-    return answer.rstrip() + "\n\nGridLens note: Tool results " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " were truncated by row limits; other facilities may be omitted."
+    return answer.rstrip() + "\n\nGridLens audit: " + "; ".join(notes[:10]) + ". Omitted rows were not supplied to the model; use a full-population summary for group means."
 
 
 def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
     """Return an answer with a rebuild note for stale-cache turn_sources in run_turn."""
     ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT"]
-    if not ids:
+    if ids:
+        return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " reported ANALYSIS_NOT_BUILT. The current cache is unavailable; no returned rows do not establish that congestion is absent. Use Build / refresh analysis and ask again."
+    capped = [row for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "LIMIT_EXCEEDS_CAP"]
+    if capped and not any(row.get("outcome") == "ok" for row in turn_sources):
+        calls = ", ".join(f"[{row['call_id']}]" for row in capped[:10])
+        maximum = capped[0]["result"]["data"]["max_rows_per_call"]
+        return f"GridLens rejected {calls}: the requested limit exceeds {maximum} rows per call. No rows were returned. Use summarize_loading for full-run averages."
+    return answer
+
+
+def group_mean_request(question: str) -> tuple[str, str] | None:
+    """Map a question to (group, facility), or None; run_turn uses it for whole-run means."""
+    words = question.casefold()
+    if not re.search(r"\b(mean|average)\b", words) or not re.search(r"\b(loading|utilization)\b", words):
+        return None
+    # A named area or voltage cutoff needs a parsed filter; never substitute an all-area result.
+    if re.search(r"\b(?:in|within|for)\s+(?:the\s+)?(?:control\s+)?area\s+\S+", words):
+        return None
+    cutoff = re.search(r"\b(at least|above|below|under|over)\s+(\d+(?:\.\d+)?)\s*kv\b", words)
+    if cutoff and (cutoff.group(1) != "at least" or float(cutoff.group(2)) != 50.0):
+        return None
+    if re.search(r"\b(?:in|within)\s+(?!run[_ -]?\w+|(?:this|the)\s+(?:run|case|project|system)|all\b|descending\b|ascending\b)[a-z][\w-]*", words):
+        return None
+    if re.search(r"\bvoltage\s+(groups?|categories|classes)\b|\b\d+\s*[-–]\s*\d+\s*kv\b", words):
+        group_by = "voltage"
+    elif re.search(r"\b(control\s+)?areas?\b", words):
+        group_by = "area"
+    else:
+        return None
+    all_types = bool(re.search(r"\b(all facility types|all branch types|including transformers)\b", words))
+    if "transformer" in words and "non-transformer" not in words and not all_types:
+        return None
+    return group_by, "all" if all_types else "line"
+
+
+def verified_group_mean_answer(answer: str, question: str, turn_sources: list[dict], run_ids: tuple[str, ...]) -> str:
+    """Return an answer from complete turn_sources for a question/run_ids; run_turn uses it for group means."""
+    request = group_mean_request(question)
+    if request is None or len(run_ids) != 1:
         return answer
-    return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " reported ANALYSIS_NOT_BUILT. The current cache is unavailable; no returned rows do not establish that congestion is absent. Use Build / refresh analysis and ask again."
+    group_by, facility = request
+    if group_by == "voltage":
+        key, title, mean_label = "voltage_group", "Voltage groups", "voltage-group"
+    else:
+        key, title, mean_label = "control_area", "Control areas", "control-area"
+    matching = [
+        row for row in turn_sources
+        if row.get("tool") == "summarize_loading" and row.get("outcome") == "ok"
+        and row.get("arguments", {}).get("run_id") == run_ids[0]
+        and row.get("arguments", {}).get("group_by") == group_by
+        and row.get("arguments", {}).get("facility") == facility
+    ]
+    if not matching:
+        if any(((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT" for row in turn_sources):
+            return "The analysis cache is unavailable. Use Build / refresh analysis and ask again."
+        ranked = [row for row in turn_sources if row.get("tool") == "rank_branch_loading" and row.get("outcome") == "ok"]
+        if ranked:
+            data = ranked[-1]["result"]["data"]
+            return f"I cannot verify whole-run {mean_label} means from ranked rows. [{ranked[-1]['call_id']}] returned {data['returned']:,} of {data['total_matching']:,} facilities. A complete summarize_loading(group_by='{group_by}') result is needed."
+        return f"I cannot verify whole-run {mean_label} means without a complete summarize_loading(group_by='{group_by}', facility='{facility}') result."
+    source = matching[-1]
+    data = source["result"]["data"]
+    if data.get("truncated") or data.get("returned") != data.get("total_matching"):
+        return f"[{source['call_id']}] returned only {data.get('returned', 0)} of {data.get('total_matching', 0)} {title.lower()}; I cannot rank every category from it. Narrow the filters and ask again."
+    rows = sorted(data["rows"], key=lambda row: -float(row["average_utilization_pct"]))
+    count = data.get("analyzed_facility_count", 0)
+    filters = data.get("filters") or {}
+    area = filters.get("area") or "all control areas"
+    noun = "facility" if count == 1 else "facilities"
+    lines = [f"{title}, ranked by mean maximum observed loading across all {count:,} matching {noun} ({filters.get('facility', 'line')}, {area}, at least {filters.get('min_kv', 50):g} kV) [{source['call_id']}]:"]
+    lines.extend(f"- {row[key]}: {float(row['average_utilization_pct']):.1f}% ({row['line_count']:,} facilities)" for row in rows)
+    convergence = data.get("convergence") or {}
+    if convergence.get("failed"):
+        lines.append(f"The cache includes {convergence['failed']} failed or non-converged cases among {convergence['total']} recorded cases; their rows are not excluded from these maxima.")
+    lines.append("These means use all matching facilities, not just the displayed ranked rows.")
+    return "\n".join(lines)
+
+
+def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) -> str:
+    """Replace answer to a row-count question using sources; run_turn avoids model memory this way."""
+    words = question.casefold()
+    if not re.search(r"\b(rows?|results?)\b", words) or not re.search(r"\b(return\w*|display\w*|truncat\w*|limit|omit\w*|remaining|shown|view|used|based)\b", words):
+        return answer
+    requested_ids = {call.upper() for call in re.findall(r"\bT\d+\b", question, re.IGNORECASE)}
+    candidates = [row for row in sources if row.get("call_id") in requested_ids] if requested_ids else [row for row in sources if "returned" in ((row.get("result") or {}).get("data") or {})]
+    if not candidates:
+        return "No audited tool result matches that call ID." if requested_ids else answer
+    selected = candidates if requested_ids else candidates[-1:]
+    lines = []
+    for row in selected:
+        result = row.get("result") or {}
+        data = result.get("data") or {}
+        error = result.get("error") or {}
+        call_id = row["call_id"]
+        requested = data.get("requested_limit", (row.get("arguments") or {}).get("limit"))
+        maximum = data.get("max_rows_per_call", MAX_ROWS)
+        if error:
+            lines.append(f"[{call_id}] returned no rows because the call failed with {error.get('code', 'UNKNOWN')}.")
+        else:
+            kind = "category rows" if row.get("tool") == "summarize_loading" else "facility rows"
+            lines.append(f"[{call_id}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching {kind}; truncated: {bool(data.get('truncated'))}.")
+            if row.get("tool") == "summarize_loading":
+                lines.append(f"Its group means were computed from all {data.get('analyzed_facility_count', 0):,} matching facilities before limiting category rows.")
+        if requested is not None:
+            requested_text = f"{requested:,}" if isinstance(requested, int) else str(requested)
+            lines.append(f"Requested row limit: {requested_text}; maximum permitted per call: {maximum:,}.")
+        if data.get("truncation_reasons"):
+            lines.append("Truncation reason: " + ", ".join(data["truncation_reasons"]) + ".")
+    lines.append("Rows omitted by GridLens were not sent to the model. A runtime spillover file does not contain those omitted rows; use summarize_loading for full-population group means.")
+    return "\n".join(lines)
 
 
 def qualify_capacity_answer(answer: str, question: str) -> str:
