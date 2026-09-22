@@ -133,8 +133,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Run finished: {path.name}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        if not self.agent_tab.shutdown():
-            self.statusBar().showMessage("Waiting for the local agent to stop; close the window again shortly.")
+        stopped = [tab.shutdown() for tab in (self.agent_tab, self.branch_analysis_tab, self.transformer_analysis_tab)]
+        if not all(stopped):
+            self.statusBar().showMessage("Waiting for background work to stop; close the window again shortly.")
             event.ignore()
             return
         self.settings.save()

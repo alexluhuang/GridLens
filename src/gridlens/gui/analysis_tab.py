@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
-from contextlib import suppress
-import multiprocessing
 import os
 from pathlib import Path
-from queue import Empty
+import threading
 import textwrap
 import traceback
 from typing import Callable
@@ -45,9 +42,9 @@ from gridlens.analysis.csv_flat import (
 from gridlens.analysis.dataset import RunAnalysisDataset
 from gridlens.analysis.interactive import (
     AnalysisBuildResult,
-    build_interactive_analysis_result as _build_analysis_result,
 )
 from gridlens.analysis.progress import AnalysisProgress, ProgressCallback
+from gridlens.analysis.service import AnalysisService
 from gridlens.analysis.utilization import UtilizationBranchOptions
 from gridlens.core.project import Project
 from gridlens.gui.analysis_view_models import (
@@ -86,48 +83,12 @@ def _csv_flat_runtime_status(dataset: RunAnalysisDataset | None) -> str:
     return ""
 
 
-def _build_analysis_result_with_queue(
-    run_dir: Path,
-    branch_options: UtilizationBranchOptions,
-    progress_queue: object,
-) -> AnalysisBuildResult:
-    """Run the build in the worker subprocess, forwarding progress over a queue."""
-
-    def _forward(update: AnalysisProgress) -> None:
-        with suppress(Exception):
-            progress_queue.put(update)  # type: ignore[attr-defined]
-
-    return _build_analysis_result(run_dir, branch_options, _forward)
-
-
 def _build_analysis_result_in_process(
     run_dir: Path,
     branch_options: UtilizationBranchOptions,
     progress_callback: ProgressCallback | None = None,
 ) -> AnalysisBuildResult:
-    context = multiprocessing.get_context("spawn")
-    with context.Manager() as manager, ProcessPoolExecutor(max_workers=1, mp_context=context) as executor:
-        progress_queue = manager.Queue()
-        future = executor.submit(_build_analysis_result_with_queue, run_dir, branch_options, progress_queue)
-        while True:
-            update = _drain_one(progress_queue)
-            if update is not None and progress_callback is not None:
-                progress_callback(update)
-            if future.done():
-                if progress_callback is not None:
-                    while (update := _drain_one(progress_queue, block=False)) is not None:
-                        progress_callback(update)
-                break
-        return future.result()
-
-
-def _drain_one(progress_queue: object, *, block: bool = True) -> AnalysisProgress | None:
-    try:
-        if block:
-            return progress_queue.get(timeout=0.15)  # type: ignore[attr-defined]
-        return progress_queue.get_nowait()  # type: ignore[attr-defined]
-    except (Empty, EOFError, OSError):
-        return None
+    return AnalysisService.build(run_dir, branch_options, progress_callback, getattr(QThread.currentThread(), "cancelled", None))
 
 
 class AnalysisWorker(QThread):
@@ -139,6 +100,7 @@ class AnalysisWorker(QThread):
         super().__init__()
         self.run_dir = run_dir
         self.branch_options = branch_options
+        self.cancelled = threading.Event()
 
     def run(self) -> None:
         try:
@@ -188,12 +150,16 @@ class AnalysisTab(QWidget):
         set_button_role(self.analyze_button, "primary")
         self.analyze_button.setToolTip("Build interactive utilization charts for the selected run.")
         self.analyze_button.clicked.connect(self.generate_graphs)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setEnabled(False)
+        self.stop_button.clicked.connect(self.stop_analysis)
         run_label = QLabel("Run")
         run_label.setObjectName("sectionTitle")
         run_row.addWidget(run_label)
         run_row.addWidget(self.run_combo, stretch=1)
         run_row.addWidget(self.refresh_button)
         run_row.addWidget(self.analyze_button)
+        run_row.addWidget(self.stop_button)
         layout.addLayout(run_row)
 
         self.status_label = QLabel(
@@ -293,6 +259,9 @@ class AnalysisTab(QWidget):
 
     def _on_analysis_failed(self, error_text: str) -> None:
         self._end_progress()
+        if self.analysis_worker and self.analysis_worker.cancelled.is_set():
+            self.status_label.setText("Analysis cancelled.")
+            return
         QMessageBox.critical(self, "Analysis failed", error_text)
         self.status_label.setText("Analysis failed.")
 
@@ -325,6 +294,15 @@ class AnalysisTab(QWidget):
         self.run_combo.setEnabled(enabled)
         self.refresh_button.setEnabled(enabled)
         self.analyze_button.setEnabled(enabled)
+        self.stop_button.setEnabled(not enabled)
+
+    def stop_analysis(self) -> None:
+        if self.analysis_worker:
+            self.analysis_worker.cancelled.set()
+
+    def shutdown(self) -> bool:
+        self.stop_analysis()
+        return not self.analysis_worker or self.analysis_worker.wait(5000)
 
     def _build_chart_area(self, parent_layout: QVBoxLayout) -> None:
         self.control_area_sort = self._sort_combo(

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
+    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
     QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
@@ -16,6 +17,8 @@ from gridlens.agent.policy import AgentError
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
 from gridlens.agent.session import SessionContext, scoped_path
 from gridlens.core.project import Project
+from gridlens.analysis.csv_flat import CSV_FLAT_ALLOW_CPU_DASK_ENV, cpu_dask_fallback_warning
+from gridlens.gui.agent_jobs import AgentAnalysisWorker
 from gridlens.gui.results_view_models import read_run_status
 from gridlens.gui.theme import set_button_role, set_context_label
 
@@ -58,6 +61,7 @@ class AgentTab(QWidget):
         self.controller: AgentController | None = None
         self.worker: AgentWorker | None = None
         self.probe_worker: RuntimeProbe | None = None
+        self.analysis_worker: AgentAnalysisWorker | None = None
         self.runtime_status: RuntimeStatus | None = None
         self.session_directory: Path | None = None
         self._probed_once = False
@@ -94,6 +98,15 @@ class AgentTab(QWidget):
         form.addRow("Completed run", self.run_combo)
         form.addRow("Compare with", self.compare_combo)
         layout.addLayout(form)
+        build_row = QHBoxLayout()
+        self.build_button = QPushButton("Build / refresh analysis")
+        self.build_button.clicked.connect(self.build_analysis)
+        self.index_checkbox = QCheckBox("Include contingency drill-down index")
+        self.index_checkbox.setToolTip("Reads the flat results once and stores a Parquet index under reports/. This may take several minutes.")
+        build_row.addWidget(self.build_button)
+        build_row.addWidget(self.index_checkbox)
+        build_row.addStretch(1)
+        layout.addLayout(build_row)
         self.diagnostics = QLabel("Local inference only. Select Check runtime to detect Hermes and installed Ollama models.")
         self.diagnostics.setTextFormat(Qt.PlainText)
         self.diagnostics.setWordWrap(True)
@@ -212,7 +225,7 @@ class AgentTab(QWidget):
         self.diagnostics.setText("Endpoint changed. Check runtime before sending.")
 
     def check_runtime(self) -> None:
-        if self.probe_worker is not None or self.worker is not None:
+        if self.probe_worker is not None or self.worker is not None or self.analysis_worker is not None:
             return
         self.diagnostics.setText("Checking Hermes and local Ollama…")
         self.probe_worker = RuntimeProbe(self.endpoint.text(), self)
@@ -322,20 +335,51 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def stop(self) -> None:
+        if self.analysis_worker:
+            self.analysis_worker.cancelled.set()
+            self.activity.appendPlainText("Stopping analysis…")
         if self.worker:
             self.worker.controller.cancel()
             self.activity.appendPlainText("Stopping…")
 
     def update_controls(self) -> None:
-        busy = self.worker is not None
+        busy = self.worker is not None or self.analysis_worker is not None
         probing = self.probe_worker is not None
         for control in (self.endpoint, self.refresh_button, self.model_combo, self.run_combo, self.compare_combo, self.history_combo):
             control.setEnabled(not busy and not probing)
         self.stop_button.setEnabled(busy)
+        self.build_button.setEnabled(bool(not busy and not probing and self.project and self.run_combo.currentData()))
+        self.index_checkbox.setEnabled(not busy)
         prompt = self.input.toPlainText().strip()
         ready = self.runtime_status is not None and self.runtime_status.ready
         self.send_button.setEnabled(bool(not busy and not probing and not self._history_view and ready and self.project and self.run_combo.currentData() and prompt and len(prompt) <= MAX_PROMPT_CHARS))
         self.folder_button.setEnabled(self.session_directory is not None)
+
+    def build_analysis(self) -> None:
+        if not self.build_button.isEnabled() or not self.project:
+            return
+        try:
+            run_ids = dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value)
+            runs = [scoped_path(self.project.root_dir, Path("runs") / run_id, directory=True) for run_id in run_ids]
+            warning = next((text for run in runs if (text := cpu_dask_fallback_warning(run))), "")
+            if warning:
+                QMessageBox.warning(self, "CPU Dask fallback", warning)
+                os.environ[CSV_FLAT_ALLOW_CPU_DASK_ENV] = "1"
+            self.analysis_worker = AgentAnalysisWorker(runs, self.index_checkbox.isChecked(), self)
+            self.analysis_worker.progress.connect(self.activity.appendPlainText)
+            self.analysis_worker.outcome.connect(self.diagnostics.setText)
+            self.analysis_worker.finished.connect(self.analysis_finished)
+            self.analysis_worker.start()
+            self.update_controls()
+        except (AgentError, OSError) as exc:
+            self.diagnostics.setText(str(exc))
+
+    def analysis_finished(self) -> None:
+        worker = self.analysis_worker
+        self.analysis_worker = None
+        if worker:
+            worker.deleteLater()
+        self.update_controls()
 
     def refresh_history(self) -> None:
         self.history_combo.clear()
@@ -378,6 +422,8 @@ class AgentTab(QWidget):
 
     def shutdown(self) -> bool:
         self.stop()
+        if self.analysis_worker and not self.analysis_worker.wait(5000):
+            return False
         if self.worker and not self.worker.wait(12_000):
             return False
         if self.probe_worker and not self.probe_worker.wait(12_000):
