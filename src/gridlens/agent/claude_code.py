@@ -63,6 +63,7 @@ def _assert_tool_inventory(tools: object, servers: object) -> None:
 
 
 class ClaudeCodeAdapter:
+    """Drive Claude Code in print mode, restricted to the GridLens MCP tools."""
     provider = "claude"
     label = "Claude Code"
     route = "remote"

@@ -39,6 +39,7 @@ VERSION_PATTERN = re.compile(rb"Hermes Agent v(\d+\.\d+\.\d+)")
 
 
 class HermesAdapter:
+    """Drive the Hermes CLI against a local Ollama endpoint, through an isolated session profile."""
     provider = "hermes"
     label = "Hermes Agent + local Ollama"
     route = "loopback_only"

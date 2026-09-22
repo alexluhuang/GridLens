@@ -79,6 +79,7 @@ def _toml_inline_table(value: dict[str, str]) -> str:
 
 
 class CodexAdapter:
+    """Detect the Codex CLI and report its state. Preparing a turn always fails closed."""
     provider = "codex"
     label = "Codex CLI"
     route = "remote"
