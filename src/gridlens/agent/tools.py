@@ -38,7 +38,7 @@ from gridlens.analysis.utilization import UtilizationBranchOptions, selected_uti
 
 
 MAX_ROWS = 50
-MAX_RESULT_BYTES = 48 * 1024
+MAX_RESULT_BYTES = 16 * 1024
 MAX_TABLE_BYTES = 64 * 1024 * 1024
 MAX_TABLE_ROWS = 250_000
 MAX_AUDIT_BYTES = 32 * 1024 * 1024
@@ -144,9 +144,11 @@ def _fit_to_budget(result: dict) -> dict:
     while len(json.dumps(result, ensure_ascii=False).encode()) > MAX_RESULT_BYTES and result["data"]["rows"]:
         result["data"]["rows"].pop()
         result["data"]["truncated"] = True
+        if "byte_limit" not in result["data"]["truncation_reasons"]:
+            result["data"]["truncation_reasons"].append("byte_limit")
     result["data"]["returned"] = len(result["data"]["rows"])
     if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_RESULT_BYTES:
-        result["data"] = {"rows": [], "returned": 0, "total_matching": 0, "truncated": True}
+        result["data"] = {"rows": [], "returned": 0, "total_matching": 0, "truncated": True, "truncation_reasons": ["byte_limit"]}
         result["error"] = {"code": "RESULT_TOO_LARGE", "remedy": "Narrow the request to a single run or facility."}
         result["provenance"]["sources"] = result["provenance"]["sources"][:OVERSIZE_SOURCE_LIMIT]
         result["warnings"] = result["warnings"][:OVERSIZE_WARNING_LIMIT]
@@ -186,6 +188,8 @@ class ToolService:
             arguments = {}
             result = _empty_result(call_id)
             arguments = _bind_arguments(method, self, args, kwargs)
+            limit_info = {"requested_limit": arguments["limit"], "max_rows_per_call": MAX_ROWS} if "limit" in arguments else {}
+            result["data"].update(limit_info)
             handle.write(json.dumps({"call_id": call_id, "phase": "started", "tool": method.__name__, "arguments": _bounded_strings(arguments), "started_at": started}, allow_nan=False) + "\n")
             handle.flush()
             try:
@@ -196,11 +200,13 @@ class ToolService:
                         raise ValueError
                     if "limit" in arguments and (isinstance(arguments["limit"], bool) or not isinstance(arguments["limit"], int) or arguments["limit"] < 1):
                         raise ValueError
+                    if "limit" in arguments and arguments["limit"] > MAX_ROWS:
+                        raise AgentError("LIMIT_EXCEEDS_CAP", f"Use a limit of at most {MAX_ROWS} rows. For whole-run means, use summarize_loading; the agent cannot return every row of a large result.")
                     data = method(self, *args, **kwargs)
                     rows = data.pop("rows", [])
                     total = data.pop("total_matching", len(rows))
                     limit = min(MAX_ROWS, max(1, int(arguments.get("limit", MAX_ROWS))))
-                    result["data"] = {**data, "rows": rows[:limit], "returned": min(len(rows), limit), "total_matching": total, "truncated": total > limit}
+                    result["data"] = {**data, **limit_info, "rows": rows[:limit], "returned": min(len(rows), limit), "total_matching": total, "truncated": total > limit, "truncation_reasons": ["row_limit"] if total > limit else []}
                 except AgentError as exc:
                     result["error"] = {"code": exc.code, "remedy": str(exc)}
                 except (TypeError, ValueError, KeyError, AttributeError, csv.Error, ET.ParseError):
@@ -447,7 +453,7 @@ class ToolService:
             "Thermal margin is 100 minus maximum utilization, in percentage points. It is not available transfer, generation, or load-serving capacity.",
             "contingency_count counts recorded loading rows (including base); overload_count counts loading >=100% or a reported violation flag.",
         ])
-        scope = {"filters": {"facility": facility, "min_kv": min_kv, "area": area}, "monitored_facility_count": monitored, "configured_contingency_rating": configured_rating}
+        scope = {"filters": {"facility": facility, "min_kv": min_kv, "area": area}, "monitored_facility_count": monitored, "analyzed_facility_count": len(filtered), "configured_contingency_rating": configured_rating}
         return filtered, convergence, scope
 
     @tool
@@ -503,7 +509,7 @@ class ToolService:
 
     @tool
     def rank_branch_loading(self, run_id: str, metric: Metric = "max_utilization_pct", facility: Facility = "line", area: str = "", min_kv: float = 50.0, limit: int = 10) -> dict:
-        """Rank congestion by maximum observed loading, base loading, or largest thermal margin. Margin is not transfer capacity."""
+        """Return only the top ranked facilities; use summarize_loading for full-population means."""
         if metric not in ("max_utilization_pct", "base_utilization_pct", "thermal_margin_pct_points"):
             raise AgentError("INVALID_METRIC", "Choose maximum loading, base loading, or thermal margin.")
         rows, convergence, scope = self._loading(run_id, facility, area, min_kv)
@@ -513,7 +519,7 @@ class ToolService:
 
     @tool
     def summarize_loading(self, run_id: str, group_by: Literal["area", "voltage"] = "area", facility: Facility = "line", area: str = "", min_kv: float = 50.0, limit: int = 20) -> dict:
-        """Group the same facilities as the GUI; area ties belong to both endpoint areas. Values average facility maxima."""
+        """Average every matching facility's maximum loading by area or voltage, as the GUI does."""
         if group_by not in ("area", "voltage"):
             raise AgentError("INVALID_GROUP", "Choose area or voltage grouping.")
         rows, convergence, scope = self._loading(run_id, facility, area, min_kv)

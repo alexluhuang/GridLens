@@ -44,6 +44,8 @@ def test_ranking_matches_gui_and_keeps_circuits_sections(agent_context):
     assert result["error"] is None
     assert result["data"]["total_matching"] == 3
     assert result["data"]["truncated"] is True
+    assert result["data"]["requested_limit"] == 2
+    assert result["data"]["truncation_reasons"] == ["row_limit"]
     assert [row["max_utilization_pct"] for row in result["data"]["rows"]] == [120, 110]
     assert [row["section"] for row in result["data"]["rows"]] == ["", "2"]
     gui = max_line_utilization_rows(_load_cached_interactive_dataset(agent_context.run("run_a")).tables)
@@ -117,14 +119,42 @@ def test_source_path_in_manifest_cannot_escape(agent_context):
 def test_invalid_filters_and_result_caps_are_audited(agent_context):
     service = ToolService(agent_context)
     assert service.rank_branch_loading("run_a", min_kv=0)["error"]["code"] == "INVALID_FILTER"
-    result = service.rank_branch_loading("run_a", limit=10_000)
+    rejected = service.rank_branch_loading("run_a", limit=10_000)
+    assert rejected["error"]["code"] == "LIMIT_EXCEEDS_CAP"
+    assert rejected["data"]["requested_limit"] == 10_000
+    assert rejected["data"]["max_rows_per_call"] == 50
+    result = service.rank_branch_loading("run_a", limit=50)
+    assert result["error"] is None
     assert result["data"]["returned"] <= 50
     assert len(json.dumps(result).encode()) < MAX_RESULT_BYTES
     records = [json.loads(line) for line in (agent_context.directory / "tool_calls.jsonl").read_text().splitlines()]
     completed = [record for record in records if record["phase"] == "completed"]
-    assert [record["call_id"] for record in completed] == ["T1", "T2"]
+    assert [record["call_id"] for record in completed] == ["T1", "T2", "T3"]
     assert completed[0]["outcome"] == "error"
-    assert completed[1]["result"] == result
+    assert completed[1]["result"] == rejected
+    assert completed[2]["result"] == result
+
+
+def test_group_mean_uses_all_facilities_when_rank_rows_hit_byte_cap(agent_context):
+    """Build 50 fixture lines and compare a capped rank with the complete voltage mean tool result."""
+    run = agent_context.run("run_a")
+    template = _cached_rows(run, "pflow_mm")[0]
+    rows = [{**template, "line_id": str(number), "max_utilization_pct": number} for number in range(1, 51)]
+    _rewrite_cached_table(run, "pflow_mm", rows)
+    _rewrite_cached_table(run, "branch_metadata", rows)
+    service = ToolService(agent_context)
+    ranked = service.rank_branch_loading("run_a", limit=50)
+    assert ranked["error"] is None
+    assert ranked["data"]["total_matching"] == 50
+    assert ranked["data"]["returned"] < 50
+    assert ranked["data"]["truncation_reasons"] == ["byte_limit"]
+    assert len(json.dumps(ranked, ensure_ascii=False).encode()) <= MAX_RESULT_BYTES
+    grouped = service.summarize_loading("run_a", group_by="voltage")
+    assert grouped["error"] is None
+    assert grouped["data"]["analyzed_facility_count"] == 50
+    assert grouped["data"]["truncated"] is False
+    assert grouped["data"]["rows"][0]["line_count"] == 50
+    assert grouped["data"]["rows"][0]["average_utilization_pct"] == 25.5
 
 
 def test_session_roundtrip_and_tampered_directory(agent_context):
