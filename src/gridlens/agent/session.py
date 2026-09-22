@@ -1,3 +1,11 @@
+"""The session capability, its on-disk record, and the audit files.
+
+A session is the unit of authority in the agent feature. `SessionContext` is written once, at creation,
+and names the project root, the runs the user selected, the model, and the route. Every later read is
+resolved against it through `scoped_path`, which is the single place that rejects traversal, symlink
+escape, and any run the session did not select. Tools receive run IDs rather than paths precisely so that
+this module is the only one that turns a name into a location on disk.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
