@@ -1,3 +1,11 @@
+"""Route classification and the hosted-provider gate.
+
+Everything here answers one question before any project data moves: is the inference this session would
+use actually local? `local_endpoint` resolves the endpoint and accepts it only when every resolved address
+is loopback, and `verify_model` rejects an Ollama model that reports a remote host or a cloud tag. The
+hosted gate at the bottom is separate: it governs runtimes that are remote by definition, and it stays
+closed unless an operator opens it deliberately.
+"""
 from __future__ import annotations
 
 import ipaddress
