@@ -70,8 +70,17 @@ class RuntimeAdapter(Protocol):
     # False when the runtime keeps no resumable session, so the controller replays its own transcript.
     supports_continuation: bool
 
-    def probe(self) -> RuntimeStatus: ...
-    def prepare(self, session: SessionContext) -> PreparedRuntime: ...
-    def start_turn(self, prepared: PreparedRuntime, prompt_path: Path, continuation: str = "") -> subprocess.Popen: ...
-    def parse_event(self, line: str) -> RuntimeEvent: ...
-    def cancel(self, process: subprocess.Popen) -> None: ...
+    def probe(self) -> RuntimeStatus:
+        """Report whether this runtime is installed, signed in, and permitted here."""
+
+    def prepare(self, session: SessionContext) -> PreparedRuntime:
+        """Fix the launch command for a session, and write its manifest. Refuse if unusable."""
+
+    def start_turn(self, prepared: PreparedRuntime, prompt_path: Path, continuation: str = "") -> subprocess.Popen:
+        """Launch one turn in its own process group, reading the prompt from a file."""
+
+    def parse_event(self, line: str) -> RuntimeEvent:
+        """Normalize one line of runtime output. Raise rather than guess at an unknown shape."""
+
+    def cancel(self, process: subprocess.Popen) -> None:
+        """Terminate the runtime and every child it started, including the MCP server."""
