@@ -1,25 +1,41 @@
 # Handoff: AI-assisted transmission planning agent
 
-Written 2026-09-21 (session working branch `feat/hermes-planning-agent-continue`).
+Written 2026-09-21; revised 2026-09-22 after the work was merged to `main` and the remediation batch
+failed. The status here is current as of the revision.
 
 This document is written for whoever picks the feature up next, human or agent. It records what exists,
-what was measured, what is still open, and the traps that cost time. Read §1 and §6 first.
+what was measured, what is still open, and the traps that cost time. Read §1, §5 and §6 first, then the
+defect register in `docs/plans/agent_findings.md`, which is the actual work list.
 
 ---
 
-## 1. Where the work lives, right now
+## 1. Where the work lives
 
-Three locations matter.
+Everything is on **`main`**, and `main` is in sync with `origin/main`. The isolated worktree this work was
+built in has been removed; its branch no longer exists. There is nothing to recover and nothing to merge.
 
-| Location | What it holds |
+The history reads, oldest first:
+
+| Commit | What it is |
 |---|---|
-| `/home/alh360/Documents/gridpack-workbench-dev` (branch `feat/hermes-planning-agent`, HEAD `d4f53c0`) | The user's own checkout. Its working tree still holds the prior session's uncommitted edits. Untouched by this session. |
-| `.claude/worktrees/agent-feature` (branch `feat/hermes-planning-agent-continue`) | This session's isolated worktree. All new work is here. Commit `3e8008b` is a verbatim checkpoint of the prior session's uncommitted state; everything after it is this session's. |
-| `/home/alh360/.claude/jobs/cbddf18d/tmp/` | Session scratch: `findings.md` (the 34 verified findings, full text), `bench/` (index benchmark output), the model-evaluation logs, and the captured hosted-CLI event schemas. Deleted when the job is deleted, so copy anything you want to keep. |
+| `0bef2f9` … `d4f53c0` | The previous agent's committed work (§3). |
+| `9fac226` | A verbatim checkpoint of the previous agent's uncommitted working tree, carried forward so it could be reviewed on its own. |
+| `40888db` | Merge of `feat/hermes-planning-agent` into `main`. |
+| `629d799` | Snapshot of the worktree: the provider seam (§4.2) plus the seven findings that the remediation agents managed to write before they were killed (§5). |
+| `754d71c` | Ignore local Claude worktrees. |
+| `2a7a2e9` | Repairs a broken test module and makes the developer CLI report stable error codes (§5). |
+| `76954de` | `docs/plans/agent_findings.md`, the verified defect register. |
 
-**Important:** a background workflow (run id `wf_2e568263-f17`, 11 implementer agents) was still editing files
-when this handoff was written. See §5 for exactly which files it owns and how to check whether it finished.
-Do not assume the tree is quiescent until you have checked.
+Two working documents sit next to this one:
+
+- **`docs/plans/ai_planning_agent.md`** — the implementation plan. Still says it is a proposal; that is
+  finding 9.
+- **`docs/plans/agent_findings.md`** — all 34 verified defects with their corrected fixes and current
+  status. **This is the work list.** It was copied out of session scratch before that scratch was
+  discarded, so it is the only surviving copy.
+
+The reference project used for every measurement in this document is
+`/home/alh360/GridLensProjects/GridPACK_Test_Project`, run `2026-07-28_14-46-26`.
 
 ---
 
@@ -37,9 +53,35 @@ in. It detects what the user installed, and tells them what to install or which 
 
 Design authority, in order: the user's own description of the feature, then `docs/plans/ai_planning_agent.md`.
 
+
+### 2.1 Requirement by requirement, against what the user actually asked for
+
+This is the comparison that matters. "Backend" means the layer below the GUI is complete and tested; only
+the tab needs wiring.
+
+| The user's requirement | Status | Where it stands |
+|---|---|---|
+| A new tab in GridLens | **done** | `AgentTab` is registered in `gui/main_window.py` and receives project and run-selection signals. |
+| On launching the tab, check whether the model/CLI is installed | **done** | The tab probes on first show; each adapter reports installation and its validated version. |
+| Check the user is logged in with their own credentials | **backend done, GUI open** | `RuntimeStatus.authenticated` is three-valued, so "not applicable" (local Ollama) is distinct from "not signed in". Both hosted adapters read only the boolean from the vendor's own status command and never touch a credential file. The tab does not render it yet — finding 19/20. |
+| If not, prompt the user to install the CLI and log in | **backend done, GUI open** | `install_command`, `login_command` and `docs_url` are populated per provider. Nothing displays them yet; this is item 3 of §6.1. |
+| Select a local provider (Hermes Agent with Nemotron) | **done** | Validated end to end against six installed Ollama models, Nemotron among them. |
+| Select an online model (Codex or Claude Code) | **partial, by policy** | The Claude Code adapter is complete and its tool isolation was proven against the installed CLI; it is switched off by the CEII gate, not by missing code. Codex cannot be isolated in 0.155.1, so it ships probe-only and fails closed with the reason recorded. The tab still lists both as hardcoded disabled strings rather than registry entries — §6.1. |
+| GridLens provides no inference and installs nothing | **done** | No model, no weights, no credentials, no installer anywhere in the tree; every "how do I get this" path is a documentation link plus a command the user runs. |
+| Natural-language question in, natural-language answer out | **done** | Validated on all six local models with the identical prompt and tool set. |
+| The agent runs all required analyses | **done, with one deliberate limit** | The agent reads any cached artifact it needs, but it cannot *start* a multi-minute cache build; it returns `ANALYSIS_NOT_BUILT` and the user presses Build / refresh analysis. That is the plan's rule (§6) so a question cannot silently launch a long untracked job. Worth confirming the user still wants it that way. |
+| Deterministic GridLens functions the agent calls as tools | **done** | Fifteen tools with a uniform result envelope, server-side caps, provenance, and an append-only audit. |
+| So the agent never manipulates the large files itself | **done and measured** | Questions are answered from a ~1.9 MB cache and a bucketed Parquet index; an event query over the 8.7 GB run's 74.7 M rows returns in 0.07 s. |
+| If no function fits, the agent generates code saved under the project for auditing | **done** | `propose_analysis_script` only ever saves, hashed and AST-checked, under `<project>/agent/sessions/<id>/generated/`. Running it needs the user to approve that exact hash in a review dialog, and it runs in a no-network, read-only, resource-capped container. |
+| Model-agnostic, while being built and tested on the local agent | **done** | One adapter contract, one registry, one shared prompt with no provider or model name in it (a test asserts this), and three adapters behind it. |
+
+The two gaps that a user would notice are both in the tab: it cannot yet *tell* them to install or sign in,
+and it cannot yet *offer* the hosted runtimes as real, registry-driven choices. Everything underneath is
+built and tested.
+
 ---
 
-## 3. What the previous agent built (commits `0bef2f9` … `d4f53c0`, plus its uncommitted tree)
+## 3. What the previous agent built (commits `0bef2f9` … `d4f53c0`, plus the tree checkpointed as `9fac226`)
 
 The prior session delivered most of plan phases 1 through 4, and a good part of phase 6. It was substantial,
 careful work, and the security posture was already better than the plan required in places.
@@ -217,40 +259,58 @@ packaging, and defects in the least-reviewed diff) produced findings that were t
 independent adversarial verifier instructed to *refute* them. 34 survived: 16 major, 18 minor, no blockers.
 The six provider-seam findings were fixed during the run and so do not appear in the surviving list.
 
-**The full text — evidence plus an adversarially corrected fix for each — is in
-`/home/alh360/.claude/jobs/cbddf18d/tmp/findings.md`. Copy that file somewhere durable before the job is
-deleted.** The corrected fixes matter: they routinely identify concrete errors in the original proposal
-(a test that cannot pass because a fixture's CSV is header-only, a `toHtml()` that does not exist on
-`QPlainTextEdit`, a one-liner that raises `IndexError` on an empty exception message, a proposed mount
-narrowing that would break the user's own example questions).
+**The full set — evidence plus an adversarially corrected fix for each — is committed as
+`docs/plans/agent_findings.md`.** The corrected fixes matter: they routinely identify concrete errors in
+the original proposal (a test that cannot pass because a fixture's CSV is header-only, a `toHtml()` that
+does not exist on `QPlainTextEdit`, a one-liner that raises `IndexError` on an empty exception message, a
+proposed mount narrowing that would break the user's own example questions). Follow the fix text rather
+than re-deriving it from the summary.
+
+For orientation, the 34 break down as: 7 in the GUI, 7 in the tool service, 8 in documentation, 7 in test
+coverage, 2 in security error-handling, 2 correctness defects, and 1 packaging. Sixteen are major.
 
 ---
 
-## 5. Work in flight when this was written
+## 5. The remediation batch, and what actually landed
 
-Workflow `wf_2e568263-f17` had 11 implementer agents running, each owning a disjoint file set, each
-followed by an independent reviewer. Check it before touching these files:
+Eleven agents were dispatched to apply the 27 non-GUI findings across disjoint file sets. **All eleven were
+killed by a session usage limit before they could report.** The workflow recorded zero successes.
 
-```
-ls /home/alh360/.claude/projects/-home-alh360-Documents-gridpack-workbench-dev--claude-worktrees-agent-feature/cbddf18d-fb06-44f8-957d-45c6d9181a6d/subagents/workflows/wf_2e568263-f17/journal.jsonl
-```
+That is not the whole story: four of them had already written their edits to disk when they died, and those
+edits were snapshotted into `629d799`. Two of the four also left damage. Treat the following as the record
+of what is genuinely done.
 
-| Agent | Findings | Files it owns |
-|---|---|---|
-| tool-semantics | 15, 29, 30, 31, 32, 33, 34 | `agent/tools.py`, new `tests/test_agent_tool_semantics.py` |
-| circuit-canonicalization | 16 | `analysis/csv_flat.py`, `analysis/event_index.py`, `analysis/contingencies.py`, `tests/test_event_index.py` |
-| analysis-service | 17, 28 | `analysis/service.py`, `gui/agent_jobs.py`, `tests/test_analysis_service.py` |
-| sandbox-image | 13 | `packaging/agent/Dockerfile`, new `packaging/agent/README.md`, `tests/test_agent_scripts.py` |
-| runtime-and-mcp-tests | 1, 5 | `tests/test_agent_runtime.py`, `tests/test_agent_mcp.py` |
-| tool-coverage-tests | 6, 8, 22 | `tests/test_agent_tools.py` |
-| model-evaluation | 7 | `tests/test_agent_hermes_installed.py` |
-| plan-document | 9, 23, 24 | `docs/plans/ai_planning_agent.md` |
-| architecture-docs | 11, 26 | `docs/architecture.md`, `docs/developer_guide.md`, `README.md` |
-| user-docs | 10, 27 | `docs/user_guide.md`, `docs/troubleshooting.md` |
-| security-docs | 12, 14, 25 | `docs/security_ceii.md`, `CONTRIBUTING.md`, `docs/csv_flat_ca_scalability_v2.md`, `docs/packaging_distribution.md` |
+**Landed and verified working** (findings 1, 5, 12, 13, 14, 17, 28):
 
-If the workflow was killed mid-flight, `git diff` will show partial edits. Either finish them from
-`findings.md` or revert the affected files and redo them. **Run the full suite before trusting the tree.**
+- **1, 5** — `tests/test_agent_runtime.py` now pins the Hermes adapter's exact argv and the manifest's
+  `command_template`, so deleting `--ignore-rules` or `--toolsets gridlens` fails the suite, and
+  `start_turn` is exercised directly. `tests/test_agent_mcp.py` gained fail-closed coverage for the
+  `--mcp-server` and `--agent-tool` entry points, including that neither imports Qt.
+- **12, 14** — `docs/security_ceii.md` no longer claims no AI model is involved, and it now documents the
+  two different containers and their different mounts, so the solver rule and the sandbox rule no longer
+  contradict each other. `CONTRIBUTING.md` and `docs/packaging_distribution.md` were updated to match.
+- **13** — `packaging/agent/Dockerfile` is buildable (it was not), keeps `ANALYSIS_BASE` deliberately
+  without a default so no floating tag can contradict the digest pin `scripts.py` enforces, and defaults to
+  uid 65534. `packaging/agent/README.md` explains how to build and pin the image.
+- **17** — `AnalysisService` grew a module-level `_terminate_group()`, unit-tested to prove a grandchild
+  process cannot outlive a cancelled build.
+- **28** — `gui/agent_jobs.py` now sends a one-line failure summary to the outcome label and the full
+  detail to the activity pane, guarded so an exception with an empty message cannot raise inside the
+  worker's own handler.
+
+**Damage they left, since repaired in `2a7a2e9`:**
+
+- `tests/test_agent_mcp.py` was written with a `pytest.mark.parametrize` but no `import pytest`, so the
+  entire suite failed to collect. One line.
+- A new test asserted that the `--agent-tool` CLI prints a stable error code, which it did not; it printed
+  only the remedy. Fixed in `mcp_server.py` rather than by weakening the test, since the code is the
+  contract plan §4.5 asks for and the `--mcp-server` entry point already printed it.
+
+**Did not land at all** (findings 2, 3, 4, 6, 7, 8, 9, 10, 11, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+27, 29, 30, 31, 32, 33, 34). Seven of those are the GUI work that was never delegated in the first place.
+
+The lesson worth carrying: agents killed mid-write leave syntactically broken files behind, and a workflow
+reporting "0 succeeded" does not mean "0 changed". Always diff and run the suite before trusting the tree.
 
 ---
 
@@ -306,29 +366,51 @@ below it is now provider-neutral, so this is wiring, not redesign. Required:
 15. `gui/main_window.py` line 100 still reads "Ask a local Hermes agent about selected completed runs."
     Make it provider-neutral. No agent owns that file.
 
-### 6.2 Verify the remediation batch
+### 6.2 The other 20 open findings
 
-Once `wf_2e568263-f17` is done: run `python -m pytest`, `python -m compileall -q src tests`, and
-`git diff --check`, read each reviewer verdict in the workflow journal, and fix anything a reviewer flagged.
-Several agents were told to report cross-file needs rather than reach outside their ownership — collect
-those and apply them centrally.
+Everything in `docs/plans/agent_findings.md` that is still marked **open** and is not GUI work. Grouped by
+the file they touch, because that is how they should be batched:
 
-### 6.3 Re-run the real-runtime validation after all the edits
+- **`src/gridlens/agent/tools.py`** — findings 15, 29, 30, 31, 32, 33, 34. The two that matter most are 15
+  (an unhandled exception type escapes the result envelope, leaving an unpaired `started` record in the
+  audit and returning a raw Python message to the model, which breaks the stable-error-code contract) and
+  30/31 (the same missing existence guard in `_optional_table`, which turns a merely absent optional table
+  into an error instead of a graceful fallback). 32, 33 and 34 improve answer quality for the user's own
+  example questions: more of the recorded study settings, bus lookup that tolerates PSS/E name padding,
+  and telling the reader which facilities a filter excluded.
+- **`src/gridlens/analysis/{csv_flat,event_index,contingencies}.py`** — finding 16, the most delicate one
+  left. The streaming row path, the accelerated frame path, and the Parquet index disagree on how a circuit
+  id such as `1.0`, `01` or `'1'` is canonicalized, so a drill-down query can silently miss rows. The fix
+  is one shared null-safe canonicalizer called from all three producers, with the operation order right.
+- **`tests/test_agent_tools.py`** — findings 6, 8, 22. Five of the fifteen tools have no test, the metric
+  semantics the plan enumerates are unasserted, and nothing pins the untrusted-data caps. Do **not** extend
+  the shared fixture in `tests/conftest.py`; several existing assertions pin exact counts derived from it.
+- **`tests/test_agent_hermes_installed.py`** — finding 7, a real scored evaluation across plan §11's seven
+  dimensions instead of one collapsed assertion.
+- **Documentation** — findings 9, 23, 24 (the plan document), 10 and 27 (user guide, troubleshooting), 11
+  and 26 (architecture, developer guide, README), 25 (the csv_flat reference). The measured numbers these
+  documents need are all in §4.1 of this handoff.
 
-The end-to-end proof in §4.1 was measured *before* the remediation batch. Re-run it:
+### 6.3 Re-run the real-runtime validation at the end
+
+The end-to-end proof in §4.1 was measured before any of the remediation work. Re-run it once the tree
+settles:
 
 ```
-cd .claude/worktrees/agent-feature
+cd /home/alh360/Documents/gridpack-workbench-dev
 GRIDLENS_TEST_HERMES=1 .venv/bin/python -m pytest tests/test_agent_hermes_installed.py -q -s -k "isolation or resumes"
 GRIDLENS_TEST_LOCAL_MODELS=1 GRIDLENS_TEST_MODEL_NAMES=nemotron3:33b,qwen3.6:35b \
   .venv/bin/python -m pytest tests/test_agent_hermes_installed.py -q -s -k local_models
 ```
 
-Also exercise the tab in the real app against the real project, which no automated test covers:
-`/home/alh360/GridLensProjects/GridPACK_Test_Project`, run `2026-07-28_14-46-26`. Note its cached tables
-were built at dataset/parser version `2026.07.05`, so the tools will correctly answer `ANALYSIS_NOT_BUILT`
-until Build / refresh analysis is run — which is itself worth testing, since it is the path a first-time
-user hits.
+The first of those is the valuable one: it drives the real Hermes CLI against a synthetic loopback model
+server, so it exercises profile isolation, MCP discovery, the tool surface, citations and continuation
+deterministically and at no model cost. It runs in about five seconds.
+
+Then exercise the tab in the real app against the real project, which no automated test covers. Note that
+the reference run's cached tables were built at dataset/parser version `2026.07.05`, so the tools will
+correctly answer `ANALYSIS_NOT_BUILT` until Build / refresh analysis is run. That is itself worth testing,
+because it is the path a first-time user hits.
 
 ### 6.4 Still deferred by the plan, deliberately
 
@@ -354,34 +436,38 @@ user hits.
 
 ## 7. Traps worth knowing
 
-- **The user's checkout still has uncommitted prior-session work.** This session copied it into the
-  worktree as commit `3e8008b` rather than moving it. If you merge the worktree branch, reconcile with that
-  working tree or you will resurrect or clobber edits. `cufile.log` is tracked and dirty; it is unrelated
-  build noise — leave it out of commits.
-- **`.venv` in the worktree is a symlink** to the parent checkout's virtualenv, and `.gitignore`'s `.venv/`
-  pattern does not match a symlink, so it shows as untracked. Do not commit it.
+- **A workflow reporting zero successes can still have changed files.** Four of the eleven killed agents
+  had already written to disk, and two left syntactically broken files. Diff and run the suite before
+  trusting any tree an interrupted batch touched.
 - **The 8.7 GB flat CSV is real.** Never read it whole. The tools deliberately read the ~1.9 MB cache and
   the bucketed Parquet index instead, and `MAX_TABLE_BYTES` exists to stop accidents.
 - **Cache freshness is an mtime sandwich**: source ≤ cache ≤ manifest. Writing a fixture's CSV after the
-  manifest silently invalidates it, which is the reason one proposed test in `findings.md` cannot pass as
+  manifest silently invalidates it, which is why one proposed test in the defect register cannot pass as
   written.
 - **Do not extend the shared `tests/conftest.py` fixture rows.** Several existing assertions pin exact
   counts and averages derived from them, and the fixture's CSV field list comes from the first row's keys.
-- **A `RuntimeStatus` construction is positional in older call sites** (`ready, message, executable,
-  version, endpoint, models`). New fields were appended with defaults to keep those working; keep that
+- **`RuntimeStatus` is constructed positionally in older call sites** (`ready, message, executable,
+  version, endpoint, models`). The new fields were appended with defaults to keep those working; keep that
   ordering stable.
 - **`AnalysisService` uses a uid-keyed `flock` in `/tmp`.** Parallel test runs contend on it by design
   (the waiter is cancellable), but it makes concurrent suite runs look flaky.
-- **Concurrent agents editing one worktree** works only with strict file ownership. Two agents in the same
-  file will silently lose each other's edits.
+- **Concurrent agents in one checkout** work only with strict file ownership. Two agents in the same file
+  will silently lose each other's edits.
+- **`cufile.log` is tracked and routinely dirty.** It is unrelated GPU-I/O build noise; keep it out of
+  commits.
+- **Do not flip `GRIDLENS_ALLOW_HOSTED_AGENT` as part of a code change.** It is the CEII gate. See §6.4.
 
 ---
 
 ## 8. Quick verification
 
 ```
-cd /home/alh360/Documents/gridpack-workbench-dev/.claude/worktrees/agent-feature
-.venv/bin/python -m pytest -q          # expect all green; 4 opt-in tests skip
+cd /home/alh360/Documents/gridpack-workbench-dev
+.venv/bin/python -m pytest -q          # 209 passed, 4 skipped as of 2026-09-22
 .venv/bin/python -m compileall -q src tests
 git diff --check
 ```
+
+The four skips are the opt-in tests that need an installed CLI, live local models, a prepared sandbox
+image, or the real sample project. Two of them were run by hand this session and passed (§4.1); the other
+two have never been run (§6.4).
