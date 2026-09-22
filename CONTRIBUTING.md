@@ -1,29 +1,31 @@
-# Contributing To GridLens
+# Contributing to GridLens
 
-GridLens is intended to become an open-source desktop application for local GridPACK contingency analysis.
-Contributions should keep the app understandable for regulators and maintainable for future developers.
+GridLens is meant to become an open-source desktop application for local GridPACK contingency analysis. Keep
+your changes understandable for regulators and maintainable for the next developer.
 
-## Local-Only And CEII Rules
+## Local-only and CEII rules
 
 - Do not add cloud uploads, telemetry, remote crash reporting, or external logging.
-- Do not send project inputs, GridPACK outputs, run manifests, or derived exports to online services. This includes
-  hosted model APIs. A local model served on a loopback address by a user-installed CLI is not an online service;
-  adapters for hosted providers must stay disabled and cannot be enabled in a normal feature PR.
-- Keep Docker runs local and least-privilege by default. `--network none` and `--pull=never` are absolute rules for
-  every container GridLens builds a command for. Mounts differ by container, and the difference is deliberate:
-  - the GridPACK solver container mounts only the per-run `work/` directory;
-  - the optional generated-analysis sandbox mounts the selected run directory read-only at `/run-data`, plus the
-    reviewed script, under a pinned `sha256` image ID, non-root UID/GID, `--cap-drop ALL`, `no-new-privileges`, a
-    read-only root filesystem, no GPU, and stdout-only output. See `docs/security_ceii.md` for why the whole run
-    directory is in scope there.
-- Agent inference must fail closed unless the endpoint resolves only to loopback. Never read, log, or export CLI
-  credentials. Execute generated scripts only through the pinned, label-checked, network-free sandbox, and only after
-  explicit per-script approval bound to the reviewed SHA-256 hash.
-- Do not commit real CEII data, proprietary cases, local run folders, generated exports, agent session folders, or
-  screenshots containing sensitive grid information.
+- Do not send project inputs, GridPACK outputs, run manifests, or derived exports to online services. That
+  includes hosted model APIs. A local model served on a loopback address by a CLI the user installed is not an
+  online service. Adapters for hosted providers stay disabled, and a normal feature pull request cannot enable
+  them.
+- Keep Docker runs local and least-privilege by default. `--network none` and `--pull=never` are absolute
+  rules for every container GridLens builds a command for. Mounts differ by container, and the difference is
+  deliberate:
+  - The GridPACK solver container mounts only the per-run `work/` directory.
+  - The optional generated-analysis sandbox mounts the selected run directory read-only at `/run-data`, plus
+    the reviewed script. It runs under a pinned `sha256` image ID, a non-root UID and GID, `--cap-drop ALL`,
+    `no-new-privileges`, a read-only root filesystem, no GPU, and stdout-only output. For why the whole run
+    directory is in scope there, see [CEII security notes](docs/security_ceii.md).
+- Agent inference has to fail closed unless the endpoint resolves only to loopback. Never read, log, or export
+  CLI credentials. Execute a generated script only through the pinned, label-checked, network-free sandbox,
+  and only after the user approves that exact SHA-256 hash.
+- Do not commit real CEII data, proprietary cases, local run folders, generated exports, agent session
+  folders, or screenshots that contain sensitive grid information.
 - Use small synthetic fixtures in `tests/` and `samples/`.
 
-## Development Setup
+## Development setup
 
 ```bash
 python3 -m venv .venv
@@ -40,7 +42,7 @@ gridlens
 
 ## Verification
 
-Run the full suite before submitting changes:
+Run the full suite before you submit a change:
 
 ```bash
 python -m pytest
@@ -48,33 +50,38 @@ python -m compileall -q src tests
 git diff --check
 ```
 
-The test suite is intentionally focused. Add or update a test when changing parsing, analysis, Docker command
-construction, project-folder behavior, GUI view-model logic, package metadata, or documentation links.
+The test suite is deliberately focused. Add or update a test when you change parsing, analysis, Docker command
+construction, project-folder behavior, GUI view-model logic, agent tools or runtime adapters, package
+metadata, or documentation links.
 
-## Code Organization
+## Code organization
 
 - `core/` owns settings, projects, validation, and manifests.
 - `runner/` owns Docker probing, command construction, and process execution.
 - `analysis/` owns parsing, enrichment, metrics, graph caches, master exports, and distribution exports.
-- `gui/` owns PySide6 widgets and view-specific adapters. Keep business rules in pure helper modules when possible.
+- `agent/` owns the runtime adapter contract, the provider registry, session scoping, the deterministic tool
+  service, and the MCP server. Nothing above the adapter layer may contain provider-specific code.
+- `gui/` owns PySide6 widgets and view-specific adapters. Keep business rules in pure helper modules where you
+  can.
 
-Prefer small functions with clear names. Add a new helper module when it makes behavior reusable and testable. Avoid
-large GUI event handlers that also validate data, build Docker requests, parse outputs, or write analysis artifacts.
+Prefer small functions with clear names. Add a helper module when it makes behavior reusable and testable.
+Avoid large GUI event handlers that also validate data, build Docker requests, parse outputs, or write
+analysis artifacts.
 
-## Style Expectations
+## Style expectations
 
 - Build Docker commands as argument lists. Never use `shell=True`.
-- Validate user-provided paths, project names, Docker image names, executables, and MPI process counts before creating
-  run artifacts.
+- Validate paths, project names, Docker image names, executables, and MPI process counts that come from the
+  user before you create run artifacts.
 - Prefer explicit, readable Python over clever shortcuts.
-- Keep public functions and non-obvious helpers documented with concise docstrings.
+- Document public functions and non-obvious helpers with short docstrings.
 - Keep generated files, virtual environments, caches, and local project folders out of Git.
 
-## Pull Request Checklist
+## Pull request checklist
 
-- The app remains local-only and CEII-safe by default.
-- New behavior has a focused test or a clear reason it cannot be tested automatically.
+- The app stays local-only and CEII-safe by default.
+- New behavior has a focused test, or a clear reason you cannot test it automatically.
 - `python -m pytest` passes.
 - `python -m compileall -q src tests` passes.
 - `git diff --check` reports no whitespace errors.
-- README or docs are updated when workflow, packaging, security, or user-visible behavior changes.
+- The README or the docs are updated when workflow, packaging, security, or user-visible behavior changes.
