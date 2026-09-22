@@ -32,6 +32,7 @@ class ProviderDescriptor:
 
     @property
     def local(self) -> bool:
+        """Return True when inference stays on this machine."""
         return self.route == "loopback_only"
 
 

@@ -37,10 +37,12 @@ class RuntimeStatus:
 
     @property
     def installed(self) -> bool:
+        """Return True when the CLI was found on PATH."""
         return bool(self.executable)
 
     @property
     def remote(self) -> bool:
+        """Return True when using this runtime sends data off the machine."""
         return self.route != "loopback_only"
 
 

@@ -56,6 +56,7 @@ class AgentController:
 
     @property
     def runtime_label(self) -> str:
+        """Return a name for the runtime that is safe to show a user."""
         return getattr(self.adapter, "label", None) or getattr(self.adapter, "provider", None) or "The agent runtime"
 
     def cancel(self) -> None:

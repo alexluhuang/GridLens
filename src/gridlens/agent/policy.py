@@ -46,6 +46,7 @@ def local_endpoint(url: str) -> str:
 class _NoRedirect(HTTPRedirectHandler):
     """Refuse redirects, so a loopback URL cannot be bounced somewhere else mid-request."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Refuse the redirect. A verified loopback URL must answer directly."""
         raise AgentError("ENDPOINT_REDIRECT", "Ollama must answer directly on loopback without redirects.")
 
 
