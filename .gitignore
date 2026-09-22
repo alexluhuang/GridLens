@@ -16,3 +16,6 @@ GridLensProjects/
 third_party/
 
 .claude/worktrees/
+
+# GPU direct-storage log written beside the working directory during analysis runs.
+cufile.log
