@@ -20,7 +20,7 @@ from gridlens.analysis.progress import (
 )
 from gridlens.analysis.table_helpers import cell_value
 from gridlens.analysis.utilization import UtilizationBranchOptions
-from gridlens.gui.analysis_view_models import (
+from gridlens.analysis.loading import (
     max_line_utilization_rows,
     summarize_control_area_utilization,
     summarize_voltage_group_utilization,
@@ -28,6 +28,7 @@ from gridlens.gui.analysis_view_models import (
 
 
 _INTERACTIVE_TABLES = ("pflow_mm", "branch_metadata", "area_metadata")
+_INTERACTIVE_OPTIONAL_TABLES = ("contingency_summary", "bus_metadata")
 _INTERACTIVE_NOTE_ONLY_TABLES = (CSV_FLAT_RESULTS_TABLE,)
 _INTERACTIVE_MANIFEST = "interactive_analysis_manifest.json"
 _INTERACTIVE_TABLE_DIR = "interactive_tables"
@@ -121,7 +122,7 @@ def _load_cached_manifest(run_dir: Path, report_dir: Path, manifest_path: Path) 
             "parquet": str(table_info.get("parquet_path") or ""),
         }
 
-    for table_name in _INTERACTIVE_NOTE_ONLY_TABLES:
+    for table_name in (*_INTERACTIVE_OPTIONAL_TABLES, *_INTERACTIVE_NOTE_ONLY_TABLES):
         table_info = manifest_tables.get(table_name)
         if not isinstance(table_info, dict):
             continue
@@ -154,10 +155,12 @@ def _write_cached_interactive_dataset(dataset: RunAnalysisDataset) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
     manifest_tables: dict[str, dict[str, object]] = {}
 
-    for table_name in _INTERACTIVE_TABLES:
+    for table_name in (*_INTERACTIVE_TABLES, *_INTERACTIVE_OPTIONAL_TABLES):
         table = dataset.tables.get(table_name)
         if not table:
-            return
+            if table_name in _INTERACTIVE_TABLES:
+                return
+            continue
         csv_path = table_dir / f"{table_name}.csv"
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=table.columns, extrasaction="ignore")
