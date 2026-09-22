@@ -1,6 +1,8 @@
 # Implementation Plan: AI-Assisted Transmission Planning Agent
 
-Status: revised proposal; not approved for implementation
+Status: delivered for the Hermes and Ollama local runtime, and validated end to end on 2026-09-21.
+Hosted runtimes stay disabled behind the §7 governance gate. The Agent tab GUI is partly built; see
+`handoff.md` for what is open and `agent_findings.md` for the verified defect list.
 
 Initial validation target: DGX Spark, DGX OS 7 / Ubuntu 24.04.5 LTS, aarch64
 
@@ -78,9 +80,9 @@ These versions are a development baseline, not hardcoded application defaults.
 
 | Runtime | Observed version/state | Useful probe or interface |
 |---|---|---|
-| Hermes Agent | `0.21.4`; model endpoint `http://127.0.0.1:11434/v1`; default `nemotron3:33b` | `hermes --version`, `hermes config get model`, profiles, MCP, structured one-shot chat |
+| Hermes Agent | `0.21.4`; model endpoint `http://127.0.0.1:11434/v1` | `hermes --version`, `hermes config get model`, profiles, MCP, structured one-shot chat |
 | Ollama | client `0.34.2`; service reachable on loopback | `GET /api/tags` |
-| Local models | `nemotron3:33b`, `llama3.3:latest`, `qwen3.6:35b` | All report tool capability through `/api/tags` |
+| Local models | Enumerated from `/api/tags` at probe time. On 2026-09-21 that was `gpt-oss:120b`, `granite4.2:30b`, `gemma4:31b`, `nemotron-3-super:120b`, `nemotron3:33b`, `qwen3.6:35b` | `agent/hermes.py` lists only models that advertise the `tools` capability |
 | Codex CLI | `0.155.1`; authenticated | `codex login status`, `codex exec --json` |
 | Claude Code | `2.1.278`; authenticated | `claude auth status --json`, `claude -p --output-format stream-json` |
 
@@ -288,6 +290,21 @@ Do not declare the existing Parquet output suitable for random drill-down. First
 
 Avoid one partition per contingency; thousands of small directories/files are a separate scalability failure. Record conversion time, disk amplification, cold and warm query latency, peak host memory, and peak GPU memory on the supplied run before selecting a layout.
 
+Measured on 2026-09-21, on the supplied run: an 8,697,686,858-byte flat CSV yielding 74,701,440 indexed rows,
+through PyArrow on the CPU, with no GPU memory used by any layout.
+
+| Layout | Build | Parquet bytes | Disk ratio | Event query, cold and warm | Branch query | Peak host RSS |
+|---|---|---|---|---|---|---|
+| Buckets | 101.5 s | 3,126,265,202 | 0.359 | 0.069 s / 0.058 s | 2.07 s | 2.02 GB |
+| Sorted | 130.3 s | 2,532,316,449 | 0.291 | 0.127 s / 0.102 s | 2.75 s | 4.06 GB |
+| Unpartitioned | 105.5 s | 2,532,590,577 | 0.291 | 0.170 s / 0.162 s | 5.49 s | 4.09 GB |
+
+Selected layout: 64 event buckets. It builds fastest, answers an event query roughly 2.5 times faster and a
+branch query roughly 2.7 times faster than the unpartitioned layout, and peaks at half the host memory, for
+about 24% more disk. The reads were first and warm reads without a forced cache flush, so treat the cold
+figure as a first read rather than a cold-cache measurement. `scripts/benchmark_agent_index.py` reproduces
+the table.
+
 Cache builds are explicit user-visible jobs. Introduce a non-GUI `AnalysisService` that owns serialization, cancellation, and progress. The Analysis tab and Agent tab both use it. Until that service exists, the agent must return `ANALYSIS_NOT_BUILT` rather than starting an untracked multi-minute build.
 
 ## 7. Security and data governance
@@ -377,7 +394,9 @@ Capture the script, purpose, approval, image digest, command, stdout/stderr exce
 
 ## 10. Delivery sequence and exit criteria
 
-### Phase 0 — semantics and governance
+### Phase 0: semantics and governance
+
+State: Delivered. Metric definitions are implemented in `agent/tools.py`, hosted providers stay disabled, and session retention is documented in `docs/security_ceii.md`.
 
 - Approve the metric definitions in §5.
 - Decide whether hosted providers are permitted in this deployment. Keep them disabled if no written decision exists.
@@ -385,7 +404,9 @@ Capture the script, purpose, approval, image digest, command, stdout/stderr exce
 
 Exit: reviewed decision record; no source changes that weaken current CEII rules.
 
-### Phase 1 — model-free tool service
+### Phase 1: model-free tool service
+
+State: Delivered. Fifteen tools, the result envelope, the audit, the developer CLI, and the compact contingency summary all exist and are tested without a model.
 
 - Move reusable utilization logic into `analysis/`.
 - Implement session scoping, result envelopes, provenance, Tier 0/1/1A tools, and a developer CLI.
@@ -393,7 +414,9 @@ Exit: reviewed decision record; no source changes that weaken current CEII rules
 
 Exit: golden fixture tests pass without a model or MCP process; tools cannot address an unselected run.
 
-### Phase 2 — MCP and packaging
+### Phase 2: MCP and packaging
+
+State: Delivered in source. `mcp==1.30.0` is pinned, `--mcp-server` dispatches before Qt, and the SDK conformance test passes. The frozen executable and the Debian package have not been rebuilt since the agent package grew.
 
 - Add the official MCP SDK and stdio server.
 - Add `--mcp-server` dispatch before Qt imports.
@@ -402,34 +425,46 @@ Exit: golden fixture tests pass without a model or MCP process; tools cannot add
 
 Exit: source and packaged MCP entry points pass the same tests; stdout contains protocol messages only.
 
-### Phase 3 — Hermes/Ollama vertical slice
+### Phase 3: Hermes and Ollama vertical slice
+
+State: Delivered and validated. See the exit note below.
 
 - Implement probe, isolated profile preparation, structured event parsing, cancellation, and loopback enforcement.
-- Run the same evaluation set against `nemotron3:33b`, `llama3.3:latest`, and `qwen3.6:35b`.
+- Run the same evaluation set against every installed model that advertises tool support.
 
-Exit: all three models use the same prompt and tools; no model name appears in analysis/tool code; no non-GridLens tool is exposed.
+Exit: every model uses the same prompt and tools, no model name appears in the analysis or tool code, and no
+non-GridLens tool is exposed. Met on 2026-09-21. All six installed models answered correctly through the real
+Hermes CLI: qwen3.6:35b in 20.6 s, nemotron3:33b in 25.6 s, gemma4:31b in 53.8 s, gpt-oss:120b in 55.0 s,
+granite4.2:30b in 71.1 s, and nemotron-3-super:120b in 72.6 s. A separate test drives the installed CLI against
+a synthetic loopback model server and asserts that only the fifteen GridLens tools are exposed.
 
-### Phase 4 — GUI
+### Phase 4: GUI
+
+State: Partly delivered. The tab, worker, activity view, Sources panel, session browser, and the shared `AnalysisService` exist. Provider selection, install and sign-in prompts, the route badge, and streamed-text rendering are open.
 
 - Add the Agent tab, worker/controller, activity, Sources panel, diagnostics, and session browser.
 - Share `AnalysisService` with the Analysis tab.
 
 Exit: responsive start/stop, no GUI-thread blocking, safe rendering, clean shutdown, and an end-to-end local answer with citations.
 
-### Phase 5 — Codex and Claude adapters
+### Phase 5: Codex and Claude adapters
+
+State: Adapters written, shipping blocked. Claude Code isolation was proven against the installed CLI. Codex isolation could not be proven in 0.155.1, so that adapter is probe-only and fails closed.
 
 - Implement adapters independently against the verified CLI versions and structured streams.
 - Add opt-in installed-CLI tests for authentication probes, MCP discovery, tool isolation, cancellation, failure handling, and version drift.
 
 Exit: adapters satisfy the same contract and isolation suite. Shipping remains blocked unless Phase 0 authorized hosted inference and the security documents were changed separately.
 
-### Phase 6 — large-data drill-down and generated code
+### Phase 6: large-data drill-down and generated code
+
+State: Delivered. The layout was selected from measurement, and the generated-script review and sandbox path exists.
 
 - Select the indexed Parquet layout from measured results.
 - Add bounded contingency/branch drill-down.
 - Only if justified, add the generated-script review and sandbox path.
 
-Exit: performance report on the supplied run, resource-limit tests, and security review.
+Exit: a performance report on the supplied run, resource-limit tests, and a security review. The report is in §6.
 
 ## 11. Verification
 
@@ -466,26 +501,45 @@ python -m compileall -q src tests
 git diff --check
 ```
 
-## 12. Expected source changes
+## 12. Source layout as delivered
 
 ```text
 src/gridlens/agent/
-  runtime.py                 provider-neutral protocol and events
-  providers/hermes.py
-  providers/codex.py         later phase
-  providers/claude.py        later phase
-  policy.py                  route classification and preflight gate
-  session.py                 context, transcript, audit lifecycle
-  mcp_server.py              official SDK entry point
-  tools/context.py
-  tools/provenance.py
-  tools/runs.py
-  tools/utilization.py
-  tools/contingencies.py
-  tools/topology.py
-src/gridlens/analysis/service.py
-src/gridlens/gui/agent_tab.py
-src/gridlens/gui/agent_view_models.py
+  runtime.py          provider-neutral status, events, and the adapter protocol
+  providers.py        the provider registry: hermes, claude, codex
+  process.py          shared subprocess, environment, and MCP child helpers
+  prompt.py           the one system prompt every runtime sends, and turn composition
+  policy.py           loopback route enforcement, Ollama probes, hosted-provider gate
+  session.py          the immutable session capability, audit append, export
+  controller.py       the turn loop, event normalization, citation normalization
+  hermes.py           the Hermes adapter, validated
+  claude_code.py      the Claude Code adapter, disabled by policy
+  codex.py            the Codex adapter, probe only and fail closed
+  tools.py            the fifteen deterministic tools and the result envelope
+  mcp_server.py       the official SDK stdio server and the developer tool CLI
+  scripts.py          generated-script proposals and the approved-script sandbox
+src/gridlens/analysis/
+  service.py          AnalysisService, shared by the Analysis and Agent tabs
+  contingencies.py    the compact contingency_summary table
+  event_index.py      the bucketed Parquet index and its bounded queries
+  loading.py          utilization calculations shared by the GUI and the tools
+src/gridlens/gui/
+  agent_tab.py        the Agent tab
+  agent_jobs.py       the QThread wrapper around AnalysisService
+  script_review.py    the approve-and-run dialog
+packaging/agent/
+  Dockerfile          the sandbox image recipe
+  README.md           how to build and pin it
 ```
 
-Also modify `main.py`, `main_window.py`, `app_settings.py`, the analysis modules that own shared calculations/caches, packaging metadata, and focused tests. Update architecture, user, packaging, and security documentation only for behavior that is actually approved and delivered.
+This differs from what §4 through §11 predicted, and the flat modules are the delivered shape. The predicted
+`providers/` and `tools/` subpackages were not created. Three adapters live beside each other as
+`hermes.py`, `claude_code.py`, and `codex.py`, with `providers.py` as the registry, and the tool service
+stayed one cohesive `tools.py` rather than six modules. `gui/agent_view_models.py` was not needed, because
+the view logic is small enough to sit in the tab alongside `agent_jobs.py` and `script_review.py`. Three
+modules the plan did not predict do exist: `process.py`, `prompt.py`, and `providers.py`, which together are
+what keeps the feature model-agnostic.
+
+Also modified: `main.py`, `main_window.py`, the analysis modules that own the shared calculations and caches,
+the packaging metadata, and focused tests. Update the architecture, user, packaging, and security
+documentation only for behavior that is actually approved and delivered.
