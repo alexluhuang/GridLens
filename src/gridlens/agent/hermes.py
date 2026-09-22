@@ -51,6 +51,7 @@ class HermesAdapter:
 
     def probe(self) -> RuntimeStatus:
         # Signing in does not apply: inference is served by the user's own loopback Ollama service.
+        """Report the Hermes version, the loopback endpoint, and the installed local models."""
         common = {"provider": self.provider, "route": self.route, "docs_url": DOCS_URL, "install_command": "ollama pull MODEL", "login_command": ""}
         executable = shutil.which("hermes")
         if not executable:
@@ -74,6 +75,7 @@ class HermesAdapter:
             return RuntimeStatus(False, str(exc) if isinstance(exc, AgentError) else "Hermes did not respond. Run `hermes --version` in a terminal, then refresh.", **common)
 
     def prepare(self, session: SessionContext) -> PreparedRuntime:
+        """Write an isolated profile and the session manifest, then fix the launch command."""
         status = self.probe()
         if not status.ready:
             raise AgentError("RUNTIME_UNAVAILABLE", status.message)
@@ -124,6 +126,7 @@ class HermesAdapter:
         return PreparedRuntime(session, argv, environment, scratch)
 
     def start_turn(self, prepared: PreparedRuntime, prompt_path: Path, continuation: str = "") -> subprocess.Popen:
+        """Re-verify the model, then launch one turn against the session prompt file."""
         verify_model(prepared.context.endpoint, prepared.context.model)
         argv = [*prepared.command, "--query-file", str(prompt_path)]
         if continuation:
@@ -133,6 +136,7 @@ class HermesAdapter:
         return subprocess.Popen(argv, cwd=prepared.cwd, env=prepared.environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
 
     def parse_event(self, line: str) -> RuntimeEvent:
+        """Normalize one Hermes stream-json event, refusing any non-GridLens tool."""
         try:
             event = json.loads(line)
             kind = event["type"]
@@ -156,4 +160,5 @@ class HermesAdapter:
         raise AgentError("RUNTIME_PROTOCOL_ERROR", "The installed Hermes event format differs from the tested version.")
 
     def cancel(self, process: subprocess.Popen) -> None:
+        """Terminate Hermes and the MCP server it started."""
         terminate_process(process)
