@@ -23,7 +23,7 @@ def test_official_sdk_client_tools_and_scope(agent_context):
             await client.initialize()
             listing = await client.list_tools()
             assert {tool.name for tool in listing.tools} == set(TOOL_NAMES)
-            assert all(tool.annotations.readOnlyHint for tool in listing.tools)
+            assert all(tool.annotations.readOnlyHint == (tool.name != "propose_analysis_script") for tool in listing.tools)
             ranking = next(tool for tool in listing.tools if tool.name == "rank_branch_loading")
             assert "metric" in ranking.inputSchema["properties"]
             response = await client.call_tool("rank_branch_loading", {"run_id": "run_a", "limit": 1})

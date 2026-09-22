@@ -65,3 +65,23 @@ def test_compact_contingency_summary_preserves_convergence_and_sections(indexed_
     assert rows[1]["converged"] is True
     assert rows[2]["converged"] is False
     assert json.loads(rows[2]["worst_facility_key"]) == ["1", "2", "1", "2"]
+
+
+def test_index_preserves_numeric_looking_circuits(indexed_run):
+    pytest.importorskip("pyarrow")
+    path = indexed_run / "work/test_flat.csv"
+    with path.open("a") as handle:
+        handle.write("1,outage,1,2,1.0,,100,50,0\n1,outage,1,2,01,,100,60,0\n")
+    build_event_index(indexed_run)
+    for circuit in ("1.0", "01"):
+        rows, total, _ = query_event_index(indexed_run, branch=(1, 2, circuit, ""))
+        assert total == 1 and rows[0]["line_id"] == circuit
+
+
+def test_contingency_summary_matches_gpu_reduction(indexed_run, monkeypatch):
+    pytest.importorskip("cudf")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "python")
+    expected = parse_all_output_tables(indexed_run)["contingency_summary"].rows
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "cudf")
+    actual = parse_all_output_tables(indexed_run)["contingency_summary"].rows
+    assert actual == expected

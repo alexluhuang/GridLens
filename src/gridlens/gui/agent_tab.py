@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
     QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
@@ -15,7 +15,7 @@ from gridlens.agent.controller import AgentController, MAX_PROMPT_CHARS, normali
 from gridlens.agent.hermes import DEFAULT_ENDPOINT, HermesAdapter
 from gridlens.agent.policy import AgentError
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
-from gridlens.agent.session import SessionContext, scoped_path
+from gridlens.agent.session import SessionContext, export_session, scoped_path
 from gridlens.core.project import Project
 from gridlens.analysis.csv_flat import CSV_FLAT_ALLOW_CPU_DASK_ENV, cpu_dask_fallback_warning
 from gridlens.gui.agent_jobs import AgentAnalysisWorker
@@ -130,9 +130,15 @@ class AgentTab(QWidget):
         self.new_button.clicked.connect(self.new_session)
         self.folder_button = QPushButton("Open session folder")
         self.folder_button.clicked.connect(self.open_session_folder)
+        self.export_button = QPushButton("Export session audit")
+        self.export_button.clicked.connect(self.export_audit)
+        self.review_button = QPushButton("Review scripts")
+        self.review_button.clicked.connect(self.review_scripts)
         history_row.addWidget(self.history_combo, 1)
         history_row.addWidget(self.new_button)
         history_row.addWidget(self.folder_button)
+        history_row.addWidget(self.export_button)
+        history_row.addWidget(self.review_button)
         layout.addLayout(history_row)
 
         split = QSplitter(Qt.Horizontal)
@@ -354,6 +360,31 @@ class AgentTab(QWidget):
         ready = self.runtime_status is not None and self.runtime_status.ready
         self.send_button.setEnabled(bool(not busy and not probing and not self._history_view and ready and self.project and self.run_combo.currentData() and prompt and len(prompt) <= MAX_PROMPT_CHARS))
         self.folder_button.setEnabled(self.session_directory is not None)
+        self.export_button.setEnabled(not busy and self.session_directory is not None)
+        self.review_button.setEnabled(not busy and self.session_directory is not None)
+
+    def export_audit(self) -> None:
+        if not self.session_directory:
+            return
+        destination, _ = QFileDialog.getSaveFileName(self, "Export sensitive session audit", str(self.session_directory.parent / (self.session_directory.name + ".zip")), "ZIP archive (*.zip)")
+        if destination:
+            try:
+                export_session(self.session_directory, Path(destination))
+                self.diagnostics.setText("Session audit exported. It contains project-derived data and conversation text.")
+            except (AgentError, OSError) as exc:
+                self.diagnostics.setText(str(exc))
+
+    def review_scripts(self) -> None:
+        if not self.session_directory:
+            return
+        from gridlens.gui.script_review import ScriptReview
+
+        try:
+            context = SessionContext.load(self.session_directory / "context.json")
+            dialog = ScriptReview(context, self)
+            dialog.exec()
+        except (AgentError, OSError) as exc:
+            self.diagnostics.setText(str(exc))
 
     def build_analysis(self) -> None:
         if not self.build_button.isEnabled() or not self.project:

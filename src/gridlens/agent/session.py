@@ -7,7 +7,9 @@ import os
 from pathlib import Path
 import re
 import stat
+import tempfile
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from gridlens.agent.policy import AgentError, local_endpoint
 
@@ -63,6 +65,26 @@ def append_event(directory: Path, name: str, value: dict) -> None:
     path = scoped_path(directory, name)
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"timestamp": timestamp(), **value}, ensure_ascii=False, allow_nan=False) + "\n")
+
+
+def export_session(directory: Path, destination: Path) -> None:
+    """Explicit audit export, excluding the CLI profile and internal runtime history."""
+    names = ("context.json", "manifest.json", "transcript.jsonl", "runtime_events.jsonl", "tool_calls.jsonl", "usage.json", "status.json", "script_executions.jsonl")
+    paths = [scoped_path(directory, name) for name in names]
+    generated = scoped_path(directory, "generated", directory=True)
+    if generated.exists():
+        paths.extend(scoped_path(directory, path.relative_to(directory)) for path in generated.rglob("*") if path.is_file() or path.is_symlink())
+    paths = [path for path in paths if path.exists()]
+    if len(paths) > 1000 or sum(path.stat().st_size for path in paths) > 64 * 1024 * 1024:
+        raise AgentError("EXPORT_LIMIT", "This session exceeds the 64 MiB / 1,000-file export limit. Review its folder directly.")
+    with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".gridlens-audit-") as temporary:
+        archive_path = Path(temporary) / "audit.zip"
+        with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
+            for path in paths:
+                archive.write(path, str(path.relative_to(directory)))
+        # Copy through a new inode; never follow an existing destination symlink.
+        os.chmod(archive_path, 0o600)
+        os.replace(archive_path, destination)
 
 
 @dataclass(frozen=True)
