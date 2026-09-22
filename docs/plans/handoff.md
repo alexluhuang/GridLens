@@ -28,9 +28,8 @@ The history reads, oldest first:
 
 Two working documents sit next to this one:
 
-- **`docs/plans/ai_planning_agent.md`** — the implementation plan. Still says it is a proposal; that is
-  finding 9.
-- **`docs/plans/agent_findings.md`** — all 34 verified defects with their corrected fixes and current
+- **`docs/plans/ai_planning_agent.md`**: the implementation plan. It no longer says it is a proposal; finding 9 is closed.
+- **`docs/plans/agent_findings.md`**: all 34 verified defects with their corrected fixes and current
   status. **This is the work list.** It was copied out of session scratch before that scratch was
   discarded, so it is the only surviving copy.
 
@@ -63,10 +62,10 @@ the tab needs wiring.
 |---|---|---|
 | A new tab in GridLens | **done** | `AgentTab` is registered in `gui/main_window.py` and receives project and run-selection signals. |
 | On launching the tab, check whether the model/CLI is installed | **done** | The tab probes on first show; each adapter reports installation and its validated version. |
-| Check the user is logged in with their own credentials | **backend done, GUI open** | `RuntimeStatus.authenticated` is three-valued, so "not applicable" (local Ollama) is distinct from "not signed in". Both hosted adapters read only the boolean from the vendor's own status command and never touch a credential file. The tab does not render it yet — finding 19/20. |
+| Check the user is logged in with their own credentials | **backend done, GUI open** | `RuntimeStatus.authenticated` is three-valued, so "not applicable" (local Ollama) is distinct from "not signed in". Both hosted adapters read only the boolean from the vendor's own status command and never touch a credential file. The tab does not render it yet, per findings 19 and 20. |
 | If not, prompt the user to install the CLI and log in | **backend done, GUI open** | `install_command`, `login_command` and `docs_url` are populated per provider. Nothing displays them yet; this is item 3 of §6.1. |
 | Select a local provider (Hermes Agent with Nemotron) | **done** | Validated end to end against six installed Ollama models, Nemotron among them. |
-| Select an online model (Codex or Claude Code) | **partial, by policy** | The Claude Code adapter is complete and its tool isolation was proven against the installed CLI; it is switched off by the CEII gate, not by missing code. Codex cannot be isolated in 0.155.1, so it ships probe-only and fails closed with the reason recorded. The tab still lists both as hardcoded disabled strings rather than registry entries — §6.1. |
+| Select an online model (Codex or Claude Code) | **partial, by policy** | The Claude Code adapter is complete and its tool isolation was proven against the installed CLI. The CEII gate switches it off, not missing code. Codex cannot be isolated in 0.155.1, so it ships probe-only and fails closed with the reason recorded. The tab still lists both as hardcoded disabled strings rather than registry entries, per §6.1. |
 | GridLens provides no inference and installs nothing | **done** | No model, no weights, no credentials, no installer anywhere in the tree; every "how do I get this" path is a documentation link plus a command the user runs. |
 | Natural-language question in, natural-language answer out | **done** | Validated on all six local models with the identical prompt and tool set. |
 | The agent runs all required analyses | **done, with one deliberate limit** | The agent reads any cached artifact it needs, but it cannot *start* a multi-minute cache build; it returns `ANALYSIS_NOT_BUILT` and the user presses Build / refresh analysis. That is the plan's rule (§6) so a question cannot silently launch a long untracked job. Worth confirming the user still wants it that way. |
@@ -86,7 +85,7 @@ built and tested.
 The prior session delivered most of plan phases 1 through 4, and a good part of phase 6. It was substantial,
 careful work, and the security posture was already better than the plan required in places.
 
-### 3.1 Session capability boundary — `src/gridlens/agent/session.py`
+### 3.1 Session capability boundary: `src/gridlens/agent/session.py`
 
 - `SessionContext` is a frozen dataclass written once to `<project>/agent/sessions/<UTC>_<suffix>/context.json`:
   project root, selected run ids, model, endpoint, session directory, session id.
@@ -101,7 +100,7 @@ careful work, and the security posture was already better than the plan required
   the `runtime/` directory (which holds the CLI profile), with a 64 MiB / 1000-file cap and an atomic
   `os.replace` through a temporary inode.
 
-### 3.2 Deterministic tools — `src/gridlens/agent/tools.py` (15 tools)
+### 3.2 Deterministic tools: `src/gridlens/agent/tools.py` (15 tools)
 
 `get_run_inventory`, `locate_run_artifacts`, `get_run_method`, `summarize_convergence`,
 `rank_branch_loading`, `summarize_loading`, `list_thermal_violations`, `get_branch_loading`,
@@ -123,14 +122,14 @@ careful work, and the security posture was already better than the plan required
   file, and verify cache freshness by comparing source/cache/manifest mtimes before trusting it. A stale or
   missing cache yields `ANALYSIS_NOT_BUILT` rather than silently starting a multi-minute build.
 
-### 3.3 MCP server — `src/gridlens/agent/mcp_server.py`
+### 3.3 MCP server: `src/gridlens/agent/mcp_server.py`
 
 Uses the official MCP Python SDK (`mcp==1.30.0`, pinned in `pyproject.toml` and collected by the
 PyInstaller spec). `main.py` dispatches `--mcp-server` **before importing Qt**, and also offers
 `--agent-tool` as a model-free developer CLI for calling one tool against an existing session context.
 Tool annotations mark everything read-only except `propose_analysis_script`.
 
-### 3.4 Hermes runtime adapter — `src/gridlens/agent/hermes.py`
+### 3.4 Hermes runtime adapter: `src/gridlens/agent/hermes.py`
 
 - Writes a dedicated, throwaway Hermes profile per session under the session directory: only the GridLens
   MCP server, no bundled skills or plugins, no memory, no compression, no telemetry, no lazy installs, no
@@ -143,7 +142,7 @@ Tool annotations mark everything read-only except `propose_analysis_script`.
 - `parse_event` normalizes Hermes's structured events and **raises on any tool name that is not
   `mcp__gridlens__*`**.
 
-### 3.5 Route enforcement — `src/gridlens/agent/policy.py`
+### 3.5 Route enforcement: `src/gridlens/agent/policy.py`
 
 `local_endpoint()` resolves the endpoint and requires *every* resolved address to be loopback, rejects
 credentials in the URL, query strings, odd paths, and redirects, and disables proxies for the runtime
@@ -161,7 +160,7 @@ capability, before anything is sent.
   transcript, activity, Sources panel, history browser, audit export, and script review.
 - `gui/script_review.py` is the approve-and-run dialog; `gui/agent_jobs.py` wraps analysis builds.
 
-### 3.7 Generated-script path — `src/gridlens/agent/scripts.py`
+### 3.7 Generated-script path: `src/gridlens/agent/scripts.py`
 
 `propose_analysis_script` only ever *saves* code (AST-parsed, hashed, capped at 24 KiB, max 30 per
 session). Execution is reachable only from the review dialog, requires the user to approve that exact
@@ -171,11 +170,11 @@ Results are recorded as untrusted.
 
 ### 3.8 Analysis layer
 
-- `analysis/service.py` — `AnalysisService`, a non-GUI, cancellable, `flock`-serialized build service in a
+- `analysis/service.py`: `AnalysisService`, a non-GUI, cancellable, `flock`-serialized build service in a
   spawned process group. **Already shared** by `gui/analysis_tab.py` and the Agent tab.
-- `analysis/contingencies.py` — the compact `contingency_summary` table (thousands of rows, not tens of
+- `analysis/contingencies.py`: the compact `contingency_summary` table (thousands of rows, not tens of
   millions), produced during the same pass that aggregates the flat CSV.
-- `analysis/event_index.py` — a bucketed Parquet contingency index (64 buckets by `event_idx`) built by
+- `analysis/event_index.py`: a bucketed Parquet contingency index (64 buckets by `event_idx`) built by
   streaming the flat CSV through PyArrow, published only after a complete build, with a manifest that
   records source size and mtime so a stale index is detected.
 - Domain calculations live in `analysis/loading.py` / `utilization.py` and are called by both the GUI
@@ -242,7 +241,7 @@ The prior code worked but leaked Hermes into shared layers. New and changed file
 | `agent/prompt.py` | new | The single `SYSTEM_PROMPT` every runtime sends, with no provider or model name in it (a test asserts this), plus `turn_prompt()` which composes a turn and, for runtimes that cannot resume, a bounded replay of GridLens's own transcript delimited as untrusted prior context. |
 | `agent/claude_code.py` | new | Working Claude Code adapter. Probe reports installed/signed-in/policy state. `prepare()` emits a session-only MCP config and an argv using `--restricted --tools "" --strict-mcp-config --allowedTools mcp__gridlens__* --permission-mode dontAsk --permission-prompts none --disable-slash-commands --no-session-persistence`. `parse_event()` asserts the init event's tool and MCP inventory and fails closed on anything foreign. Gated off by policy. |
 | `agent/codex.py` | new | Probe-only Codex adapter, so the tab can still prompt install/login. `prepare()` fails closed with `ISOLATION_UNPROVEN` and the recorded reason. `session_argv()` and `parse_event()` are implemented and tested so the adapter is ready if `codex app-server` later makes isolation provable. |
-| `agent/runtime.py` | rewritten | `RuntimeStatus` now carries `provider`, `route`, `authenticated` (None = not applicable), `policy_blocked`, `install_command`, `login_command`, `docs_url`, plus `installed`/`remote` properties — everything the GUI needs to describe a provider without knowing which one it is. The protocol gained `provider`/`label`/`route`/`supports_continuation`. |
+| `agent/runtime.py` | rewritten | `RuntimeStatus` now carries `provider`, `route`, `authenticated` (None = not applicable), `policy_blocked`, `install_command`, `login_command`, `docs_url`, plus `installed` and `remote` properties. That is everything the GUI needs to describe a provider without knowing which one it is. The protocol gained `provider`/`label`/`route`/`supports_continuation`. |
 | `agent/policy.py` | extended | The hosted gate: `HOSTED_GATE_ENV = GRIDLENS_ALLOW_HOSTED_AGENT`, `hosted_authorization()` returning `""` / `"proven"` / `"all"`, and `require_hosted_authorization(provider, isolation_proven)`. Default is closed. |
 | `agent/session.py` | extended | `runtime` is validated against the registry instead of being hardcoded to `"hermes"`; new `route` and `remote_acknowledged` fields; `create()` decides the route *before* any user text exists, forces the endpoint empty for remote and loopback-validated for local, and refuses a remote session without an acknowledgement; `load()` re-validates all of it. |
 | `agent/controller.py` | extended | Provider-neutral user-facing strings; a `runtime_label`; accumulates streamed text so a runtime that reports its answer only as deltas still produces a final answer; replays its own bounded transcript for adapters with `supports_continuation = False`. |
@@ -259,7 +258,7 @@ packaging, and defects in the least-reviewed diff) produced findings that were t
 independent adversarial verifier instructed to *refute* them. 34 survived: 16 major, 18 minor, no blockers.
 The six provider-seam findings were fixed during the run and so do not appear in the surviving list.
 
-**The full set — evidence plus an adversarially corrected fix for each — is committed as
+**The full set, evidence plus an adversarially corrected fix for each, is committed as
 `docs/plans/agent_findings.md`.** The corrected fixes matter: they routinely identify concrete errors in
 the original proposal (a test that cannot pass because a fixture's CSV is header-only, a `toHtml()` that
 does not exist on `QPlainTextEdit`, a one-liner that raises `IndexError` on an empty exception message, a
@@ -282,19 +281,19 @@ of what is genuinely done.
 
 **Landed and verified working** (findings 1, 5, 12, 13, 14, 17, 28):
 
-- **1, 5** — `tests/test_agent_runtime.py` now pins the Hermes adapter's exact argv and the manifest's
+- **1, 5**: `tests/test_agent_runtime.py` now pins the Hermes adapter's exact argv and the manifest's
   `command_template`, so deleting `--ignore-rules` or `--toolsets gridlens` fails the suite, and
   `start_turn` is exercised directly. `tests/test_agent_mcp.py` gained fail-closed coverage for the
   `--mcp-server` and `--agent-tool` entry points, including that neither imports Qt.
-- **12, 14** — `docs/security_ceii.md` no longer claims no AI model is involved, and it now documents the
+- **12, 14**: `docs/security_ceii.md` no longer claims no AI model is involved, and it now documents the
   two different containers and their different mounts, so the solver rule and the sandbox rule no longer
   contradict each other. `CONTRIBUTING.md` and `docs/packaging_distribution.md` were updated to match.
-- **13** — `packaging/agent/Dockerfile` is buildable (it was not), keeps `ANALYSIS_BASE` deliberately
+- **13**: `packaging/agent/Dockerfile` is buildable (it was not), keeps `ANALYSIS_BASE` deliberately
   without a default so no floating tag can contradict the digest pin `scripts.py` enforces, and defaults to
   uid 65534. `packaging/agent/README.md` explains how to build and pin the image.
-- **17** — `AnalysisService` grew a module-level `_terminate_group()`, unit-tested to prove a grandchild
+- **17**: `AnalysisService` grew a module-level `_terminate_group()`, unit-tested to prove a grandchild
   process cannot outlive a cancelled build.
-- **28** — `gui/agent_jobs.py` now sends a one-line failure summary to the outcome label and the full
+- **28**: `gui/agent_jobs.py` now sends a one-line failure summary to the outcome label and the full
   detail to the activity pane, guarded so an exception with an empty message cannot raise inside the
   worker's own handler.
 
@@ -318,7 +317,7 @@ reporting "0 succeeded" does not mean "0 changed". Always diff and run the suite
 
 Ordered by what a reviewer would demand first.
 
-### 6.1 The Agent tab GUI — not started, and it is the user-facing half
+### 6.1 The Agent tab GUI, which is not started and is the user-facing half
 
 `src/gridlens/gui/agent_tab.py` was deliberately reserved and is **unchanged** from the prior session. It
 still hardcodes `HermesAdapter` and shows the two hosted entries as disabled placeholder strings. Everything
@@ -328,7 +327,7 @@ below it is now provider-neutral, so this is wiring, not redesign. Required:
    id as item data). On change, start a new session and re-probe.
 2. **Per-provider probe.** `RuntimeProbe` should take a provider id and call
    `create_adapter(provider, endpoint).probe()`.
-3. **Install and login prompts** — the user asked for this explicitly. Drive them from the new
+3. **Install and login prompts**: the user asked for this explicitly. Drive them from the new
    `RuntimeStatus` fields: `installed`, `authenticated` (None means signing in does not apply, as for local
    Ollama), `install_command`, `login_command`, `docs_url`, `policy_blocked`. Show the command in a
    read-only, selectable field with a copy button, plus the vendor documentation link. GridLens must not
@@ -351,7 +350,7 @@ below it is now provider-neutral, so this is wiring, not redesign. Required:
    covered.
 10. Finding **18**: `text` events are audited but never rendered, so the transcript sits blank for the whole
     turn. Render streamed text incrementally (append at the cursor during streaming; rebuild once at
-    completion so the citation-normalized final text replaces the stream) — do not rebuild the document on
+    completion so the citation-normalized final text replaces the stream). Do not rebuild the document on
     every delta.
 11. Finding **19**: the hosted gate's reason exists only as a collapsed item tooltip. Make it visible.
 12. Finding **20**: separate the channels. `diagnostics` currently receives runtime status, analysis
@@ -360,7 +359,7 @@ below it is now provider-neutral, so this is wiring, not redesign. Required:
 13. Finding **21**: the Sources panel parses the audit record but drops `result["error"]` (code and remedy)
     and `result["warnings"]`. Render them, and build each block defensively with `.get()` because
     `update_sources` also runs over older session files from the history browser.
-14. Finding **3**: `tests/test_agent_gui.py` line 23-24 is tautological — it asserts Qt's own plain-text
+14. Finding **3**: `tests/test_agent_gui.py` line 23-24 is tautological, because it asserts Qt's own plain-text
     round-trip. Replace it with a real safe-rendering assertion. Use `tab.transcript.document().toHtml()`;
     `QPlainTextEdit` has no `toHtml()`.
 15. `gui/main_window.py` line 100 still reads "Ask a local Hermes agent about selected completed runs."
@@ -371,23 +370,23 @@ below it is now provider-neutral, so this is wiring, not redesign. Required:
 Everything in `docs/plans/agent_findings.md` that is still marked **open** and is not GUI work. Grouped by
 the file they touch, because that is how they should be batched:
 
-- **`src/gridlens/agent/tools.py`** — findings 15, 29, 30, 31, 32, 33, 34. The two that matter most are 15
+- **`src/gridlens/agent/tools.py`**: findings 15, 29, 30, 31, 32, 33, 34. The two that matter most are 15
   (an unhandled exception type escapes the result envelope, leaving an unpaired `started` record in the
   audit and returning a raw Python message to the model, which breaks the stable-error-code contract) and
   30/31 (the same missing existence guard in `_optional_table`, which turns a merely absent optional table
   into an error instead of a graceful fallback). 32, 33 and 34 improve answer quality for the user's own
   example questions: more of the recorded study settings, bus lookup that tolerates PSS/E name padding,
   and telling the reader which facilities a filter excluded.
-- **`src/gridlens/analysis/{csv_flat,event_index,contingencies}.py`** — finding 16, the most delicate one
+- **`src/gridlens/analysis/{csv_flat,event_index,contingencies}.py`**: finding 16, the most delicate one
   left. The streaming row path, the accelerated frame path, and the Parquet index disagree on how a circuit
   id such as `1.0`, `01` or `'1'` is canonicalized, so a drill-down query can silently miss rows. The fix
   is one shared null-safe canonicalizer called from all three producers, with the operation order right.
-- **`tests/test_agent_tools.py`** — findings 6, 8, 22. Five of the fifteen tools have no test, the metric
+- **`tests/test_agent_tools.py`**: findings 6, 8, 22. Five of the fifteen tools have no test, the metric
   semantics the plan enumerates are unasserted, and nothing pins the untrusted-data caps. Do **not** extend
   the shared fixture in `tests/conftest.py`; several existing assertions pin exact counts derived from it.
-- **`tests/test_agent_hermes_installed.py`** — finding 7, a real scored evaluation across plan §11's seven
+- **`tests/test_agent_hermes_installed.py`**: finding 7, a real scored evaluation across plan §11's seven
   dimensions instead of one collapsed assertion.
-- **Documentation** — findings 9, 23, 24 (the plan document), 10 and 27 (user guide, troubleshooting), 11
+- **Documentation**: findings 9, 23, 24 (the plan document), 10 and 27 (user guide, troubleshooting), 11
   and 26 (architecture, developer guide, README), 25 (the csv_flat reference). The measured numbers these
   documents need are all in §4.1 of this handoff.
 
@@ -424,13 +423,14 @@ because it is the path a first-time user hits.
   CLI lets a caller prove the effective tool inventory. The adapter is written and tested; only the
   isolation gate blocks it.
 - **Opt-in tests that were never run here:** `GRIDLENS_TEST_SANDBOX_IMAGE` (needs a digest-pinned image
-  built from `packaging/agent/Dockerfile`, which could not be built as written — finding 13) and
+  built from `packaging/agent/Dockerfile`, which could not be built as written, per finding 13) and
   `GRIDLENS_TEST_SAMPLE_PROJECT` (the read-only cache benchmark against the real project).
 - **Multi-turn behaviour for a replay-based adapter** is implemented but untested against a real hosted CLI,
   because that would require opening the egress gate.
 - **PyInstaller and Debian packaging** were not rebuilt this session. `mcp==1.30.0` is pinned and the spec
-  collects it, but plan phase 2's exit criterion — the frozen and packaged entry points passing the same
-  tests as the source entry point — has not been re-confirmed since the agent package grew.
+  collects it, but plan phase 2's exit criterion has not been re-confirmed since the agent
+  package grew. That criterion is the frozen and packaged entry points passing the same tests as the
+  source entry point.
 
 ---
 
