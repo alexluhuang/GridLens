@@ -21,6 +21,7 @@ from gridlens.agent.tools import TOOL_NAMES, ToolService
 
 
 def create_server(context: SessionContext):
+    """Build the MCP server that exposes this session's tools, and nothing else."""
     from mcp.server.fastmcp import FastMCP
     from mcp.types import ToolAnnotations
 
@@ -32,6 +33,7 @@ def create_server(context: SessionContext):
 
 
 def main() -> int:
+    """Serve the tools over stdio. This is what the --mcp-server entry point runs."""
     try:
         context_path = os.environ.get("GRIDLENS_AGENT_CONTEXT", "")
         if not context_path:
@@ -45,6 +47,7 @@ def main() -> int:
 
 
 def tool_cli(argv: list[str]) -> int:
+    """Call one tool from the command line, with no model and no MCP process."""
     parser = argparse.ArgumentParser(description="Call a deterministic tool using an existing GridLens session context.")
     parser.add_argument("context", type=Path)
     parser.add_argument("tool", choices=TOOL_NAMES)
