@@ -33,6 +33,63 @@ MAX_OUTPUT_BYTES = 256 * 1024
 DOCKER_HOST = "unix:///var/run/docker.sock"
 
 
+READ_CHUNK_BYTES = 8192
+CREATE_TIMEOUT_SECONDS = 20
+INSPECT_TIMEOUT_SECONDS = 10
+REMOVE_TIMEOUT_SECONDS = 15
+POLL_SECONDS = 0.1
+
+
+def _require_sandbox_image(executable: str, image: str, environment: dict) -> None:
+    """Refuse any image that is not the separately prepared analysis sandbox.
+
+    The label is the check, not the name. GridLens passes --pull=never, so an image that is absent or was
+    built for another purpose has to be rejected here rather than discovered inside the container.
+    """
+    inspection = subprocess.run(
+        [executable, "--host", DOCKER_HOST, "image", "inspect", image, "--format", '{{index .Config.Labels "org.gridlens.purpose"}}'],
+        capture_output=True, timeout=INSPECT_TIMEOUT_SECONDS, env=environment,
+    )
+    if inspection.returncode or inspection.stdout.strip() != b"generated-analysis":
+        raise AgentError("SANDBOX_IMAGE_REQUIRED", "Prepare a pinned image from packaging/agent/Dockerfile. GridLens never pulls an image for script execution.")
+
+
+def _stream_bounded_output(process, output: bytearray, cancelled, deadline: float) -> None:
+    """Collect the container's output, stopping on cancellation, the deadline, or the size cap.
+
+    The cap is enforced on the way in rather than afterward, so a runaway script cannot fill memory before
+    anyone notices it exceeded the limit.
+    """
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while selector.get_map():
+            if cancelled.is_set():
+                raise AgentError("CANCELLED", "Script execution cancelled.")
+            if time.monotonic() >= deadline:
+                raise AgentError("TIMEOUT", "The script exceeded its wall-clock limit.")
+            for key, _ in selector.select(POLL_SECONDS):
+                chunk = os.read(key.fileobj.fileno(), READ_CHUNK_BYTES)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                remaining = MAX_OUTPUT_BYTES - len(output)
+                output.extend(chunk[:remaining])
+                if len(chunk) > remaining:
+                    raise AgentError("OUTPUT_LIMIT", "The script exceeded its output limit.")
+
+
+def _remove_container(executable: str, name: str, environment: dict) -> bool:
+    """Remove the container and report whether it is gone. Never raises, so cleanup cannot mask a result."""
+    try:
+        removal = subprocess.run(
+            [executable, "--host", DOCKER_HOST, "rm", "--force", name],
+            capture_output=True, timeout=REMOVE_TIMEOUT_SECONDS, env=environment,
+        )
+        return removal.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def save_proposal(context: SessionContext, run_id: str, purpose: str, code: str) -> dict:
     """Save a model-proposed script for review. This never executes anything."""
     context.run(run_id)
@@ -100,9 +157,7 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
     run = context.run(record["run_id"])
     command = sandbox_command(executable, name, image, run, script)
     environment = minimal_environment()
-    inspection = subprocess.run([executable, "--host", DOCKER_HOST, "image", "inspect", image, "--format", '{{index .Config.Labels "org.gridlens.purpose"}}'], capture_output=True, timeout=10, env=environment)
-    if inspection.returncode or inspection.stdout.strip() != b"generated-analysis":
-        raise AgentError("SANDBOX_IMAGE_REQUIRED", "Prepare a pinned image from packaging/agent/Dockerfile. GridLens never pulls an image for script execution.")
+    _require_sandbox_image(executable, image, environment)
     cancelled = cancelled or threading.Event()
     execution = scoped_path(context.directory, Path("generated/executions") / uuid4().hex, directory=True)
     execution.mkdir(parents=True, mode=0o700)
@@ -117,40 +172,20 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
     process = None
     output = bytearray()
     try:
-        created = subprocess.run(command, capture_output=True, timeout=20, env=environment)
+        created = subprocess.run(command, capture_output=True, timeout=CREATE_TIMEOUT_SECONDS, env=environment)
         if created.returncode:
             raise AgentError("SANDBOX_FAILED", created.stderr.decode(errors="replace")[:2000])
         if cancelled.is_set():
             raise AgentError("CANCELLED", "Script execution cancelled.")
         process = subprocess.Popen([executable, "--host", DOCKER_HOST, "start", "--attach", name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment, start_new_session=True)
         deadline = time.monotonic() + timeout
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            while selector.get_map():
-                if cancelled.is_set():
-                    raise AgentError("CANCELLED", "Script execution cancelled.")
-                if time.monotonic() >= deadline:
-                    raise AgentError("TIMEOUT", "The script exceeded its wall-clock limit.")
-                for key, _ in selector.select(0.1):
-                    chunk = os.read(key.fileobj.fileno(), 8192)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                        continue
-                    remaining = MAX_OUTPUT_BYTES - len(output)
-                    output.extend(chunk[:remaining])
-                    if len(chunk) > remaining:
-                        raise AgentError("OUTPUT_LIMIT", "The script exceeded its output limit.")
+        _stream_bounded_output(process, output, cancelled, deadline)
         result["exit_code"] = process.wait(timeout=2)
         result["status"] = "completed" if result["exit_code"] == 0 else "failed"
     except (AgentError, OSError, subprocess.SubprocessError) as exc:
         result.update(status="failed", error=exc.code if isinstance(exc, AgentError) else "SANDBOX_FAILED", detail=str(exc)[:2000])
     finally:
-        try:
-            cleanup = subprocess.run([executable, "--host", DOCKER_HOST, "rm", "--force", name], capture_output=True, timeout=15, env=environment)
-            cleanup_failed = bool(cleanup.returncode)
-        except (OSError, subprocess.SubprocessError):
-            cleanup_failed = True
-        if cleanup_failed:
+        if not _remove_container(executable, name, environment):
             result["cleanup_warning"] = "Check Docker for the recorded GridLens container name."
         if process:
             terminate_process(process)
