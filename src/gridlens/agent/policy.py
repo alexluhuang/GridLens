@@ -17,6 +17,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 
 class AgentError(ValueError):
+    """A refusal the user can act on: a stable code, and a remedy written for a person."""
     def __init__(self, code: str, remedy: str) -> None:
         super().__init__(remedy)
         self.code = code
@@ -43,6 +44,7 @@ def local_endpoint(url: str) -> str:
 
 
 class _NoRedirect(HTTPRedirectHandler):
+    """Refuse redirects, so a loopback URL cannot be bounced somewhere else mid-request."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise AgentError("ENDPOINT_REDIRECT", "Ollama must answer directly on loopback without redirects.")
 

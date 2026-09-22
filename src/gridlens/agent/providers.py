@@ -20,6 +20,7 @@ from gridlens.agent.policy import AgentError
 
 @dataclass(frozen=True)
 class ProviderDescriptor:
+    """What the GUI needs in order to render one provider without knowing which provider it is."""
     provider: str
     label: str
     route: str

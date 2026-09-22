@@ -46,6 +46,7 @@ class RuntimeStatus:
 
 @dataclass(frozen=True)
 class RuntimeEvent:
+    """One normalized event from a runtime: a kind the controller knows, plus text and payload."""
     kind: str
     text: str = ""
     data: dict = field(default_factory=dict)
@@ -53,6 +54,7 @@ class RuntimeEvent:
 
 @dataclass(frozen=True)
 class PreparedRuntime:
+    """Everything needed to launch one turn, fixed at session preparation rather than per turn."""
     context: SessionContext
     command: tuple[str, ...]
     environment: dict[str, str]
