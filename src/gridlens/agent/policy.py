@@ -50,6 +50,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def ollama_json(endpoint: str, path: str, body: dict | None = None) -> dict:
+    """Call a loopback Ollama endpoint and return its bounded JSON response."""
     origin = local_endpoint(endpoint)
     request = Request(
         origin + path,
@@ -72,6 +73,7 @@ def ollama_json(endpoint: str, path: str, body: dict | None = None) -> dict:
 
 
 def verify_model(endpoint: str, model: str) -> None:
+    """Refuse a model that is remote, cloud-backed, or unable to call tools."""
     info = ollama_json(endpoint, "/api/show", {"model": model})
     if info.get("remote_host") or info.get("remote_model") or "cloud" in model.lower().split(":")[-1]:
         raise AgentError("REMOTE_MODEL_BLOCKED", "Choose an installed local model. Ollama cloud models are disabled.")
@@ -99,6 +101,7 @@ def hosted_authorization() -> str:
 
 
 def require_hosted_authorization(provider: str, isolation_proven: bool = True) -> None:
+    """Refuse a hosted runtime unless an operator has authorized this deployment."""
     level = hosted_authorization()
     if not level:
         raise AgentError("HOSTED_DISABLED", HOSTED_DISABLED_REMEDY)
