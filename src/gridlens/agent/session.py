@@ -102,6 +102,13 @@ def export_session(directory: Path, destination: Path) -> None:
 
 @dataclass(frozen=True)
 class SessionContext:
+    """The authority for one conversation, written once and never amended.
+
+    Creating a context is the moment the route is decided, before any project text can reach a runtime.
+    Everything the tools may read is reachable from these fields, so a session cannot widen its own scope:
+    changing the project, the runs, the model, or the runtime means starting a new one.
+    """
+
     project_root: Path
     run_ids: tuple[str, ...]
     model: str
