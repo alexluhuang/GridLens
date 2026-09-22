@@ -91,6 +91,7 @@ class CodexAdapter:
         self.endpoint = ""
 
     def probe(self) -> RuntimeStatus:
+        """Report installation, version, and sign-in state, then explain why the route stays closed."""
         import shutil
 
         common = {"provider": self.provider, "route": self.route, "docs_url": DOCS_URL, "install_command": INSTALL_COMMAND, "login_command": LOGIN_COMMAND}
@@ -129,6 +130,7 @@ class CodexAdapter:
         return argv
 
     def prepare(self, session: SessionContext) -> PreparedRuntime:
+        """Refuse to start a turn, because this CLI's tool surface cannot be proven."""
         status = self.probe()
         require_hosted_authorization(self.provider)
         if not status.installed:
@@ -136,6 +138,7 @@ class CodexAdapter:
         raise AgentError("ISOLATION_UNPROVEN", ISOLATION_REMEDY)
 
     def start_turn(self, prepared: PreparedRuntime, prompt_path: Path, continuation: str = "") -> subprocess.Popen:
+        """Refuse to start a turn. See prepare."""
         raise AgentError("ISOLATION_UNPROVEN", ISOLATION_REMEDY)
 
     def parse_event(self, line: str) -> RuntimeEvent:
@@ -173,6 +176,7 @@ class CodexAdapter:
         raise AgentError("RUNTIME_PROTOCOL_ERROR", "The installed CLI event format differs from the tested version.")
 
     def cancel(self, process: subprocess.Popen) -> None:
+        """Terminate the runtime and the MCP server it started."""
         terminate_process(process)
 
 
