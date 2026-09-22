@@ -1,3 +1,14 @@
+"""The turn loop, and the canonical record of the conversation.
+
+The controller owns the transcript. A runtime may keep its own session and resume it, but that copy is
+never the only one: an adapter that cannot resume safely gets a bounded replay of this record instead.
+The loop reads the child process through a selector under a wall-clock deadline and byte caps, normalizes
+every line through the adapter, audits it, and terminates the whole process group on stop, timeout, or
+error.
+
+`normalize_citations` is the other half of the trust story. An answer may cite only call IDs that appear
+in the audit, and anything else is rewritten so the reader can see it was invented.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict
