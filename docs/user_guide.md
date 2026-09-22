@@ -107,14 +107,18 @@ GridLens ships no model and no inference. Install the tools yourself:
 2. Install Ollama and start it, which serves models on `http://127.0.0.1:11434`.
 3. Pull a model that supports tool calls, for example `ollama pull nemotron3:33b`.
 
-Hosted runtimes appear in the **Runtime** list but stay disabled. Sending project data to an online model
-conflicts with the local-only rule in [CEII security notes](security_ceii.md).
+Codex and Claude Code can be selected to inspect their installation and sign-in status, but **Send** stays
+unavailable under the current local-only rule in [CEII security notes](security_ceii.md). GridLens shows a
+copyable CLI command when sign-in is needed, plus the provider's documentation link. It never installs a CLI,
+installs a model, or handles your credentials. Codex also remains unavailable because this CLI version cannot
+prove that its built-in file and shell tools are isolated from project data.
 
 ### Ask a question
 
 1. Go to **Agent**.
-2. Click **Check runtime**. GridLens reports the Hermes version, whether Ollama answers on loopback, and
-   which models are installed. Signing in does not apply to local Ollama.
+2. GridLens checks the selected runtime when the tab opens. **Check runtime** repeats the probe. The status
+   shows the CLI version, route, installed models, and sign-in state when sign-in applies. Local Ollama needs
+   no sign-in. Use the setup command and documentation shown below the status if something is missing.
 3. Choose a **Local model** and a **Completed run**. To compare two runs, also choose one under
    **Compare with**.
 4. If the run has no current analysis cache, click **Build / refresh analysis**. To also enable
@@ -127,8 +131,9 @@ to the runs it was created with.
 
 ### Read the answer
 
-The **Activity** pane shows which tools ran. The **Sources** pane shows each call, how many rows it returned,
-whether the result was truncated, and the files it read.
+The **Activity** pane shows which tools ran. The **Sources** pane shows each call, its filters, error or
+warnings, how many rows it returned, whether the result was truncated, and the files it read. The answer
+lists consulted tool-call IDs when a model omits inline citations.
 
 Watch for two limits the agent reports rather than hides. Maximum loading covers every recorded case in the
 cache, including the base case, so it is not a converged N-1-only number. Thermal margin is 100 minus maximum

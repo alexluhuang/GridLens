@@ -248,7 +248,7 @@ Keep the first catalog small. Tool descriptions should encode when a tool is not
 |---|---|
 | `get_run_inventory` | Selected runs, status, timestamps, available caches and outputs. |
 | `locate_run_artifacts` | Resolve a controlled enum such as `raw_input`, `flat_results`, `configuration`, `run_log`, `interactive_tables`, or `exports`. |
-| `get_run_method` | Manifest and parsed XML values: image, executable, MPI count, exact recorded command, contingency settings, voltage limits, input hashes, and analysis backend. |
+| `get_run_method` | Manifest and section-scoped parsed XML values: image, executable, MPI count, exact recorded command, contingency rating, voltage limits, control settings, input hashes, and analysis backend. |
 | `summarize_convergence` | Counts and bounded examples from the 719 KB convergence file. |
 | `rank_branch_loading` | Rank selected facility types by base or maximum N-1 utilization, with binding contingency and filters. |
 | `summarize_loading` | Area or voltage-class summary using the same facility and voltage filters as the GUI. |
@@ -416,7 +416,7 @@ Exit: golden fixture tests pass without a model or MCP process; tools cannot add
 
 ### Phase 2: MCP and packaging
 
-State: Delivered in source. `mcp==1.30.0` is pinned, `--mcp-server` dispatches before Qt, and the SDK conformance test passes. The frozen executable and the Debian package have not been rebuilt since the agent package grew.
+State: Delivered and verified. `mcp==1.30.0` is pinned, `--mcp-server` dispatches before Qt, and the official SDK conformance test passes against source, the final frozen executable, and the executable extracted from the arm64 Debian package. The package includes the sandbox recipe under `/usr/share/doc/gridlens/agent-sandbox/`.
 
 - Add the official MCP SDK and stdio server.
 - Add `--mcp-server` dispatch before Qt imports.
@@ -438,9 +438,12 @@ Hermes CLI: qwen3.6:35b in 20.6 s, nemotron3:33b in 25.6 s, gemma4:31b in 53.8 s
 granite4.2:30b in 71.1 s, and nemotron-3-super:120b in 72.6 s. A separate test drives the installed CLI against
 a synthetic loopback model server and asserts that only the fifteen GridLens tools are exposed.
 
+Future scored local evaluations target `nemotron3:33b` and `gemma4:31b` using the same synthetic questions
+and tool catalog. The earlier six-model result above is retained as a historical compatibility check.
+
 ### Phase 4: GUI
 
-State: Partly delivered. The tab, worker, activity view, Sources panel, session browser, and the shared `AnalysisService` exist. Provider selection, install and sign-in prompts, the route badge, and streamed-text rendering are open.
+State: Delivered. The registry-driven provider selector, install and sign-in guidance, route badge, streamed text, activity view, Sources panel, session browser, and shared `AnalysisService` exist. Hosted sessions remain behind the governance gate.
 
 - Add the Agent tab, worker/controller, activity, Sources panel, diagnostics, and session browser.
 - Share `AnalysisService` with the Analysis tab.

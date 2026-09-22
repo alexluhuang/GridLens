@@ -1,7 +1,10 @@
 # Handoff: AI-assisted transmission planning agent
 
+> Completion update, 2026-09-22: the open findings below have been implemented. This handoff remains a
+> historical snapshot; see `ai_planning_agent_verification.md` for the final tests and deployment limits.
+
 Written 2026-09-21; revised 2026-09-22 after the work was merged to `main` and the remediation batch
-failed. The status here is current as of the revision.
+failed. The status below is a snapshot of that revision; the completion update above is newer.
 
 This document is written for whoever picks the feature up next, human or agent. It records what exists,
 what was measured, what is still open, and the traps that cost time. Read §1, §5 and §6 first, then the
@@ -401,7 +404,7 @@ settles:
 ```
 cd /home/alh360/Documents/gridpack-workbench-dev
 GRIDLENS_TEST_HERMES=1 .venv/bin/python -m pytest tests/test_agent_hermes_installed.py -q -s -k "isolation or resumes"
-GRIDLENS_TEST_LOCAL_MODELS=1 GRIDLENS_TEST_MODEL_NAMES=nemotron3:33b,qwen3.6:35b \
+GRIDLENS_TEST_LOCAL_MODELS=1 GRIDLENS_TEST_MODEL_NAMES=nemotron3:33b,gemma4:31b \
   .venv/bin/python -m pytest tests/test_agent_hermes_installed.py -q -s -k local_models
 ```
 

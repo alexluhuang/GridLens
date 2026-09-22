@@ -54,6 +54,20 @@ The test suite is deliberately focused. Add or update a test when you change par
 construction, project-folder behavior, GUI view-model logic, agent tools or runtime adapters, package
 metadata, or documentation links.
 
+### Opt-in agent checks
+
+The default suite uses synthetic fixtures and makes no model calls. Run these separately when the matching
+local dependency is available:
+
+- `GRIDLENS_TEST_HERMES=1` tests the installed Hermes CLI against a synthetic loopback model server.
+- `GRIDLENS_TEST_LOCAL_MODELS=1` runs a scored synthetic evaluation through installed Ollama models. Use
+  `GRIDLENS_TEST_MODEL_NAMES=nemotron3:33b,gemma4:31b` to select models and
+  `GRIDLENS_TEST_EVAL_OUTPUT=/tmp/model_evaluation.json` to retain the score file.
+- `GRIDLENS_TEST_SAMPLE_PROJECT` and `GRIDLENS_TEST_SAMPLE_RUN` select a real, approved project/run for a
+  read-only cache benchmark. The tool audit remains under pytest's temporary directory.
+- `GRIDLENS_TEST_MCP_EXECUTABLE` checks the MCP entry point of a frozen executable.
+- `GRIDLENS_TEST_SANDBOX_IMAGE` checks generated-script execution with a locally prepared, pinned image.
+
 ## Code organization
 
 - `core/` owns settings, projects, validation, and manifests.

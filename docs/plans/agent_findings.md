@@ -15,7 +15,10 @@ cannot pass because a fixture's CSV is header-only, a `toHtml()` that does not e
 one-liner that raises `IndexError` on an empty exception message, or a mount narrowing that would break the
 user's own example questions. Follow the Fix text rather than re-deriving it.
 
-**Status: 15 of 34 applied, 19 open.** Applied: 1, 5, 9, 10, 11, 12, 13, 14, 17, 23, 24, 25, 26, 27, 28.
+**Completion update, 2026-09-22: all 34 findings have been addressed.** The status column and the
+Defect/Fix sections below preserve the review snapshot (15 applied, 19 open) so the original evidence and
+proposed corrections remain readable. The Agent tab, data-path, test, and packaging remediation is recorded
+in `ai_planning_agent_verification.md` and the commits following this handoff.
 
 Severity is the verifier's: *major* means a reviewer would demand it before merge, *minor* means it is
 worth doing. No finding was rated a blocker.
@@ -715,4 +718,3 @@ Implement a third pass, but key it on the PSS/E truncation pattern rather than p
 **Fix.**
 
 Do not count exclusions inside `_loading`'s loop as proposed - `max_line_utilization_rows` has already dropped non-selected facility types and everything under MIN_BRANCH_ANALYSIS_VOLTAGE_KV (analysis/loading.py:72-76), so `excluded_by_facility_filter` and `excluded_below_min_kv` computed there would both be 0 at defaults. Instead: (1) in `_loading`, count against the source cache - `monitored_facility_count = len(tables["pflow_mm"].rows)` and, by joining pflow_mm keys to `branch_metadata["raw_branch_type"]`, `excluded_by_facility_filter` and `monitored_below_50kv` (in the verified run: 1,823 and 204, all 204 being transformers, so at facility="line" min_kv excludes nothing extra); count `excluded_by_area` in the loop, where it is genuinely local. (2) Append one warning only when a count is non-zero, worded accurately: "1,823 of 8,646 monitored facilities are transformers and were excluded because facility='line'; call facility='all' to include them. 204 monitored transformer facilities are below 50 kV and are outside the GridLens analysis cutoff at any min_kv." Do not tell the model facility='all' recovers the sub-50 kV rows - it does not. (3) Return a single `filters` echo ({"facility", "min_kv", "area"}) plus `monitored_facility_count` from `_loading` so all four tools carry it automatically, and render `filters` in the GUI Sources block (gui/agent_tab.py:332), which today shows no arguments at all. (4) Add one sentence to SYSTEM_PROMPT (agent/prompt.py) requiring the answer to state the facility scope it queried and to re-query with facility='all' before making any system-wide "worst" claim. (5) Add a test asserting that a lines-only call on a cache containing transformers emits the exclusion warning and reports monitored_facility_count > total_matching; tests/test_agent_tools.py currently asserts only the INVALID_FILTER path (line 92).
-
