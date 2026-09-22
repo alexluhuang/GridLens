@@ -1,3 +1,14 @@
+"""The deterministic tools the model calls instead of reading the result files itself.
+
+Every public method decorated with `@tool` is exposed over MCP, and its docstring is the description the
+model sees, so those docstrings are part of the interface rather than commentary. The decorator routes
+each call through `ToolService._invoke`, which is where the shared behavior lives: a per-call identifier,
+row and byte caps the model cannot raise, provenance for every file read, stable error codes, and an
+append-only audit record written before and after the call.
+
+The caps are the reason the feature works at all. A run's flat result can be several gigabytes, so these
+tools read the compact caches instead and refuse a stale one rather than quote numbers from it.
+"""
 from __future__ import annotations
 
 import csv
