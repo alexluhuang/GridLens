@@ -432,7 +432,8 @@ class ToolService:
         if excluded_facility:
             self.warnings.append(f"{excluded_facility} of {monitored} monitored facilities were excluded by facility='{facility}'; use facility='all' to include supported types above the voltage cutoff.")
         if below_cutoff:
-            self.warnings.append(f"{below_cutoff} monitored facilities are below the fixed 50 kV GridLens analysis cutoff and are excluded for every facility filter.")
+            noun = "facility is" if below_cutoff == 1 else "facilities are"
+            self.warnings.append(f"{below_cutoff} monitored {noun} below the fixed 50 kV GridLens analysis cutoff and excluded for every facility filter.")
         if excluded_min_kv:
             self.warnings.append(f"{excluded_min_kv} facilities were excluded by min_kv={min_kv}.")
         if excluded_area:

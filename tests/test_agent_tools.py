@@ -300,6 +300,9 @@ def test_index_rejections_keep_their_codes(agent_context):
     for change, expected in (({"source": "work/../../../../etc/passwd"}, "PATH_OUTSIDE_SESSION"), ({"generation": "../outside"}, "PATH_OUTSIDE_SESSION")):
         path.write_text(json.dumps({**original, **change}))
         assert ToolService(agent_context).get_contingency_flows("run_a", 1)["error"]["code"] == expected
+    (path.parent / "linked-generation").symlink_to(path.parent / original["generation"], target_is_directory=True)
+    path.write_text(json.dumps({**original, "generation": "linked-generation"}))
+    assert ToolService(agent_context).get_contingency_flows("run_a", 1)["error"]["code"] == "PATH_OUTSIDE_SESSION"
     path.write_text("{not json")
     assert ToolService(agent_context).get_contingency_flows("run_a", 1)["error"]["code"] == "INVALID_ARTIFACT"
     path.write_text(json.dumps(original))

@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(4, "Analyze non-transformer branch utilization.")
         self.tabs.setTabToolTip(5, "Analyze transformer utilization.")
         self.tabs.setTabToolTip(6, "Read analysis assumptions and data notes.")
-        self.tabs.setTabToolTip(7, "Ask a local Hermes agent about selected completed runs.")
+        self.tabs.setTabToolTip(7, "Ask a planning agent about selected completed runs.")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.configuration_tab.project_changed.connect(self.on_project_changed)

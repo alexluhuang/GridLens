@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import threading
 import time
 import tracemalloc
@@ -15,6 +16,9 @@ from gridlens.agent.controller import AgentController, session_sources
 from gridlens.agent.hermes import HermesAdapter, SYSTEM_PROMPT
 from gridlens.agent.session import SessionContext
 from gridlens.agent.tools import TOOL_NAMES, ToolService
+
+
+PLAN_TARGET_MODELS = ("nemotron3:33b", "gemma4:31b")
 
 
 @pytest.mark.skipif(os.environ.get("GRIDLENS_TEST_HERMES") != "1", reason="Set GRIDLENS_TEST_HERMES=1 to exercise the installed Hermes CLI against a synthetic loopback API.")
@@ -95,24 +99,80 @@ def test_installed_hermes_exposes_only_gridlens_tools_and_resumes(agent_project)
 
 @pytest.mark.skipif(os.environ.get("GRIDLENS_TEST_LOCAL_MODELS") != "1", reason="Set GRIDLENS_TEST_LOCAL_MODELS=1 for installed Ollama model evaluation.")
 def test_installed_local_models_share_tools_and_prompt(agent_project):
+    """Use the synthetic project to score installed models; pytest reads scores and writes a JSON report."""
     adapter = HermesAdapter()
     status = adapter.probe()
     assert status.ready, status.message
     records = []
-    selected = os.environ.get("GRIDLENS_TEST_MODEL_NAMES", "").split(",") if os.environ.get("GRIDLENS_TEST_MODEL_NAMES") else status.models
+    selected = os.environ.get("GRIDLENS_TEST_MODEL_NAMES", "").split(",") if os.environ.get("GRIDLENS_TEST_MODEL_NAMES") else [model for model in PLAN_TARGET_MODELS if model in status.models]
+    if not selected:
+        pytest.skip("None of the plan target models is installed; set GRIDLENS_TEST_MODEL_NAMES to choose installed models.")
     assert set(selected).issubset(status.models)
     for model in selected:
         context = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
         controller = AgentController(context, HermesAdapter(status.endpoint))
         started = time.monotonic()
-        answer = controller.run_turn("In run_a, use rank_branch_loading with limit 1 to identify the most congested non-transformer line. Give its maximum observed loading percentage, circuit/section, convergence caveat and source citation. Keep the answer under 100 words.", lambda event: None)
+        answer = controller.run_turn("In run_a, which non-transformer line is most congested, and how confident should I be in that number?", lambda event: None)
         sources = session_sources(context.directory)
-        passed = any(row["tool"] == "rank_branch_loading" and row["outcome"] == "ok" for row in sources) and "120" in answer and any(f"[{row['call_id']}]" in answer for row in sources)
-        record = {"model": model, "seconds": round(time.monotonic() - started, 3), "passed": passed, "session": str(context.directory)}
+        ranked = [row for row in sources if row["tool"] == "rank_branch_loading" and row["outcome"] == "ok"]
+        first = {
+            "tool_selection": bool(ranked),
+            "arguments": any(row.get("arguments", {}).get("run_id") == "run_a" and row.get("arguments", {}).get("facility") == "line" for row in ranked),
+            "numeric_fidelity": bool(re.search(r"\b120(?:\.0+)?\s*%", answer)),
+            "units": "%" in answer or "percent" in answer.casefold(),
+            "metric_wording": bool(re.search(r"(maximum|highest|worst).{0,35}(observed|loading|utilization)", answer, re.I)),
+            "convergence_caveat": bool(re.search(r"(non.converged|base.case|failed|not.*N.1)", answer, re.I)),
+            "citation": any(f"[{row['call_id']}]" in answer for row in sources) and "invalid source" not in answer,
+            "truncation_disclosure": not any(row["result"]["data"].get("truncated") for row in sources) or "truncat" in answer.lower() or "partial" in answer.lower(),
+        }
+        margin_context = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
+        margin_answer = AgentController(margin_context, HermesAdapter(status.endpoint)).run_turn("In run_a, where is the largest thermal loading margin among non-transformer lines? State what the margin can and cannot establish.", lambda event: None)
+        margin_sources = session_sources(margin_context.directory)
+        margin = {
+            "tool_selection": any(row["tool"] == "rank_branch_loading" and row["outcome"] == "ok" and row.get("arguments", {}).get("metric") == "thermal_margin_pct_points" for row in margin_sources),
+            "numeric_fidelity": bool(re.search(r"\b20(?:\.0+)?\s*(?:percentage points?|%)", margin_answer, re.I)),
+            "thermal_margin_wording": "margin" in margin_answer.lower() and ("percentage point" in margin_answer.lower() or "%" in margin_answer),
+        }
+        restricted = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
+        restricted_controller = AgentController(restricted, HermesAdapter(status.endpoint))
+        cross_answer = restricted_controller.run_turn("Compare run_a and run_b. If run_b is outside my selected runs, say so.", lambda event: None)
+        cross_calls = session_sources(restricted.directory)
+        cross_run = {
+            "no_cross_run_access": all(row["outcome"] == "error" and row["result"]["error"]["code"] == "RUN_NOT_SELECTED" for row in cross_calls if "run_b" in json.dumps(row.get("arguments", {}))),
+            "access_disclosed": bool(re.search(r"(not selected|not among the selected|no access|cannot access|outside.*selected)", cross_answer, re.I)),
+        }
+        manifest = agent_project / "runs/run_a/reports/interactive_analysis_manifest.json"
+        saved_manifest = manifest.read_text()
+        try:
+            damaged = json.loads(saved_manifest)
+            damaged["dataset_version"] = "stale-evaluation-fixture"
+            manifest.write_text(json.dumps(damaged))
+            stale = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
+            stale_answer = AgentController(stale, HermesAdapter(status.endpoint)).run_turn("What is the most congested line in run_a?", lambda event: None)
+            stale_calls = session_sources(stale.directory)
+            missing = {
+                "tool_error_observed": any(row["result"]["error"] and row["result"]["error"]["code"] == "ANALYSIS_NOT_BUILT" for row in stale_calls),
+                "no_invented_loading": not bool(re.search(r"\d+(?:\.\d+)?\s*%", stale_answer)),
+                "rebuild_instruction": "build" in stale_answer.lower() or "refresh" in stale_answer.lower(),
+            }
+        finally:
+            manifest.write_text(saved_manifest)
+        record = {
+            "model": model, "seconds": round(time.monotonic() - started, 3), "session": str(context.directory), "margin_session": str(margin_context.directory),
+            "congestion": first, "margin": margin, "cross_run": cross_run, "missing_cache": missing,
+            "score": sum(sum(values.values()) for values in (first, margin, cross_run, missing)),
+            "possible": sum(len(values) for values in (first, margin, cross_run, missing)),
+        }
         records.append(record)
         print(json.dumps(record))
-    (agent_project / "model_evaluation.json").write_text(json.dumps(records, indent=2))
-    assert all(record["passed"] for record in records), records
+    output = Path(os.environ.get("GRIDLENS_TEST_EVAL_OUTPUT", str(agent_project / "model_evaluation.json")))
+    output.write_text(json.dumps(records, indent=2))
+    assert all(
+        record["congestion"]["tool_selection"] and record["congestion"]["numeric_fidelity"] and record["congestion"]["citation"]
+        and record["cross_run"]["no_cross_run_access"] and record["missing_cache"]["no_invented_loading"]
+        and record["missing_cache"]["rebuild_instruction"]
+        for record in records
+    ), records
 
 
 @pytest.mark.skipif(not os.environ.get("GRIDLENS_TEST_SAMPLE_PROJECT"), reason="Set GRIDLENS_TEST_SAMPLE_PROJECT for a read-only cache benchmark.")

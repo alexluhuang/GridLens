@@ -14,6 +14,7 @@ from gridlens.gui.agent_tab import AgentTab, cited_answer
 
 
 def test_agent_tab_scope_plain_text_and_provider_guidance(agent_project):
+    """Use a synthetic project to check provider controls and safe text rendering; pytest reads assertions."""
     app = QApplication.instance() or QApplication([])
     tab = AgentTab()
     tab.set_project(Project("Synthetic Project", agent_project))
@@ -39,6 +40,11 @@ def test_agent_tab_scope_plain_text_and_provider_guidance(agent_project):
     assert "Sign in" in tab.setup_message.text()
     assert "CEII" in tab.runtime_policy.text()
     assert not tab.send_button.isEnabled()
+    tab.on_probed(RuntimeStatus(True, "Ready", "/bin/claude", "2.1.278", models=("default",), provider="claude", route="remote", authenticated=True, docs_url="https://code.claude.com/docs/en/cli-usage"))
+    tab.input.setPlainText("Where are files?")
+    assert not tab.send_button.isEnabled()
+    tab.remote_acknowledgement.setChecked(True)
+    assert tab.send_button.isEnabled()
     tab.new_session()
     assert not tab.transcript.toPlainText()
     assert tab.shutdown()
@@ -57,8 +63,15 @@ def test_streamed_answer_replaced_by_cited_final_and_sources_show_errors(agent_c
     tab.session_directory = agent_context.directory
     tab._parts = ["You\nWhere is the line?"]
     tab.transcript.setPlainText(tab._parts[0])
+    refreshes = []
+    update_sources = tab.update_sources
+    tab.update_sources = lambda: refreshes.append(True)
     tab.on_event(RuntimeEvent("text", "par"))
     tab.on_event(RuntimeEvent("text", "tial"))
+    assert refreshes == []
+    tab.on_event(RuntimeEvent("tool_result", "rank_branch_loading"))
+    assert refreshes == [True]
+    tab.update_sources = update_sources
     assert "Agent\npartial" in tab.transcript.toPlainText()
     records = [
         {"call_id": "T1", "phase": "completed", "tool": "rank_branch_loading", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 1, "truncated": False, "filters": {"facility": "line"}}, "warnings": ["failed cases included"], "provenance": {"sources": [{"path": "runs/run_a/reports/table.csv"}]}}},

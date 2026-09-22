@@ -78,31 +78,34 @@ def test_index_preserves_numeric_looking_circuits(indexed_run):
         assert total == 1 and rows[0]["line_id"] == circuit
 
 
-def test_row_frame_and_index_agree_on_literal_branch_keys(indexed_run, monkeypatch):
+@pytest.mark.parametrize("backend", ["pandas", "cudf"])
+def test_row_frame_and_index_agree_on_literal_branch_keys(indexed_run, monkeypatch, backend):
     """Quoted, padded, and numeric-looking labels remain distinct across all result paths."""
     pytest.importorskip("pyarrow")
-    pandas = pytest.importorskip("pandas")
+    module = pytest.importorskip(backend)
     from gridlens.analysis import csv_flat
 
     path = indexed_run / "work/test_flat.csv"
     path.write_text(
         "event_idx,contingency,from_bus,to_bus,circuit_id,section,rate_mva,loading_percent,viol\n"
-        "1,outage,1,2,1,,100,10,0\n"
-        "1,outage,1,2,01,,100,20,0\n"
-        "1,outage,1,2,1.0,,100,30,0\n"
-        "1,outage,1,2,'2 ',,100,40,0\n"
+        "1,outage,1,2,1,1,100,10,0\n"
+        "1,outage,1,2,01,01,100,20,0\n"
+        "1,outage,1,2,1.0,1.0,100,30,0\n"
+        "1,outage,1,2,'2 ','2 ',100,40,0\n"
         "1,outage,1,2,A,,100,50,0\n"
     )
     lookup = csv_flat._column_lookup(csv_flat._header(path))
-    frame = csv_flat._normalized_eager_flat_frame(path, lookup, csv_flat._LazyBackend("pandas", pandas))
-    frame_values = dict(zip(frame["line_id"], frame["loading_percent"]))
+    frame = csv_flat._normalized_eager_flat_frame(path, lookup, csv_flat._LazyBackend(backend, module))
+    if backend == "cudf":
+        frame = frame.to_pandas()
+    frame_values = {(row.line_id, row.section): row.loading_percent for row in frame.itertuples()}
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "python")
     parsed = parse_all_output_tables(indexed_run)
-    row_values = {row["line_id"]: float(row["max_utilization_pct"]) for row in parsed["pflow_mm"].rows}
-    assert frame_values == row_values == {"1": 10, "01": 20, "1.0": 30, "2": 40, "A": 50}
+    row_values = {(row["line_id"], row["section"]): float(row["max_utilization_pct"]) for row in parsed["pflow_mm"].rows}
+    assert frame_values == row_values == {("1", "1"): 10, ("01", "01"): 20, ("1.0", "1.0"): 30, ("2", "2"): 40, ("A", ""): 50}
     build_event_index(indexed_run)
-    for circuit, maximum in row_values.items():
-        rows, total, _ = query_event_index(indexed_run, branch=(1, 2, circuit, ""))
+    for (circuit, section), maximum in row_values.items():
+        rows, total, _ = query_event_index(indexed_run, branch=(1, 2, circuit, section))
         assert total == 1
         assert abs(rows[0]["loading_percent"]) == maximum
 

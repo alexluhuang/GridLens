@@ -151,6 +151,7 @@ class AgentController:
         self.context.set_status("running")
         self.context.message("user", prompt)
         try:
+            prior_calls = len(session_sources(self.context.directory))
             if self.prepared is None:
                 self.prepared = self.adapter.prepare(self.context)
             if self.cancelled.is_set():
@@ -161,7 +162,12 @@ class AgentController:
             final, return_code = self._consume_output(process, emit, buffers)
             if buffers["stdout"].strip() or return_code or final is None or not final.strip():
                 raise AgentError("RUNTIME_INCOMPLETE", f"{self.runtime_label} exited without a complete answer. Check the runtime and the selected model, then start a new session.")
-            final = normalize_citations(final, session_sources(self.context.directory))
+            sources = session_sources(self.context.directory)
+            final = normalize_citations(final, sources)
+            final = cite_uncited_turn(final, sources[prior_calls:])
+            final = disclose_truncated_results(final, sources[prior_calls:])
+            final = disclose_tool_failures(final, sources[prior_calls:])
+            final = qualify_capacity_answer(final, prompt)
             self.history.append({"role": "assistant", "text": final})
             self.context.message("assistant", final)
             self.context.set_status("completed")
@@ -212,3 +218,36 @@ def normalize_citations(text: str, sources: list[dict]) -> str:
         replace,
         text, flags=re.IGNORECASE,
     )
+
+
+def cite_uncited_turn(answer: str, turn_sources: list[dict]) -> str:
+    """Return an answer with current successful audit IDs when run_turn finds no model citation."""
+    if any(row.get("outcome") == "error" for row in turn_sources):
+        return answer
+    ids = [row["call_id"] for row in turn_sources if row.get("outcome") == "ok"]
+    if not ids or any(f"[{call_id}]" in answer for call_id in ids):
+        return answer
+    return answer.rstrip() + "\n\nSources consulted (model omitted inline citations): " + ", ".join(f"[{call_id}]" for call_id in ids[:10])
+
+
+def disclose_truncated_results(answer: str, turn_sources: list[dict]) -> str:
+    """Return an answer with a scope note for truncated turn_sources in run_turn."""
+    ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("data") or {}).get("truncated")]
+    if not ids or "truncat" in answer.lower() or "partial" in answer.lower():
+        return answer
+    return answer.rstrip() + "\n\nGridLens note: Tool results " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " were truncated by row limits; other facilities may be omitted."
+
+
+def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
+    """Return an answer with a rebuild note for stale-cache turn_sources in run_turn."""
+    ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT"]
+    if not ids:
+        return answer
+    return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " reported ANALYSIS_NOT_BUILT. The current cache is unavailable; no returned rows do not establish that congestion is absent. Use Build / refresh analysis and ask again."
+
+
+def qualify_capacity_answer(answer: str, question: str) -> str:
+    """Return an answer that qualifies thermal margin for capacity questions in run_turn."""
+    if not any(term in question.casefold() for term in ("margin", "capacity")):
+        return answer
+    return answer.rstrip() + "\n\nGridLens note: Observed thermal margin alone cannot establish how much more load, generation, or transfer a system can accommodate; that requires a separate power-flow study."

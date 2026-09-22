@@ -38,7 +38,7 @@ class RuntimeProbe(QThread):
         """Return an adapter status without blocking the GUI thread."""
         try:
             self.probed.emit(create_adapter(self.provider, self.endpoint).probe())
-        except AgentError as exc:
+        except (AgentError, OSError) as exc:
             self.probed.emit(RuntimeStatus(False, str(exc), provider=self.provider, route=descriptor(self.provider).route))
 
 
@@ -125,7 +125,7 @@ class AgentTab(QWidget):
         layout.addWidget(self.runtime_policy)
         self.remote_acknowledgement = QCheckBox("I understand this provider sends my questions and project-derived tool results off this machine.")
         layout.addWidget(self.remote_acknowledgement)
-        self.tool_scope = QLabel(f"Tools: {len(TOOL_NAMES)} GridLens tools only; runtime-native tools are disabled.")
+        self.tool_scope = QLabel(f"GridLens tools: {len(TOOL_NAMES)}. Runtime isolation is checked before a session starts.")
         self.tool_scope.setTextFormat(Qt.PlainText)
         layout.addWidget(self.tool_scope)
         build_row = QHBoxLayout()

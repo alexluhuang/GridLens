@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from gridlens.agent.controller import AgentController, normalize_citations
+from gridlens.agent.controller import AgentController, cite_uncited_turn, disclose_tool_failures, disclose_truncated_results, normalize_citations, qualify_capacity_answer
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
 from gridlens.agent.process import mcp_command, minimal_environment
@@ -123,6 +123,19 @@ def test_structured_events_and_unexpected_tool():
 def test_explicit_citations_resolve_only_known_audit_ids(citation):
     assert normalize_citations(citation, [{"call_id": "T1"}]) == "[T1]"
     assert normalize_citations(citation, []) == "[T1: invalid source]"
+
+
+def test_uncited_model_answer_reports_only_current_successful_sources():
+    """A model's missing citation is visible, with no failed or older calls implied as support."""
+    sources = [{"call_id": "T2", "outcome": "ok"}]
+    assert cite_uncited_turn("120%", sources) == "120%\n\nSources consulted (model omitted inline citations): [T2]"
+    assert cite_uncited_turn("120% [T2]", sources) == "120% [T2]"
+    assert cite_uncited_turn("No data", []) == "No data"
+    assert cite_uncited_turn("No data", [{"call_id": "T2", "outcome": "error"}]) == "No data"
+    assert disclose_truncated_results("120%", [{"call_id": "T2", "result": {"data": {"truncated": True}}}]).endswith("[T2] were truncated by row limits; other facilities may be omitted.")
+    assert disclose_truncated_results("No data", []) == "No data"
+    assert "Build / refresh analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
+    assert qualify_capacity_answer("20 percentage points", "How much extra capacity?").endswith("requires a separate power-flow study.")
 
 
 class StubAdapter(HermesAdapter):
