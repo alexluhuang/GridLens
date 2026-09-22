@@ -142,6 +142,8 @@ GridLens returned; it cannot recover omitted rows. For mean loading by voltage g
 GridLens uses `summarize_loading`, which computes each mean from all matching facilities before bounding
 the category rows shown to the model. The answer states the facility and area filters, number of
 facilities used, and per-group counts.
+For top-line control-area questions, GridLens reads the endpoint area labels in the ranked result and
+lists both areas when a line crosses a boundary.
 
 Watch for two limits the agent reports rather than hides. Maximum loading covers every recorded case in the
 cache, including the base case, so it is not a converged N-1-only number. Thermal margin is 100 minus maximum

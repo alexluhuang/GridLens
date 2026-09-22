@@ -180,12 +180,22 @@ class AgentController:
                     summary = ToolService(self.context).summarize_loading(self.context.run_ids[0], group_by=group_by, facility=facility, limit=MAX_ROWS)
                     emit(RuntimeEvent("tool_result", "summarize_loading (verified scope)", {"is_error": bool(summary["error"])}))
                     sources = session_sources(self.context.directory)
+            top_count = top_line_area_request(prompt)
+            if top_count and top_count <= MAX_ROWS and len(self.context.run_ids) == 1:
+                if ranked_line_source(sources[prior_calls:], self.context.run_ids[0], top_count) is None:
+                    emit(RuntimeEvent("tool_start", "rank_branch_loading (verified areas)"))
+                    ranking = ToolService(self.context).rank_branch_loading(self.context.run_ids[0], limit=top_count)
+                    emit(RuntimeEvent("tool_result", "rank_branch_loading (verified areas)", {"is_error": bool(ranking["error"])}))
+                    sources = session_sources(self.context.directory)
             final = normalize_citations(final, sources)
             final = cite_uncited_turn(final, sources[prior_calls:])
             final = disclose_truncated_results(final, sources[prior_calls:])
             final = disclose_tool_failures(final, sources[prior_calls:])
             final = qualify_capacity_answer(final, prompt)
             final = verified_group_mean_answer(final, prompt, sources[prior_calls:], self.context.run_ids)
+            final = verified_top_line_areas(final, prompt, sources[prior_calls:], self.context.run_ids)
+            previous_answer = next((item["text"] for item in reversed(self.history[:-1]) if item["role"] == "assistant"), "")
+            final = verified_singular_line_area(final, prompt, previous_answer, sources, self.context.run_ids)
             final = audited_row_scope_answer(final, prompt, sources)
             self.history.append({"role": "assistant", "text": final})
             self.context.message("assistant", final)
@@ -340,6 +350,78 @@ def verified_group_mean_answer(answer: str, question: str, turn_sources: list[di
         lines.append(f"The cache includes {convergence['failed']} failed or non-converged cases among {convergence['total']} recorded cases; their rows are not excluded from these maxima.")
     lines.append("These means use all matching facilities, not just the displayed ranked rows.")
     return "\n".join(lines)
+
+
+def top_line_area_request(question: str) -> int | None:
+    """Return requested top-line count for area questions; run_turn uses it to fetch a ranking."""
+    words = question.casefold()
+    match = re.search(r"\b(?:top|first)\s+(\d+)\b", words)
+    if not match or not re.search(r"\bcongested\b", words) or not re.search(r"\blines\b", words):
+        return None
+    if not re.search(r"\b(?:control\s+)?areas?\b", words) or re.search(r"\b(?:mean|average)\b", words):
+        return None
+    if re.search(r"\b(?:in|within|for)\s+(?:the\s+)?(?:control\s+)?area\s+\S+", words):
+        return None
+    if re.search(r"\b(?:in|within)\s+(?!run[_ -]?\w+|(?:this|the)\s+(?:run|case|project|system)|all\b)[a-z][\w-]*", words):
+        return None
+    count = int(match.group(1))
+    return count if count > 0 else None
+
+
+def ranked_line_source(sources: list[dict], run_id: str, count: int) -> dict | None:
+    """Find an audited unfiltered line ranking with count rows for the area-answer helpers."""
+    for source in reversed(sources):
+        args = source.get("arguments") or {}
+        data = ((source.get("result") or {}).get("data") or {})
+        if source.get("tool") != "rank_branch_loading" or source.get("outcome") != "ok":
+            continue
+        if (args.get("run_id"), args.get("metric"), args.get("facility"), args.get("area"), args.get("min_kv")) != (run_id, "max_utilization_pct", "line", "", 50.0):
+            continue
+        if data.get("returned", 0) >= count or data.get("returned") == data.get("total_matching"):
+            return source
+    return None
+
+
+def verified_top_line_areas(answer: str, question: str, turn_sources: list[dict], run_ids: tuple[str, ...]) -> str:
+    """Return audited top-line endpoint areas for question/run_ids; run_turn replaces model guesses."""
+    count = top_line_area_request(question)
+    if count is None or len(run_ids) != 1:
+        return answer
+    if count > MAX_ROWS:
+        return f"I can list at most {MAX_ROWS} top lines per call. Ask for a smaller number."
+    source = ranked_line_source(turn_sources, run_ids[0], count)
+    if source is None:
+        return "I cannot verify the requested top-line areas from a complete ranked result. Ask again after refreshing the analysis."
+    data = source["result"]["data"]
+    rows = data["rows"][:count]
+    if not rows:
+        return f"No eligible lines were found in the selected run [{source['call_id']}]."
+    lines = [f"Top {len(rows)} congested lines by maximum observed loading, with both endpoint control areas where they differ [{source['call_id']}]:"]
+    for index, row in enumerate(rows, 1):
+        areas = ", ".join(row.get("control_areas") or ["unknown"])
+        lines.append(f"{index}. {row['line_label']}: {areas} ({float(row['max_utilization_pct']):.1f}%).")
+    if len(rows) < count:
+        lines.append(f"Only {data['total_matching']:,} eligible lines matched the run scope.")
+    return "\n".join(lines)
+
+
+def verified_singular_line_area(answer: str, question: str, previous_answer: str, sources: list[dict], run_ids: tuple[str, ...]) -> str:
+    """Use a prior top-line audit to answer 'that line' area follow-ups in run_turn."""
+    words = question.casefold()
+    if len(run_ids) != 1 or not re.search(r"\b(?:that|this) line\b", words) or not re.search(r"\b(?:control\s+)?areas?\b", words):
+        return answer
+    if not re.search(r"\bmost congested line\b", previous_answer.casefold()):
+        return "I cannot identify which line you mean from the previous answer. Name its buses and circuit."
+    source = ranked_line_source(sources, run_ids[0], 1)
+    if source is None or not source["result"]["data"]["rows"]:
+        return "I cannot verify that line's area from an audited ranking. Ask for the most congested line again."
+    row = source["result"]["data"]["rows"][0]
+    prior = " ".join(previous_answer.casefold().split())
+    endpoints = (str(row.get("from_bus_name") or "").casefold(), str(row.get("to_bus_name") or "").casefold())
+    if any(endpoint and " ".join(endpoint.split()) not in prior for endpoint in endpoints):
+        return "The line named in the previous answer does not match the audited top line. Name its buses and circuit."
+    areas = ", ".join(row.get("control_areas") or ["unknown"])
+    return f"{row['line_label']} has endpoint control area(s): {areas} [{source['call_id']}]."
 
 
 def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) -> str:

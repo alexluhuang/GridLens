@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, verified_group_mean_answer
+from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
 from gridlens.agent.process import mcp_command, minimal_environment
@@ -208,6 +208,20 @@ def test_row_scope_questions_use_audited_counts_and_refusals(agent_context):
     assert "all 3 matching facilities" in third
 
 
+def test_top_line_areas_and_singular_followup_use_audited_endpoint_labels(agent_context):
+    """Check top-line area answers against the ranked rows instead of model-generated names."""
+    assert top_line_area_request("List the areas for the top 5 most congested lines.") == 5
+    assert top_line_area_request("List the areas for the top 5 most congested lines in East.") is None
+    ToolService(agent_context).rank_branch_loading("run_a", limit=3)
+    sources = session_sources(agent_context.directory)
+    answer = verified_top_line_areas("East, East", "List the areas for the top 2 most congested lines.", sources, ("run_a",))
+    assert "North, South (120.0%)" in answer
+    assert "North, South (110.0%)" in answer
+    assert "East" not in answer
+    followup = verified_singular_line_area("East", "What control area is that line in?", "The most congested line is ALPHA to BETA (1).", sources, ("run_a",))
+    assert "North, South [T1]" in followup
+
+
 class StubAdapter(HermesAdapter):
     def __init__(self, script: str) -> None:
         self.script = script
@@ -230,6 +244,18 @@ def test_controller_records_prompt_and_answer_without_shell(agent_context):
     assert transcript[1]["text"] == "done [T1: invalid source]"
     assert controller.continuation == "abc"
     assert json.loads((agent_context.directory / "status.json").read_text())["status"] == "completed"
+
+
+def test_controller_fetches_top_line_areas_when_model_omits_ranking(agent_context):
+    """Check run_turn adds an audited ranking and replaces an unsupported area list."""
+    context = SessionContext.create(agent_context.project_root, ("run_a",), "fixture:model", agent_context.endpoint)
+    adapter = StubAdapter('print(\'{"type":"result","exit_code":0,"text":"East, East, East"}\')')
+    answer = AgentController(context, adapter).run_turn("List the areas for the top 5 most congested lines.", lambda event: None)
+    assert "Top 3 congested lines" in answer
+    assert answer.count("North, South") == 3
+    assert "East" not in answer
+    assert "Only 3 eligible lines" in answer
+    assert session_sources(context.directory)[0]["tool"] == "rank_branch_loading"
 
 
 @pytest.mark.parametrize("cancel", [False, True])
