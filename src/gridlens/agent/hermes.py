@@ -36,6 +36,34 @@ TURN_TIMEOUT_SECONDS = 300
 DOCS_URL = "https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
 OLLAMA_DOCS_URL = "https://docs.ollama.com/quickstart"
 VERSION_PATTERN = re.compile(rb"Hermes Agent v(\d+\.\d+\.\d+)")
+# The profile and the command line have to agree, so the turn cap is named once.
+MAX_TURNS = 12
+
+
+def _profile_config(session: SessionContext, command: list[str]) -> dict:
+    """Build the throwaway Hermes profile: this session's model, and only the GridLens tool server.
+
+    Every switch here turns something off. What is left is one model endpoint and one MCP server, so the
+    CLI has no skills, plugins, memory, telemetry, update checks, or tool search to fall back on.
+    """
+    return {
+        "model": {"default": session.model, "provider": "custom", "base_url": session.endpoint + "/v1"},
+        "agent": {"max_turns": MAX_TURNS, "system_prompt": SYSTEM_PROMPT, "api_max_retries": 1},
+        "toolsets": ["gridlens"], "fallback_providers": [],
+        "compression": {"enabled": False},
+        "memory": {"memory_enabled": False, "user_profile_enabled": False},
+        "plugins": {"enabled": []}, "hooks": {},
+        # The profile has no command-execution tools; prevent optional command-scanner downloads.
+        "security": {"tirith_enabled": False, "allow_lazy_installs": False},
+        "auth": {"adopt_external_logins": False},
+        "updates": {"check": False},
+        "telemetry": {"shared_metrics": {"enabled": False, "send": False}},
+        "tools": {"tool_search": {"enabled": "off"}},
+        "mcp_servers": {"gridlens": {
+            "command": command[0], "args": command[1:], "env": mcp_server_environment(session.directory),
+            "tools": {"include": list(TOOL_NAMES), "resources": False, "prompts": False},
+        }},
+    }
 
 
 class HermesAdapter:
@@ -88,24 +116,8 @@ class HermesAdapter:
         for path in (profile, scratch, empty):
             path.mkdir(parents=True, exist_ok=True, mode=0o700)
         command = mcp_command()
-        server_env = mcp_server_environment(session.directory)
-        config = {
-            "model": {"default": session.model, "provider": "custom", "base_url": session.endpoint + "/v1"},
-            "agent": {"max_turns": 12, "system_prompt": SYSTEM_PROMPT, "api_max_retries": 1},
-            "toolsets": ["gridlens"], "fallback_providers": [],
-            "compression": {"enabled": False},
-            "memory": {"memory_enabled": False, "user_profile_enabled": False},
-            "plugins": {"enabled": []}, "hooks": {},
-            # The profile has no command-execution tools; prevent optional command-scanner downloads.
-            "security": {"tirith_enabled": False, "allow_lazy_installs": False},
-            "auth": {"adopt_external_logins": False},
-            "updates": {"check": False},
-            "telemetry": {"shared_metrics": {"enabled": False, "send": False}},
-            "tools": {"tool_search": {"enabled": "off"}},
-            "mcp_servers": {"gridlens": {"command": command[0], "args": command[1:], "env": server_env, "tools": {"include": list(TOOL_NAMES), "resources": False, "prompts": False}}},
-        }
         # JSON is valid YAML; no YAML dependency is needed to write the isolated profile.
-        write_json(scoped_path(profile, "config.yaml"), config)
+        write_json(scoped_path(profile, "config.yaml"), _profile_config(session, command))
         environment = minimal_environment()
         environment.update(
             HERMES_HOME=str(profile), HERMES_BUNDLED_SKILLS=str(empty), HERMES_BUNDLED_PLUGINS=str(empty),
@@ -115,7 +127,7 @@ class HermesAdapter:
         argv = (
             status.executable, "chat", "--oneshot", "--format", "stream-json", "--provider", "custom",
             "--model", session.model, "--toolsets", "gridlens", "--ignore-rules", "--no-restore-cwd",
-            "--max-turns", "12", "--run-budget", str(TURN_TIMEOUT_SECONDS), "--source", "tool", "--cli",
+            "--max-turns", str(MAX_TURNS), "--run-budget", str(TURN_TIMEOUT_SECONDS), "--source", "tool", "--cli",
         )
         write_json(session.directory / "manifest.json", {
             "runtime": self.provider, "runtime_version": status.version, "model": session.model,
