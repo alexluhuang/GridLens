@@ -33,6 +33,13 @@ number, citation, run isolation, and refusal to invent loading from a stale cach
 | `gemma4:31b` | 16/16 scored criteria; 173.037 s across four questions | Called the expected tools, gave 120% maximum loading and 20 percentage points of margin with citations, disclosed limits, refused unselected-run access, and requested a cache rebuild. |
 | `nemotron3:33b` | 16/16 scored criteria; 96.051 s across four questions | Called the expected tools, gave the 120% and 20-point results, cited the congestion result, disclosed limits, refused unselected-run access, and requested a cache rebuild. An earlier continuation run timed out after repeatedly passing an invalid margin metric; the shared prompt now states the exact `thermal_margin_pct_points` argument and each scored question uses a fresh session. |
 
+The two opt-in commands used were:
+
+```bash
+GRIDLENS_TEST_LOCAL_MODELS=1 GRIDLENS_TEST_MODEL_NAMES=gemma4:31b GRIDLENS_TEST_EVAL_OUTPUT=/tmp/gridlens-gemma4-evaluation.json .venv/bin/python -m pytest tests/test_agent_hermes_installed.py -q -s -k local_models
+GRIDLENS_TEST_LOCAL_MODELS=1 GRIDLENS_TEST_MODEL_NAMES=nemotron3:33b GRIDLENS_TEST_EVAL_OUTPUT=/tmp/gridlens-nemotron-final-evaluation.json .venv/bin/python -m pytest tests/test_agent_hermes_installed.py -q -s -k local_models
+```
+
 Scores measure this fixture and one sample per model; they do not establish statistical reliability
 or engineering validation of generated prose. Deterministic tools remain the source of numbers and
 provenance. The controller also identifies omitted citations, truncated tool results, stale-cache
