@@ -1,3 +1,14 @@
+"""Proposals for generated analysis code, and the sandbox that runs an approved one.
+
+The split here is deliberate and is the whole safety argument. `save_proposal` is reachable from a tool,
+so the model can write code, and it only ever writes a file. `execute_proposal` is reachable only from the
+review dialog, requires the SHA-256 of the exact reviewed bytes, and snapshots those bytes so that editing
+the proposal afterward cannot change what runs.
+
+The container the script runs in has no network, no GPU, a read-only view of one run, and limits on CPU,
+memory, processes, file size, and wall-clock time. Its output is recorded as untrusted, because nothing
+deterministic has checked it.
+"""
 from __future__ import annotations
 
 import ast
