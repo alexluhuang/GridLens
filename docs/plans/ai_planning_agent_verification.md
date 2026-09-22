@@ -75,7 +75,7 @@ displayed chart, without claiming a full GUI acceptance test.
 
 ## Frozen and installed entry points
 
-PyInstaller 6.20.0 built the final source into `/tmp/gridlens-agent-dist/GridLens/` on the DGX Spark's
+PyInstaller 6.20.0 built the final source into `/tmp/gridlens-agent-truncation-dist/GridLens/` on the DGX Spark's
 Linux aarch64 environment. The Debian build copies the sandbox
 Dockerfile and README under `/usr/share/doc/gridlens/agent-sandbox/`, so installed users can prepare
 their own pinned image. The official MCP SDK conformance test runs against both the frozen bundle
@@ -84,8 +84,8 @@ schemas without installing the package or touching a project.
 
 | Why | Method | Outcome | Interpretation |
 |---|---|---|---|
-| Check the frozen agent entry point | `GRIDLENS_TEST_MCP_EXECUTABLE=/tmp/gridlens-agent-dist/GridLens/GridLens .venv/bin/python -m pytest tests/test_agent_mcp.py -q` | 5 passed | The bundled executable starts the GridLens MCP server and passes the SDK client contract. |
-| Check the Debian install layout and entry point | Built `/tmp/gridlens-agent-packages/gridlens_0.1.0_arm64.deb`, extracted it under `/tmp/gridlens-agent-final-extracted/`, and reran the same MCP test against `opt/gridlens/GridLens` | Package metadata is `gridlens 0.1.0 arm64`; sandbox Dockerfile and README are present; 5 passed | The packaged binary and the user-facing sandbox recipe are present and functional in the extracted layout. This was not a desktop GUI smoke test or a system installation. |
+| Check the frozen agent entry point | `GRIDLENS_TEST_MCP_EXECUTABLE=/tmp/gridlens-agent-truncation-dist/GridLens/GridLens .venv/bin/python -m pytest tests/test_agent_mcp.py -q` | 5 passed | The bundled executable starts the GridLens MCP server and passes the SDK client contract. |
+| Check the Debian install layout and entry point | Built `/tmp/gridlens-agent-truncation-packages/gridlens_0.1.0_arm64.deb`, extracted it under `/tmp/gridlens-agent-truncation-extracted/`, and reran the same MCP test against `opt/gridlens/GridLens` | Package metadata is `gridlens 0.1.0 arm64`; sandbox Dockerfile and README are present; 5 passed | The packaged binary and the user-facing sandbox recipe are present and functional in the extracted layout. This was not a desktop GUI smoke test or a system installation. |
 
 The final source also passed `.venv/bin/python -m compileall -q src tests` and `git diff --check`.
 
