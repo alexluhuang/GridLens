@@ -12,6 +12,7 @@ import time
 from typing import Callable, Iterable
 
 from gridlens.analysis.parser_models import ParsedTable
+from gridlens.analysis.contingencies import SUMMARY_NAME, attach_convergence, summary_frames, summary_from_records, summary_table, update_summary
 from gridlens.analysis.progress import PHASE_PARSE, ProgressCallback, report
 from gridlens.analysis.raw_parsers import AREA_METADATA_COLUMNS, BRANCH_METADATA_COLUMNS, BUS_METADATA_COLUMNS
 from gridlens.analysis.utilization import NONTRANSFORMER_BRANCH
@@ -234,6 +235,8 @@ def parse_csv_flat_outputs(run_dir: str | Path, progress: ProgressCallback | Non
         convergence, success = _parse_convergence(convergence_path)
         tables[CSV_FLAT_CONVERGENCE_TABLE] = convergence
         tables["success"] = success
+        if SUMMARY_NAME in tables:
+            attach_convergence(tables[SUMMARY_NAME], convergence)
     if bus_path:
         bus_metadata, area_metadata = _parse_bus_metadata(bus_path)
         tables[CSV_FLAT_BUS_TABLE] = ParsedTable(
@@ -402,6 +405,7 @@ def _parse_flat_results_streaming(
     total_estimate: int | None = None,
 ) -> dict[str, ParsedTable]:
     aggregates: dict[tuple[object, object, str, str], _BranchAggregate] = {}
+    events: dict = {}
     preview_rows: list[dict[str, object]] = []
     rejected = 0
 
@@ -441,6 +445,7 @@ def _parse_flat_results_streaming(
             )
             aggregates[key] = aggregate
         aggregate.update(row)
+        update_summary(events, row)
 
     notes = [
         (
@@ -454,7 +459,9 @@ def _parse_flat_results_streaming(
     if rejected:
         notes.append(f"Rejected {rejected} csv_flat rows with missing branch keys or loading_percent.")
 
-    return _flat_tables_from_aggregates(path, preview_rows, aggregates.values(), notes)
+    tables = _flat_tables_from_aggregates(path, preview_rows, aggregates.values(), notes)
+    tables[SUMMARY_NAME] = summary_table(path.name, list(events.values()))
+    return tables
 
 
 def _parse_flat_results_accelerated(
@@ -489,6 +496,7 @@ def _parse_flat_results_accelerated(
                 label_frame = _lazy_extreme_label_frame(data, keys)
                 labels = _extreme_labels_from_frame(label_frame)
                 aggregates = _aggregates_from_frame(grouped, labels)
+                events, worst = summary_frames(data)
             runtime_note = ""
         else:
             with _dask_runtime(backend) as runtime, _progress_heartbeat(progress, _heartbeat_message):
@@ -497,7 +505,8 @@ def _parse_flat_results_accelerated(
                 keys = ["from_bus", "to_bus", "line_id", "section"]
                 grouped = _flat_grouped_frame(data, keys)
                 label_frame = _lazy_extreme_label_frame(data, keys)
-                grouped, label_frame = _compute_lazy_frames(grouped, label_frame, runtime=runtime)
+                events, worst = summary_frames(data)
+                grouped, label_frame, events, worst = _compute_lazy_frames(grouped, label_frame, events, worst, runtime=runtime)
                 labels = _extreme_labels_from_frame(label_frame)
                 aggregates = _aggregates_from_frame(grouped, labels)
                 runtime_note = runtime.note
@@ -514,7 +523,9 @@ def _parse_flat_results_accelerated(
     ]
     if runtime_note:
         notes.append(runtime_note)
-    return _flat_tables_from_aggregates(path, preview_rows, aggregates, notes), ""
+    tables = _flat_tables_from_aggregates(path, preview_rows, aggregates, notes)
+    tables[SUMMARY_NAME] = summary_table(path.name, summary_from_records(_records_from_frame(events), _records_from_frame(worst)))
+    return tables, ""
 
 
 def _flat_tables_from_aggregates(

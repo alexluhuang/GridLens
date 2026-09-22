@@ -48,10 +48,11 @@ def build_interactive_analysis_result(
     run_dir: Path,
     branch_options: UtilizationBranchOptions,
     progress: ProgressCallback | None = None,
+    *, rebuild: bool = False,
 ) -> AnalysisBuildResult:
     run_path = Path(run_dir).expanduser().resolve()
     report(progress, PHASE_PARSE, "Loading analysis data...")
-    dataset = _load_cached_interactive_dataset(run_path)
+    dataset = None if rebuild else _load_cached_interactive_dataset(run_path)
     if dataset is None:
         dataset = build_run_analysis(
             run_path,
@@ -195,7 +196,9 @@ def _write_cached_interactive_dataset(dataset: RunAnalysisDataset) -> None:
         "metrics": {},
         "tables": manifest_tables,
     }
-    (report_dir / _INTERACTIVE_MANIFEST).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    temporary = report_dir / (_INTERACTIVE_MANIFEST + ".tmp")
+    temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    temporary.replace(report_dir / _INTERACTIVE_MANIFEST)
 
 
 def _read_optional_cached_table(table_name: str, table_info: dict[str, object]) -> ParsedTable | None:
