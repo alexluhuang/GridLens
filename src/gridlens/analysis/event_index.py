@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 import shutil
 import time
@@ -56,7 +55,9 @@ def build_event_index(run_dir: Path, *, progress=None, output_dir: Path | None =
                 table = table.append_column("section", pa.array([""] * len(table)))
             for name in ("line_id", "section"):
                 value = pc.utf8_trim_whitespace(pc.fill_null(table[name], ""))
-                value = pc.replace_substring_regex(value, pattern=r"^['\"]|['\"]$|\.0$", replacement="")
+                value = pc.replace_substring_regex(value, pattern=r"^'+|'+$", replacement="")
+                value = pc.replace_substring_regex(value, pattern=r'^"+|"+$', replacement="")
+                value = pc.replace_substring_regex(value, pattern=r"\s+", replacement=" ")
                 table = table.set_column(table.schema.get_field_index(name), name, value)
             for name in ("event_idx", "from_bus", "to_bus", "loading_percent"):
                 if name not in table.column_names:

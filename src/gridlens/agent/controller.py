@@ -137,8 +137,12 @@ def session_sources(directory: Path) -> list[dict]:
 def normalize_citations(text: str, sources: list[dict]) -> str:
     """Normalize explicit call references, and flag IDs absent from the audit."""
     known = {row["call_id"] for row in sources}
+    def replace(match):
+        identifier = (match[1] or match[2]).upper()
+        return f"[{identifier}]" if identifier in known else f"[{identifier}: invalid source]"
+
     return re.sub(
-        r"\[\s*(?:Call\s+)?(T\d+)\s*\]",
-        lambda match: f"[{match[1].upper()}]" if match[1].upper() in known else f"[{match[1].upper()}: invalid source]",
+        r"\[[\s\u200b\ufeff]*(?:Call\s+)?(T\d+)[\s\u200b\ufeff]*\]|(?:\(\s*)?\bcall_id\s*[:=]?\s*(T\d+)\b(?:\s*\))?",
+        replace,
         text, flags=re.IGNORECASE,
     )

@@ -113,6 +113,8 @@ def _load_cached_manifest(run_dir: Path, report_dir: Path, manifest_path: Path) 
         csv_path = Path(str(table_info.get("csv_path") or table_dir / f"{table_name}.csv"))
         if not _cached_table_is_fresh(run_dir, csv_path, str(table_info.get("source_file") or "")):
             return None
+        if csv_path.stat().st_mtime_ns > manifest_path.stat().st_mtime_ns:
+            return None  # A cancelled rebuild may have replaced only some tables.
         table = _read_cached_table(table_name, table_info, csv_path)
         if table is None:
             return None

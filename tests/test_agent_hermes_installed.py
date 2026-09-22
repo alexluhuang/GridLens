@@ -99,7 +99,9 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
     status = adapter.probe()
     assert status.ready, status.message
     records = []
-    for model in status.models:
+    selected = os.environ.get("GRIDLENS_TEST_MODEL_NAMES", "").split(",") if os.environ.get("GRIDLENS_TEST_MODEL_NAMES") else status.models
+    assert set(selected).issubset(status.models)
+    for model in selected:
         context = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
         controller = AgentController(context, HermesAdapter(status.endpoint))
         started = time.monotonic()

@@ -614,8 +614,8 @@ def _normalize_flat_frame_columns(data):
     )
     data["section"] = (
         data["section"]
-        .fillna("")
         .astype("str")
+        .fillna("")
         .str.strip()
         .str.strip("'")
         .str.strip('"')

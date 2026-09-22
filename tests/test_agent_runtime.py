@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from gridlens.agent.controller import AgentController
+from gridlens.agent.controller import AgentController, normalize_citations
 from gridlens.agent.hermes import HermesAdapter, SYSTEM_PROMPT, mcp_command, minimal_environment, terminate_process
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
 from gridlens.agent.runtime import PreparedRuntime, RuntimeStatus
@@ -74,6 +74,12 @@ def test_structured_events_and_unexpected_tool():
         adapter.parse_event('{"type":"tool_use","name":"terminal"}')
     with pytest.raises(AgentError):
         adapter.parse_event("unexpected banner")
+
+
+@pytest.mark.parametrize("citation", ["[T1]", "[Call\u202fT1]", "[\u200bT1]", "(call_id\u202fT1)", "call_id: t1"])
+def test_explicit_citations_resolve_only_known_audit_ids(citation):
+    assert normalize_citations(citation, [{"call_id": "T1"}]) == "[T1]"
+    assert normalize_citations(citation, []) == "[T1: invalid source]"
 
 
 class StubAdapter(HermesAdapter):
