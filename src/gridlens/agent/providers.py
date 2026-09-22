@@ -58,6 +58,7 @@ DEFAULT_PROVIDER = DESCRIPTORS[0].provider
 
 
 def descriptor(provider: str) -> ProviderDescriptor:
+    """Look up one provider, or refuse an id this build does not support."""
     for item in DESCRIPTORS:
         if item.provider == provider:
             return item
@@ -65,6 +66,7 @@ def descriptor(provider: str) -> ProviderDescriptor:
 
 
 def route_for(provider: str) -> str:
+    """Return the route a provider uses, without instantiating its adapter."""
     return descriptor(provider).route
 
 

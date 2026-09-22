@@ -53,9 +53,11 @@ class AgentController:
         return getattr(self.adapter, "label", None) or getattr(self.adapter, "provider", None) or "The agent runtime"
 
     def cancel(self) -> None:
+        """Ask the turn in flight to stop at its next checkpoint."""
         self.cancelled.set()
 
     def run_turn(self, prompt: str, emit: Callable[[RuntimeEvent], None]) -> str:
+        """Run one turn to completion and return the cited answer."""
         if not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
             raise AgentError("INVALID_PROMPT", f"Enter a question of at most {MAX_PROMPT_CHARS:,} characters.")
         process = None
@@ -149,6 +151,7 @@ class AgentController:
 
 
 def session_sources(directory: Path) -> list[dict]:
+    """Read the completed tool calls a session has recorded so far."""
     path = scoped_path(directory, "tool_calls.jsonl")
     if not path.exists():
         return []
