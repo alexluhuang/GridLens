@@ -31,7 +31,15 @@ def test_debian_build_script_bundles_full_python_stack() -> None:
 
     assert 'pip install -e "${ROOT_DIR}[dev,analysis]"' in build_script
     assert "dpkg --print-architecture" in build_script
-    assert 'dist/gridlens_${VERSION}_${ARCH}.deb' in build_script
+    assert '"${OUTPUT_DIR}/gridlens_${VERSION}_${ARCH}.deb"' in build_script
+
+
+def test_debian_build_script_includes_agent_sandbox_recipe() -> None:
+    """Installed operators need the same pinned-image recipe described by script review."""
+    build_script = _read("packaging/deb/build_deb.sh")
+    assert 'usr/share/doc/gridlens/agent-sandbox' in build_script
+    assert 'packaging/agent/Dockerfile' in build_script
+    assert 'packaging/agent/README.md' in build_script
 
 
 def test_pyinstaller_spec_collects_analysis_packages() -> None:

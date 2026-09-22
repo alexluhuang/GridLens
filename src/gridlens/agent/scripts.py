@@ -51,7 +51,7 @@ def _require_sandbox_image(executable: str, image: str, environment: dict) -> No
         capture_output=True, timeout=INSPECT_TIMEOUT_SECONDS, env=environment,
     )
     if inspection.returncode or inspection.stdout.strip() != b"generated-analysis":
-        raise AgentError("SANDBOX_IMAGE_REQUIRED", "Prepare a pinned image from packaging/agent/Dockerfile. GridLens never pulls an image for script execution.")
+        raise AgentError("SANDBOX_IMAGE_REQUIRED", "Prepare a pinned image from packaging/agent/Dockerfile (source checkout) or /usr/share/doc/gridlens/agent-sandbox/Dockerfile (installed package). GridLens never pulls an image for script execution.")
 
 
 def _stream_bounded_output(process, output: bytearray, cancelled, deadline: float) -> None:

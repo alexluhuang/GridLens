@@ -46,7 +46,7 @@ class ScriptReview(QDialog):
         self.code = QPlainTextEdit()
         self.code.setReadOnly(True)
         layout.addWidget(self.code, 2)
-        limits = QLabel("Approve only code you have reviewed. Execution reads the selected run and prints results; generated results remain unvalidated.\nNo network or GPU; 2 CPUs, 1 GiB RAM, 64 processes, 120 seconds, 256 KiB output. /output is 32 MiB temporary scratch.\nUse an image built from packaging/agent/Dockerfile, then paste its full sha256 image ID below.")
+        limits = QLabel("Approve only code you have reviewed. Execution reads the selected run and prints results; generated results remain unvalidated.\nNo network or GPU; 2 CPUs, 1 GiB RAM, 64 processes, 120 seconds, 256 KiB output. /output is 32 MiB temporary scratch.\nBuild an image from packaging/agent/Dockerfile (source) or /usr/share/doc/gridlens/agent-sandbox/Dockerfile (installed), then paste its full sha256 image ID below.")
         limits.setWordWrap(True)
         layout.addWidget(limits)
         self.image = QLineEdit()
