@@ -10,13 +10,14 @@ path; its adapter fails closed.
 
 | Why | Method | Outcome | Interpretation |
 |---|---|---|---|
-| Verify tool contracts, parsing, GUI controls, runtime boundaries, and package metadata without a model | `.venv/bin/python -m pytest -q` on synthetic fixtures | 226 passed, 4 opt-in tests skipped | The deterministic paths and local policy gates passed; this does not measure model answers. |
-| Recheck the changed runtime, tool, GUI, and event-index paths | `.venv/bin/python -m pytest tests/test_agent_runtime.py tests/test_agent_gui.py tests/test_agent_tools.py tests/test_event_index.py -q` | 57 passed | Catches regressions in citations, provider controls, scopes, branch keys, and tool result envelopes. |
+| Verify tool contracts, parsing, GUI controls, runtime boundaries, and package metadata without a model | `.venv/bin/python -m pytest -q` on synthetic fixtures | 231 passed, 5 opt-in tests skipped | The deterministic paths and local policy gates passed; this does not measure model answers. |
+| Recheck the changed runtime, tool, GUI, and event-index paths | `.venv/bin/python -m pytest tests/test_agent_runtime.py tests/test_agent_gui.py tests/test_agent_tools.py tests/test_event_index.py -q` | 62 passed | Catches regressions in citations, provider controls, scopes, branch keys, and tool result envelopes. |
 | Exercise the real Hermes CLI without model variability | `GRIDLENS_TEST_HERMES=1` with the synthetic loopback OpenAI-compatible server | Passed the two-turn continuation and tool-isolation test | Hermes exposed only the 15 GridLens MCP tools, returned the fixture's 120% loading, and resumed a follow-up turn. |
 | Check a representative large run without parsing its flat CSV into the agent | `GRIDLENS_TEST_SAMPLE_PROJECT=/home/alh360/GridLensProjects/GridPACK_Test_Project GRIDLENS_TEST_SAMPLE_RUN=2026-07-28_14-46-26` on the read-only cache benchmark | Two ranked-loading calls: 1.739 s and 1.893 s; Python traced peak 55,510,993 bytes; 6,823 matching facilities | The 8,697,686,858-byte flat CSV was referenced as provenance while compact caches answered the question. The memory figure is Python allocation peak, not process RSS or a cold-build measurement. |
 
-The four default skips are the opt-in Hermes, installed-model, real-project, and pinned-sandbox-image
-checks. The sandbox execution test needs an operator-prepared immutable image ID; unit tests cover the
+The five default skips are the opt-in Hermes, scored installed-model, complete-voltage-group,
+real-project, and pinned-sandbox-image checks. The sandbox execution test needs an operator-prepared
+immutable image ID; unit tests cover the
 container command and approval gate. No image was pulled or built by GridLens.
 
 ## Local model evaluation
@@ -44,6 +45,33 @@ Scores measure this fixture and one sample per model; they do not establish stat
 or engineering validation of generated prose. Deterministic tools remain the source of numbers and
 provenance. The controller also identifies omitted citations, truncated tool results, stale-cache
 errors, and the physical limit of thermal margin in the final response.
+
+## Truncated-result regression
+
+**Rationale.** In a real session, a 10-row congestion ranking was used to invent whole-run voltage
+means. A later request for 7,000 rows was silently capped at 50. The runtime saved those 50 returned
+rows in a spillover file, which the model then described as if it contained all 6,823 matching lines.
+
+**Method.** The deterministic tests check explicit rejection above the 50-row cap, byte-limit
+truncation, audited returned/total counts, and full-population means despite a short ranked result.
+The controller test simulates a model choosing `facility='all'` for a line-only mean question and
+checks that GridLens calls `summarize_loading` again with `facility='line'`. The installed-model
+regression extends the synthetic fixture to 11 eligible lines in three voltage groups, with one
+transformer that must stay out of a line-only mean. It asks the same question of Nemotron 3:33b and
+Gemma4:31b through Hermes. The report is `/tmp/gridlens-voltage-group-evaluation.json`.
+
+**Outcome.** Both final model sessions reported the full 11-line means: 230–344 kV 103.3% (3 lines),
+345–499 kV 60.0% (4), and 50–99 kV 40.0% (4). Gemma4 selected the correct scope itself. Nemotron
+selected all facilities; the controller recorded a second, line-only call and based the final answer
+on that corrected result. A read-only check of the real project's compact cache produced the chart's
+figures from 6,823 eligible lines: 345–499 kV 50.8% (351), 50–99 kV 49.5% (2,517), and 100–229 kV
+39.2% (3,955). A 50-row ranking returned 17 rows under the new 16 KiB result cap; the summary still
+used all 6,823 lines. A 7,000-row request now returns `LIMIT_EXCEEDS_CAP` rather than claiming success.
+
+**Interpretation.** The short ranked view supports top-line questions, while the separate summary
+supports group means over the full matching population. The live model result verifies one question
+per model on a synthetic case; the real-project check verifies the deterministic summary against the
+displayed chart, without claiming a full GUI acceptance test.
 
 ## Frozen and installed entry points
 

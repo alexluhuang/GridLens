@@ -63,6 +63,9 @@ local dependency is available:
 - `GRIDLENS_TEST_LOCAL_MODELS=1` runs a scored synthetic evaluation through installed Ollama models. Use
   `GRIDLENS_TEST_MODEL_NAMES=nemotron3:33b,gemma4:31b` to select models and
   `GRIDLENS_TEST_EVAL_OUTPUT=/tmp/model_evaluation.json` to retain the score file.
+  Use `-k complete_voltage_groups` and `GRIDLENS_TEST_GROUP_EVAL_OUTPUT=/tmp/voltage_group_evaluation.json`
+  for the separate full-population voltage-mean regression. Its report distinguishes a model-selected
+  line-only scope from a scope corrected by the GridLens controller.
 - `GRIDLENS_TEST_SAMPLE_PROJECT` and `GRIDLENS_TEST_SAMPLE_RUN` select a real, approved project/run for a
   read-only cache benchmark. The tool audit remains under pytest's temporary directory.
 - `GRIDLENS_TEST_MCP_EXECUTABLE` checks the MCP entry point of a frozen executable.

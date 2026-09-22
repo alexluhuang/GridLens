@@ -135,6 +135,14 @@ The **Activity** pane shows which tools ran. The **Sources** pane shows each cal
 warnings, how many rows it returned, whether the result was truncated, and the files it read. The answer
 lists consulted tool-call IDs when a model omits inline citations.
 
+Ranked facility results are bounded to 50 rows per call and may be shorter when the result reaches the
+size limit. Sources shows the requested limit, the actual returned and matching counts, and the reason for
+truncation. A request above 50 rows is rejected explicitly. A runtime spillover file contains only rows
+GridLens returned; it cannot recover omitted rows. For mean loading by voltage group or control area,
+GridLens uses `summarize_loading`, which computes each mean from all matching facilities before bounding
+the category rows shown to the model. The answer states the facility and area filters, number of
+facilities used, and per-group counts.
+
 Watch for two limits the agent reports rather than hides. Maximum loading covers every recorded case in the
 cache, including the base case, so it is not a converged N-1-only number. Thermal margin is 100 minus maximum
 utilization, in percentage points of line rating. It is not available transfer capability, spare generation,
