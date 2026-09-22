@@ -50,5 +50,7 @@ def tool_cli(argv: list[str]) -> int:
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 1 if result["error"] else 0
     except (AgentError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
+        # Report the stable code alongside the remedy, as the MCP entry point does, so a caller can
+        # branch on the code instead of matching prose.
+        print(f"{exc.code}: {exc}" if isinstance(exc, AgentError) else str(exc), file=sys.stderr)
         return 2
