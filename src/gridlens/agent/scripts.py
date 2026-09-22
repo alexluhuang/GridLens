@@ -34,6 +34,7 @@ DOCKER_HOST = "unix:///var/run/docker.sock"
 
 
 def save_proposal(context: SessionContext, run_id: str, purpose: str, code: str) -> dict:
+    """Save a model-proposed script for review. This never executes anything."""
     context.run(run_id)
     if not purpose.strip() or len(purpose) > 2000 or len(code.encode()) > MAX_SCRIPT_BYTES:
         raise AgentError("INVALID_PROPOSAL", "Provide a purpose under 2,000 characters and Python code under 24 KiB.")
@@ -55,6 +56,7 @@ def save_proposal(context: SessionContext, run_id: str, purpose: str, code: str)
 
 
 def read_proposal(context: SessionContext, identifier: str) -> tuple[dict, Path, str]:
+    """Load a saved proposal, refusing it if the bytes changed after review."""
     if not re.fullmatch(r"[a-f0-9]{32}", identifier):
         raise AgentError("INVALID_PROPOSAL", "Select a saved proposal from this session.")
     directory = scoped_path(context.directory, "generated", directory=True)
@@ -69,6 +71,7 @@ def read_proposal(context: SessionContext, identifier: str) -> tuple[dict, Path,
 
 
 def sandbox_command(executable: str, name: str, image: str, run: Path, script: Path) -> list[str]:
+    """Build the docker create argument list for one approved script."""
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", image):
         raise AgentError("INVALID_IMAGE", "Use the immutable sha256 image ID of a separately prepared analysis sandbox.")
     if os.getuid() == 0:
