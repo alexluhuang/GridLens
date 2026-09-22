@@ -1,3 +1,12 @@
+"""The Hermes Agent runtime adapter, driving a local model served by Ollama.
+
+This is the validated runtime. It builds a throwaway Hermes profile inside the session folder that
+contains only the GridLens MCP server, then launches `hermes chat` against it with the prompt in a file
+rather than on the command line.
+
+The adapter is pinned to one tested CLI version and refuses any other. Guessing at a changed event format
+would be worse than refusing, because the failure would surface as a wrong answer rather than an error.
+"""
 from __future__ import annotations
 
 import json
