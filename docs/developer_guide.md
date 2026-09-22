@@ -1,4 +1,4 @@
-# Developer Guide
+# Developer guide
 
 ## Setup
 
@@ -10,42 +10,41 @@ python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev,analysis]"
 ```
 
+`requirements.txt` lists the minimal GUI dependency. `requirements-analysis.txt` lists the optional plotting
+and data dependencies.
 
-The minimal GUI dependency is also listed in `requirements.txt`; optional plotting/data dependencies are listed in
-`requirements-analysis.txt`.
-
-## Run The App
+## Run the app
 
 ```bash
 source .venv/bin/activate
 gridlens
 ```
 
-or:
+Or:
 
 ```bash
 scripts/run_app.sh
 ```
 
-## Run Tests
+## Run tests
 
-The primary test runner is `pytest`:
+The test runner is `pytest`:
 
 ```bash
 python -m pytest
 ```
 
-Use the editable install from the setup section before running the full suite so GUI and optional analysis dependencies
-are available. Individual tests are intentionally small and independent; prefer adding a focused regression test before
-changing parser, analysis, runner, or GUI behavior.
+Do the editable install from the setup section first, so the GUI and the optional analysis dependencies are
+available. Tests are deliberately small and independent. Add a focused regression test before you change
+parser, analysis, runner, agent, or GUI behavior.
 
-The test suite also checks package metadata, console-script wiring, runtime dependency mirrors, and local README
-documentation links. Keep `pyproject.toml`, `requirements.txt`, `README.md`, and `src/gridlens/__init__.py`
-in sync when changing packaging or release information.
+The suite also checks package metadata, console-script wiring, runtime dependency mirrors, and the
+documentation links in the README. Keep `pyproject.toml`, `requirements.txt`, `README.md`, and
+`src/gridlens/__init__.py` in sync when you change packaging or release information.
 
-For headless machines, Qt tests set `QT_QPA_PLATFORM=offscreen` in the test module.
+On a headless machine, the Qt tests set `QT_QPA_PLATFORM=offscreen` in the test module.
 
-## Development Order
+## Development order
 
 Build the product in this order:
 
@@ -57,19 +56,31 @@ Build the product in this order:
 6. Add exact output parsers.
 7. Add graph data, analysis manifests, and exports.
 8. Package with PyInstaller.
-9. Wrap PyInstaller output in a `.deb`.
+9. Wrap the PyInstaller output in a `.deb`.
 10. Test on a clean DGX OS 7 account.
 
-## Code Style
+## Code style
 
-Keep user-sensitive behavior in `core/` and `runner/`, not in GUI event handlers. The GUI should gather values and call
-well-tested functions.
+Keep user-sensitive behavior in `core/` and `runner/` rather than in GUI event handlers. The GUI gathers
+values and calls well-tested functions.
 
-Never build Docker commands as shell strings. Build a list of arguments and run it without `shell=True`.
+Never build a Docker command as a shell string. Build a list of arguments and run it without `shell=True`.
 
-Keep modules organized around one responsibility. For example, parsed GridPACK data flows through `analysis/parsers.py`,
-`analysis/enrichment.py`, `analysis/metrics.py`, and `analysis/dataset.py` before graph data or exports are written.
-Add small helper modules when they make behavior reusable and testable.
+Keep each module organized around one responsibility. Parsed GridPACK data, for example, flows through
+`analysis/parsers.py`, `analysis/enrichment.py`, `analysis/metrics.py`, and `analysis/dataset.py` before
+anything writes graph data or exports. Add a small helper module when it makes behavior reusable and testable.
 
-Use explicit, readable Python over clever shortcuts. Public functions and non-obvious helpers should have concise
-docstrings that explain behavior rather than repeat the function signature.
+In `agent/`, keep provider-specific code inside its adapter. The registry in `agent/providers.py` is the only
+place that maps a provider id to an adapter, and the tool service, session store, controller, and GUI are all
+written against the contract in `agent/runtime.py`.
+
+Use explicit, readable Python over clever shortcuts. Give public functions and non-obvious helpers short
+docstrings that explain behavior instead of repeating the signature.
+
+## Design notes
+
+`docs/plans/` holds working documents rather than reference material:
+
+- `ai_planning_agent.md` is the implementation plan for the Agent tab.
+- `agent_findings.md` is the verified defect register for that feature.
+- `handoff.md` records what is built, what was measured, and what is still open.
