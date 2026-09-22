@@ -1,3 +1,10 @@
+"""The contract every agent runtime adapter implements.
+
+This module holds no provider logic. It defines what GridLens needs to know about a runtime, what a
+normalized event from one looks like, and what a prepared launch looks like. Keeping those shapes here is
+what lets the session store, the controller, the tool layer, and the GUI stay free of provider-specific
+code.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
