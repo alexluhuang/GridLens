@@ -98,6 +98,7 @@ rapids_loader_library_packages = (
     "rapids_logger",
 )
 metadata_packages = (
+    "mcp",
     *analysis_packages,
     "cuda-bindings",
     "cuda-core",
@@ -121,6 +122,8 @@ metadata_packages = (
     "rmm-cu13",
 )
 hidden_imports = [
+    "mcp.server.fastmcp",
+    "mcp.server.stdio",
     "_numba_cuda_redirector",
     "dask",
     "dask.dataframe",

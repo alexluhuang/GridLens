@@ -26,6 +26,14 @@ def _run_import_diagnostics() -> int:
 
 def main() -> int:
     freeze_support()
+    if sys.argv[1:2] == ["--mcp-server"]:
+        from gridlens.agent.mcp_server import main as mcp_main
+
+        return mcp_main()
+    if sys.argv[1:2] == ["--agent-tool"]:
+        from gridlens.agent.mcp_server import tool_cli
+
+        return tool_cli(sys.argv[2:])
     if os.environ.get("GRIDLENS_DIAGNOSTICS", "").strip().lower() == "imports":
         return _run_import_diagnostics()
 

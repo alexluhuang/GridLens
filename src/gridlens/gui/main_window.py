@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QSizePol
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project, ProjectData
 from gridlens.gui.analysis_tab import AnalysisTab
+from gridlens.gui.agent_tab import AgentTab
 from gridlens.gui.configuration_tab import ConfigurationTab
 from gridlens.gui.notes_tab import NotesTab
 from gridlens.gui.project_tab import ProjectTab
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self.transformer_analysis_tab = AnalysisTab(transformer_analysis=True)
         self.analysis_tab = self.branch_analysis_tab
         self.notes_tab = NotesTab()
+        self.agent_tab = AgentTab()
 
         self.tabs.addTab(self.project_tab, "Project")
         self.tabs.addTab(self.configuration_tab, "Configuration")
@@ -87,6 +89,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.branch_analysis_tab, "Branch Analysis")
         self.tabs.addTab(self.transformer_analysis_tab, "Transformer Analysis")
         self.tabs.addTab(self.notes_tab, "Notes")
+        self.tabs.addTab(self.agent_tab, "Agent")
         self.tabs.setTabToolTip(0, "Create a project and add GridPACK input files.")
         self.tabs.setTabToolTip(1, "Generate or update the GridPACK XML configuration.")
         self.tabs.setTabToolTip(2, "Check Docker and run the selected case.")
@@ -94,12 +97,14 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(4, "Analyze non-transformer branch utilization.")
         self.tabs.setTabToolTip(5, "Analyze transformer utilization.")
         self.tabs.setTabToolTip(6, "Read analysis assumptions and data notes.")
+        self.tabs.setTabToolTip(7, "Ask a local Hermes agent about selected completed runs.")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.configuration_tab.project_changed.connect(self.on_project_changed)
         self.run_tab.run_finished.connect(self.on_run_finished)
         self.results_tab.run_selected.connect(self.branch_analysis_tab.select_run)
         self.results_tab.run_selected.connect(self.transformer_analysis_tab.select_run)
+        self.results_tab.run_selected.connect(self.agent_tab.select_run)
 
         self.statusBar().showMessage("Create or open a project to begin.")
 
@@ -109,6 +114,7 @@ class MainWindow(QMainWindow):
         self.project_tab.set_project(project, project_data)
         self.configuration_tab.set_project(project, project_data)
         self.run_tab.set_project(project, project_data)
+        self.agent_tab.set_project(project)
         self.results_tab.set_project(project)
         self.branch_analysis_tab.set_project(project)
         self.transformer_analysis_tab.set_project(project)
@@ -120,11 +126,16 @@ class MainWindow(QMainWindow):
         self.results_tab.refresh_runs(select_run=path)
         self.branch_analysis_tab.refresh_runs(select_run=path)
         self.transformer_analysis_tab.refresh_runs(select_run=path)
+        self.agent_tab.refresh_runs(select_run=path)
         self.tabs.setCurrentWidget(self.results_tab)
         project_name = self.project_data.name if self.project_data else "Project"
         self.context_label.setText(f"{project_name} · latest run {path.name}")
         self.statusBar().showMessage(f"Run finished: {path.name}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if not self.agent_tab.shutdown():
+            self.statusBar().showMessage("Waiting for the local agent to stop; close the window again shortly.")
+            event.ignore()
+            return
         self.settings.save()
         event.accept()
