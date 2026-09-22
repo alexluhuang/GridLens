@@ -257,6 +257,7 @@ A seven-dimension analysis (provider seam, tool semantics, security/isolation, G
 packaging, and defects in the least-reviewed diff) produced findings that were then each handed to an
 independent adversarial verifier instructed to *refute* them. 34 survived: 16 major, 18 minor, no blockers.
 The six provider-seam findings were fixed during the run and so do not appear in the surviving list.
+As of 2026-09-22, 15 of the 34 are applied and 19 are open.
 
 **The full set, evidence plus an adversarially corrected fix for each, is committed as
 `docs/plans/agent_findings.md`.** The corrected fixes matter: they routinely identify concrete errors in
@@ -265,8 +266,9 @@ does not exist on `QPlainTextEdit`, a one-liner that raises `IndexError` on an e
 proposed mount narrowing that would break the user's own example questions). Follow the fix text rather
 than re-deriving it from the summary.
 
-For orientation, the 34 break down as: 7 in the GUI, 7 in the tool service, 8 in documentation, 7 in test
-coverage, 2 in security error-handling, 2 correctness defects, and 1 packaging. Sixteen are major.
+For orientation, the 34 break down as 7 in the GUI, 7 in the tool service, 8 in documentation, 7 in test
+coverage, 2 in security error-handling, 2 correctness defects, and 1 in packaging. Sixteen are major. The
+documentation set is now closed. The 19 that remain are the GUI work in §6.1 and the 12 items in §6.2.
 
 ---
 
@@ -306,7 +308,8 @@ of what is genuinely done.
   contract plan §4.5 asks for and the `--mcp-server` entry point already printed it.
 
 **Did not land at all** (findings 2, 3, 4, 6, 7, 8, 9, 10, 11, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-27, 29, 30, 31, 32, 33, 34). Seven of those are the GUI work that was never delegated in the first place.
+27, 29, 30, 31, 32, 33, 34). Seven of those are the GUI work that was never delegated in the first place. A
+documentation pass on 2026-09-22 then closed findings 9, 10, 11, 23, 24, 25, 26, and 27, leaving 19 open.
 
 The lesson worth carrying: agents killed mid-write leave syntactically broken files behind, and a workflow
 reporting "0 succeeded" does not mean "0 changed". Always diff and run the suite before trusting the tree.
@@ -365,7 +368,7 @@ below it is now provider-neutral, so this is wiring, not redesign. Required:
 15. `gui/main_window.py` line 100 still reads "Ask a local Hermes agent about selected completed runs."
     Make it provider-neutral. No agent owns that file.
 
-### 6.2 The other 20 open findings
+### 6.2 The other 12 open findings
 
 Everything in `docs/plans/agent_findings.md` that is still marked **open** and is not GUI work. Grouped by
 the file they touch, because that is how they should be batched:
@@ -386,9 +389,9 @@ the file they touch, because that is how they should be batched:
   the shared fixture in `tests/conftest.py`; several existing assertions pin exact counts derived from it.
 - **`tests/test_agent_hermes_installed.py`**: finding 7, a real scored evaluation across plan §11's seven
   dimensions instead of one collapsed assertion.
-- **Documentation**: findings 9, 23, 24 (the plan document), 10 and 27 (user guide, troubleshooting), 11
-  and 26 (architecture, developer guide, README), 25 (the csv_flat reference). The measured numbers these
-  documents need are all in §4.1 of this handoff.
+Documentation findings 9, 10, 11, 23, 24, 25, 26, and 27 are closed. The plan describes delivered reality
+and carries the measured layout benchmark, the architecture reference covers the agent layer, and the user
+guide and the troubleshooting notes cover the Agent tab.
 
 ### 6.3 Re-run the real-runtime validation at the end
 
