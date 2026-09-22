@@ -74,6 +74,7 @@ class ClaudeCodeAdapter:
         self.endpoint = ""
 
     def probe(self) -> RuntimeStatus:
+        """Report installation, version, sign-in state, and whether policy permits this route."""
         import shutil
 
         common = {"provider": self.provider, "route": self.route, "docs_url": DOCS_URL, "install_command": INSTALL_COMMAND, "login_command": LOGIN_COMMAND}
@@ -106,6 +107,7 @@ class ClaudeCodeAdapter:
         )
 
     def prepare(self, session: SessionContext) -> PreparedRuntime:
+        """Write a session-only MCP config and fix a launch command with no built-in tools."""
         status = self.probe()
         if not status.ready:
             raise AgentError("RUNTIME_UNAVAILABLE", status.message)
@@ -150,6 +152,7 @@ class ClaudeCodeAdapter:
         return PreparedRuntime(session, tuple(argv), environment, scratch)
 
     def start_turn(self, prepared: PreparedRuntime, prompt_path: Path, continuation: str = "") -> subprocess.Popen:
+        """Launch one turn with the prompt on stdin and a fresh session id."""
         argv = [*prepared.command, "--session-id", str(uuid4())]
         with prompt_path.open("rb") as handle:
             return subprocess.Popen(
@@ -158,6 +161,7 @@ class ClaudeCodeAdapter:
             )
 
     def parse_event(self, line: str) -> RuntimeEvent:
+        """Normalize one stream-json event, failing closed on any tool GridLens did not supply."""
         try:
             event = json.loads(line)
             kind = event["type"]
@@ -202,4 +206,5 @@ class ClaudeCodeAdapter:
         raise AgentError("RUNTIME_PROTOCOL_ERROR", "The installed CLI event format differs from the tested version.")
 
     def cancel(self, process: subprocess.Popen) -> None:
+        """Terminate Claude Code and the MCP server it started."""
         terminate_process(process)
