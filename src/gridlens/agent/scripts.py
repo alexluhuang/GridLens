@@ -155,7 +155,9 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
         raise AgentError("DOCKER_UNAVAILABLE", "Install and configure Docker yourself before running a reviewed script.")
     name = "gridlens-analysis-" + uuid4().hex
     run = context.run(record["run_id"])
-    command = sandbox_command(executable, name, image, run, script)
+    # Validate the image ID and refuse to run as root before anything is written to the session folder.
+    # The command used later is rebuilt against the snapshot, so this call is a preflight check only.
+    sandbox_command(executable, name, image, run, script)
     environment = minimal_environment()
     _require_sandbox_image(executable, image, environment)
     cancelled = cancelled or threading.Event()
