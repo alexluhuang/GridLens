@@ -30,6 +30,12 @@ from gridlens.agent.session import SessionContext, append_event, scoped_path, wr
 MAX_PROMPT_CHARS = 12_000
 MAX_TURN_BYTES = 2 * 1024 * 1024
 MAX_REPLAY_TURNS = 6
+READ_CHUNK_BYTES = 16384
+# Keep only the tail of stderr: it is a diagnostic, not a result.
+STDERR_TAIL_BYTES = 8192
+MAX_EVENT_BYTES = 128 * 1024
+POLL_SECONDS = 0.1
+EXIT_WAIT_SECONDS = 2
 
 
 class AgentController:
@@ -56,6 +62,85 @@ class AgentController:
         """Ask the turn in flight to stop at its next checkpoint."""
         self.cancelled.set()
 
+    def _write_prompt(self, prompt: str) -> Path:
+        """Write this turn's prompt to its own file in the session folder, and return the path.
+
+        Prompts go through a file rather than the command line so that no question, however it is
+        punctuated, can reach a shell. A runtime that cannot resume gets a bounded replay of GridLens's
+        own transcript folded in here.
+        """
+        prompt_dir = scoped_path(self.context.directory, "prompts", directory=True)
+        prompt_dir.mkdir(exist_ok=True, mode=0o700)
+        prompt_path = scoped_path(prompt_dir, f"{time.time_ns()}.txt")
+        replay = [] if getattr(self.adapter, "supports_continuation", True) else self.history[-MAX_REPLAY_TURNS:]
+        content = turn_prompt(tuple(self.context.run_ids), prompt, replay)
+        with os.fdopen(os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
+            handle.write(content)
+        return prompt_path
+
+    def _consume_output(self, process, emit: Callable[[RuntimeEvent], None], buffers: dict) -> tuple[str | None, int]:
+        """Read the runtime until it finishes, and return its answer and exit code.
+
+        Reads both streams under one deadline and one byte budget, so a runtime cannot outlast the turn
+        limit or flood the session by writing to whichever stream is unwatched. stderr is kept only as a
+        tail for diagnostics; stdout is split into lines and handed to the adapter.
+        """
+        deadline = time.monotonic() + self.timeout
+        total = 0
+        final = None
+        spoken: list[str] = []
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+            selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+            while selector.get_map():
+                if self.cancelled.is_set():
+                    raise AgentError("CANCELLED", "Turn stopped.")
+                if time.monotonic() >= deadline:
+                    raise AgentError("TIMEOUT", "The local model exceeded the turn time limit. Try a smaller question or another model.")
+                for key, _ in selector.select(timeout=POLL_SECONDS):
+                    chunk = os.read(key.fileobj.fileno(), READ_CHUNK_BYTES)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    total += len(chunk)
+                    if total > MAX_TURN_BYTES:
+                        raise AgentError("OUTPUT_LIMIT", "The runtime exceeded the output limit; start a new session.")
+                    channel = key.data
+                    if channel == "stderr":
+                        buffers[channel] = (buffers[channel] + chunk)[-STDERR_TAIL_BYTES:]
+                        continue
+                    buffers[channel] += chunk
+                    if len(buffers[channel]) > MAX_EVENT_BYTES:
+                        raise AgentError("OUTPUT_LIMIT", "A runtime event exceeded the size limit.")
+                    while b"\n" in buffers[channel]:
+                        line, buffers[channel] = buffers[channel].split(b"\n", 1)
+                        if not line.strip():
+                            continue
+                        answer = self._handle_line(line, emit, spoken)
+                        if answer is not None:
+                            final = answer
+            return final, process.wait(timeout=EXIT_WAIT_SECONDS)
+
+    def _handle_line(self, line: bytes, emit: Callable[[RuntimeEvent], None], spoken: list[str]) -> str | None:
+        """Audit and dispatch one runtime event, returning the final answer when the turn completes."""
+        try:
+            event = self.adapter.parse_event(line.decode("utf-8"))
+        except AgentError:
+            append_event(self.context.directory, "runtime_events.jsonl", {"kind": "invalid_event", "text": line.decode("utf-8", errors="replace")[:2048]})
+            raise
+        append_event(self.context.directory, "runtime_events.jsonl", asdict(event))
+        emit(event)
+        if event.kind == "text" and event.text:
+            spoken.append(event.text)
+        if event.kind == "error":
+            raise AgentError("RUNTIME_ERROR", event.text[:2000] or f"{self.runtime_label} failed to complete the turn.")
+        if event.kind != "completed":
+            return None
+        self.continuation = event.data.get("session_id", "") if getattr(self.adapter, "supports_continuation", True) else ""
+        write_json(self.context.directory / "usage.json", event.data.get("usage", {}))
+        # Some runtimes report the answer only as streamed text, not in the final event.
+        return event.text or "".join(spoken)[-MAX_PROMPT_CHARS:]
+
     def run_turn(self, prompt: str, emit: Callable[[RuntimeEvent], None]) -> str:
         """Run one turn to completion and return the cited answer."""
         if not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
@@ -69,63 +154,10 @@ class AgentController:
                 self.prepared = self.adapter.prepare(self.context)
             if self.cancelled.is_set():
                 raise AgentError("CANCELLED", "Turn stopped.")
-            prompt_dir = scoped_path(self.context.directory, "prompts", directory=True)
-            prompt_dir.mkdir(exist_ok=True, mode=0o700)
-            prompt_path = scoped_path(prompt_dir, f"{time.time_ns()}.txt")
-            replay = [] if getattr(self.adapter, "supports_continuation", True) else self.history[-MAX_REPLAY_TURNS:]
-            content = turn_prompt(tuple(self.context.run_ids), prompt, replay)
-            with os.fdopen(os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
-                handle.write(content)
+            prompt_path = self._write_prompt(prompt)
             self.history.append({"role": "user", "text": prompt})
             process = self.adapter.start_turn(self.prepared, prompt_path, self.continuation)
-            deadline = time.monotonic() + self.timeout
-            total = 0
-            final = None
-            spoken: list[str] = []
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-                selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-                while selector.get_map():
-                    if self.cancelled.is_set():
-                        raise AgentError("CANCELLED", "Turn stopped.")
-                    if time.monotonic() >= deadline:
-                        raise AgentError("TIMEOUT", "The local model exceeded the turn time limit. Try a smaller question or another model.")
-                    for key, _ in selector.select(timeout=0.1):
-                        chunk = os.read(key.fileobj.fileno(), 16384)
-                        if not chunk:
-                            selector.unregister(key.fileobj)
-                            continue
-                        total += len(chunk)
-                        if total > MAX_TURN_BYTES:
-                            raise AgentError("OUTPUT_LIMIT", "The runtime exceeded the output limit; start a new session.")
-                        channel = key.data
-                        if channel == "stderr":
-                            buffers[channel] = (buffers[channel] + chunk)[-8192:]
-                            continue
-                        buffers[channel] += chunk
-                        if len(buffers[channel]) > 128 * 1024:
-                            raise AgentError("OUTPUT_LIMIT", "A runtime event exceeded the size limit.")
-                        while b"\n" in buffers[channel]:
-                            line, buffers[channel] = buffers[channel].split(b"\n", 1)
-                            if not line.strip():
-                                continue
-                            try:
-                                event = self.adapter.parse_event(line.decode("utf-8"))
-                            except AgentError:
-                                append_event(self.context.directory, "runtime_events.jsonl", {"kind": "invalid_event", "text": line.decode("utf-8", errors="replace")[:2048]})
-                                raise
-                            append_event(self.context.directory, "runtime_events.jsonl", asdict(event))
-                            emit(event)
-                            if event.kind == "text" and event.text:
-                                spoken.append(event.text)
-                            if event.kind == "error":
-                                raise AgentError("RUNTIME_ERROR", event.text[:2000] or f"{self.runtime_label} failed to complete the turn.")
-                            if event.kind == "completed":
-                                # Some runtimes report the answer only as streamed text, not in the final event.
-                                final = event.text or "".join(spoken)[-MAX_PROMPT_CHARS:]
-                                self.continuation = event.data.get("session_id", "") if getattr(self.adapter, "supports_continuation", True) else ""
-                                write_json(self.context.directory / "usage.json", event.data.get("usage", {}))
-                return_code = process.wait(timeout=2)
+            final, return_code = self._consume_output(process, emit, buffers)
             if buffers["stdout"].strip() or return_code or final is None or not final.strip():
                 raise AgentError("RUNTIME_INCOMPLETE", f"{self.runtime_label} exited without a complete answer. Check the runtime and the selected model, then start a new session.")
             final = normalize_citations(final, session_sources(self.context.directory))
