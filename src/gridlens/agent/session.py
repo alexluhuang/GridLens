@@ -27,6 +27,7 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 
 
 def timestamp() -> str:
+    """Return the current UTC time as an ISO-8601 string with millisecond precision."""
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
@@ -50,6 +51,7 @@ def scoped_path(root: Path, relative: str | Path, *, directory: bool = False) ->
 
 
 def read_json(path: Path) -> dict:
+    """Read a bounded JSON object, or refuse when it is missing, malformed, or oversized."""
     try:
         with path.open("rb") as handle:
             raw = handle.read(MAX_JSON_BYTES + 1)
@@ -64,6 +66,7 @@ def read_json(path: Path) -> dict:
 
 
 def write_json(path: Path, value: object, *, exclusive: bool = False) -> None:
+    """Write JSON at mode 0600, through a descriptor that never follows a symlink."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if exclusive else os.O_TRUNC)
     with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8") as handle:
         json.dump(value, handle, indent=2, ensure_ascii=False, allow_nan=False)
@@ -71,6 +74,7 @@ def write_json(path: Path, value: object, *, exclusive: bool = False) -> None:
 
 
 def append_event(directory: Path, name: str, value: dict) -> None:
+    """Append one timestamped JSON line to a session audit file."""
     path = scoped_path(directory, name)
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"timestamp": timestamp(), **value}, ensure_ascii=False, allow_nan=False) + "\n")
@@ -110,6 +114,7 @@ class SessionContext:
     remote_acknowledged: bool = False
 
     def run(self, run_id: str) -> Path:
+        """Resolve a selected, completed run to its directory, or refuse the request."""
         if run_id not in self.run_ids or not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id) or run_id in (".", ".."):
             raise AgentError("RUN_NOT_SELECTED", "Select this run in the Agent tab and start a new session.")
         path = scoped_path(self.project_root, Path("runs") / run_id, directory=True)
@@ -123,6 +128,7 @@ class SessionContext:
         cls, project_root: Path, run_ids: tuple[str, ...], model: str, endpoint: str,
         *, runtime: str = DEFAULT_PROVIDER, remote_acknowledged: bool = False,
     ) -> "SessionContext":
+        """Create the session folder and write its immutable context."""
         root = project_root.expanduser().resolve(strict=True)
         read_json(scoped_path(root, "project.json"))
         if not run_ids or len(run_ids) > 2 or len(set(run_ids)) != len(run_ids):
@@ -153,6 +159,7 @@ class SessionContext:
 
     @classmethod
     def load(cls, path: Path) -> "SessionContext":
+        """Load a context file, re-validating every field before trusting it."""
         if path.is_symlink() or not path.is_file():
             raise AgentError("INVALID_SESSION", "Start a new session from the Agent tab.")
         data = read_json(path)
@@ -184,7 +191,9 @@ class SessionContext:
             raise AgentError("INVALID_SESSION", "The session context is invalid; start a new session.") from exc
 
     def set_status(self, status: str, detail: str = "") -> None:
+        """Record the session state that the GUI and the audit read."""
         write_json(scoped_path(self.directory, "status.json"), {"status": status, "detail": detail, "updated_at": timestamp()})
 
     def message(self, role: str, text: str) -> None:
+        """Append one conversation message to the transcript."""
         append_event(self.directory, "transcript.jsonl", {"role": role, "text": text})
