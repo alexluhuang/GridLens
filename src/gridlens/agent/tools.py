@@ -40,6 +40,12 @@ MAX_ROWS = 50
 MAX_RESULT_BYTES = 48 * 1024
 MAX_TABLE_BYTES = 64 * 1024 * 1024
 MAX_TABLE_ROWS = 250_000
+MAX_AUDIT_BYTES = 32 * 1024 * 1024
+MAX_ARGUMENT_BYTES = 4096
+# A proposed script travels in its arguments, so that one tool gets a larger allowance.
+MAX_SCRIPT_ARGUMENT_BYTES = 32 * 1024
+OVERSIZE_SOURCE_LIMIT = 20
+OVERSIZE_WARNING_LIMIT = 10
 METRIC_VERSION = "2026.09.21"
 Facility = Literal["line", "two_winding_transformer", "three_winding_transformer", "transformer_equivalent", "all"]
 Metric = Literal["max_utilization_pct", "base_utilization_pct", "thermal_margin_pct_points"]
@@ -73,6 +79,51 @@ def _bounded_strings(value: object) -> object:
     return value
 
 
+def _empty_result(call_id: str) -> dict:
+    """Build the result envelope every tool returns, successful or not."""
+    return {
+        "call_id": call_id,
+        "data": {"rows": [], "returned": 0, "total_matching": 0, "truncated": False},
+        "provenance": {
+            "sources": [], "dataset_version": ANALYSIS_DATASET_VERSION,
+            "parser_version": PARSER_VERSION, "metric_definition_version": METRIC_VERSION,
+        },
+        "warnings": [], "error": None,
+    }
+
+
+def _bind_arguments(method, service, args: tuple, kwargs: dict) -> dict:
+    """Resolve the call's arguments for the audit, flagging a signature mismatch rather than raising.
+
+    The audit records what the model asked for even when the request was malformed, so a rejected call
+    still leaves a trace. `_invoke` turns the flag into the error the model sees.
+    """
+    try:
+        bound = inspect.signature(method).bind(service, *args, **kwargs)
+    except TypeError:
+        return {"invalid_arguments": True}
+    bound.apply_defaults()
+    return {key: value for key, value in bound.arguments.items() if key != "self"}
+
+
+def _fit_to_budget(result: dict) -> dict:
+    """Drop rows until the serialized result fits, and report the truncation honestly.
+
+    A result that cannot fit even with no rows is replaced by an error, because a silently emptied
+    envelope would read to the model as a run with nothing in it.
+    """
+    while len(json.dumps(result, ensure_ascii=False).encode()) > MAX_RESULT_BYTES and result["data"]["rows"]:
+        result["data"]["rows"].pop()
+        result["data"]["truncated"] = True
+    result["data"]["returned"] = len(result["data"]["rows"])
+    if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_RESULT_BYTES:
+        result["data"] = {"rows": [], "returned": 0, "total_matching": 0, "truncated": True}
+        result["error"] = {"code": "RESULT_TOO_LARGE", "remedy": "Narrow the request to a single run or facility."}
+        result["provenance"]["sources"] = result["provenance"]["sources"][:OVERSIZE_SOURCE_LIMIT]
+        result["warnings"] = result["warnings"][:OVERSIZE_WARNING_LIMIT]
+    return result
+
+
 def tool(method):
     """Keep typed tool signatures while centralizing limits and append-only auditing."""
     @wraps(method)
@@ -95,7 +146,7 @@ class ToolService:
         audit = scoped_path(self.context.directory, "tool_calls.jsonl")
         with os.fdopen(os.open(audit, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a+", encoding="utf-8") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
-            if os.fstat(handle.fileno()).st_size > 32 * 1024 * 1024:
+            if os.fstat(handle.fileno()).st_size > MAX_AUDIT_BYTES:
                 raise AgentError("SESSION_LIMIT", "Start a new session; the tool audit has reached its size limit.")
             handle.seek(0)
             count = sum(1 for line in handle if '"phase": "started"' in line)
@@ -103,27 +154,14 @@ class ToolService:
             started = timestamp()
             self.sources, self.warnings = {}, []
             arguments = {}
-            result = {
-                "call_id": call_id,
-                "data": {"rows": [], "returned": 0, "total_matching": 0, "truncated": False},
-                "provenance": {
-                    "sources": [], "dataset_version": ANALYSIS_DATASET_VERSION,
-                    "parser_version": PARSER_VERSION, "metric_definition_version": METRIC_VERSION,
-                },
-                "warnings": [], "error": None,
-            }
-            try:
-                bound = inspect.signature(method).bind(self, *args, **kwargs)
-                bound.apply_defaults()
-                arguments = {key: value for key, value in bound.arguments.items() if key != "self"}
-            except TypeError:
-                arguments = {"invalid_arguments": True}
+            result = _empty_result(call_id)
+            arguments = _bind_arguments(method, self, args, kwargs)
             handle.write(json.dumps({"call_id": call_id, "phase": "started", "tool": method.__name__, "arguments": _bounded_strings(arguments), "started_at": started}, allow_nan=False) + "\n")
             handle.flush()
             try:
                 if arguments.get("invalid_arguments"):
                     raise ValueError
-                if len(json.dumps(arguments, allow_nan=False).encode()) > (32768 if method.__name__ == "propose_analysis_script" else 4096):
+                if len(json.dumps(arguments, allow_nan=False).encode()) > (MAX_SCRIPT_ARGUMENT_BYTES if method.__name__ == "propose_analysis_script" else MAX_ARGUMENT_BYTES):
                     raise ValueError
                 if "limit" in arguments and (isinstance(arguments["limit"], bool) or not isinstance(arguments["limit"], int) or arguments["limit"] < 1):
                     raise ValueError
@@ -140,16 +178,7 @@ class ToolService:
                 result["error"] = {"code": "ARTIFACT_UNAVAILABLE", "remedy": "Check that the selected run and its analysis files are readable."}
             result["provenance"]["sources"] = list(self.sources.values())
             result["warnings"] = list(dict.fromkeys(self.warnings))
-            result = _bounded_strings(result)
-            while len(json.dumps(result, ensure_ascii=False).encode()) > MAX_RESULT_BYTES and result["data"]["rows"]:
-                result["data"]["rows"].pop()
-                result["data"]["truncated"] = True
-            result["data"]["returned"] = len(result["data"]["rows"])
-            if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_RESULT_BYTES:
-                result["data"] = {"rows": [], "returned": 0, "total_matching": 0, "truncated": True}
-                result["error"] = {"code": "RESULT_TOO_LARGE", "remedy": "Narrow the request to a single run or facility."}
-                result["provenance"]["sources"] = result["provenance"]["sources"][:20]
-                result["warnings"] = result["warnings"][:10]
+            result = _fit_to_budget(_bounded_strings(result))
             handle.write(json.dumps({
                 "call_id": call_id, "phase": "completed", "tool": method.__name__,
                 "arguments": _bounded_strings(arguments), "started_at": started, "ended_at": timestamp(),
