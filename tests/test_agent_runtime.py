@@ -11,8 +11,10 @@ import time
 import pytest
 
 from gridlens.agent.controller import AgentController, normalize_citations
-from gridlens.agent.hermes import HermesAdapter, SYSTEM_PROMPT, mcp_command, minimal_environment, terminate_process
+from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
+from gridlens.agent.process import mcp_command, minimal_environment
+from gridlens.agent.prompt import SYSTEM_PROMPT
 from gridlens.agent.runtime import PreparedRuntime, RuntimeStatus
 
 
@@ -60,8 +62,49 @@ def test_preparation_isolated_profile_and_no_inherited_credentials(agent_context
     assert list(config["mcp_servers"]) == ["gridlens"]
     assert config["auth"]["adopt_external_logins"] is False
     assert config["agent"]["system_prompt"] == SYSTEM_PROMPT
+    # Pin the exact argv: dropping --ignore-rules or --toolsets gridlens would otherwise leave the suite green.
+    assert prepared.command == (
+        "/opt/hermes", "chat", "--oneshot", "--format", "stream-json", "--provider", "custom",
+        "--model", agent_context.model, "--toolsets", "gridlens", "--ignore-rules", "--no-restore-cwd",
+        "--max-turns", "12", "--run-budget", "300", "--source", "tool", "--cli",
+    )
+    manifest = json.loads((agent_context.directory / "manifest.json").read_text())
+    # Literals, not hermes.TURN_TIMEOUT_SECONDS, so a silent budget or turn-cap change is caught here.
+    assert manifest["command_template"] == list(prepared.command) + ["--query-file", "<session prompt file>"]
+    assert manifest["route"] == "loopback_only"
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     assert mcp_command() == [sys.executable, "--mcp-server"]
+
+
+def test_start_turn_passes_prompt_by_file_and_validates_continuation(agent_context, monkeypatch, tmp_path):
+    import gridlens.agent.hermes as hermes
+    adapter = HermesAdapter()
+    monkeypatch.setattr(hermes, "verify_model", lambda *a: None)
+    prepared = PreparedRuntime(agent_context, ("/opt/hermes", "chat", "--oneshot"), {"PATH": os.environ["PATH"]}, tmp_path)
+    calls = []
+
+    class FakePopen:
+        # Local so the offline suite never spawns the real CLI, while still capturing the full invocation.
+        def __init__(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+
+    monkeypatch.setattr(hermes.subprocess, "Popen", FakePopen)
+    prompt_path = tmp_path / "prompt.txt"
+    prompt_path.write_text("literal $(touch /tmp/should-never-exist) `id` secret-text")
+    adapter.start_turn(prepared, prompt_path, "abc-1")
+    argv, kwargs = calls[0]
+    assert argv == [*prepared.command, "--query-file", str(prompt_path), "--resume", "abc-1"]
+    assert all("secret-text" not in part for part in argv)
+    assert kwargs["cwd"] == prepared.cwd and kwargs["cwd"] != agent_context.project_root
+    assert kwargs["stdin"] is subprocess.DEVNULL and kwargs["start_new_session"] is True
+    assert kwargs["env"] == prepared.environment
+    # "аbc" is a Cyrillic look-alike: it catches a later relaxation of the class to Unicode-aware \w.
+    for bad in ("--toolsets all", "a b", "$(id)", "x;y", "../../other", "abc\n--resume", "аbc"):
+        calls.clear()
+        with pytest.raises(AgentError) as caught:
+            adapter.start_turn(prepared, prompt_path, bad)
+        assert caught.value.code == "INVALID_CONTINUATION"
+        assert not calls
 
 
 def test_structured_events_and_unexpected_tool():

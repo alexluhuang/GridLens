@@ -11,23 +11,35 @@ import time
 from typing import Callable
 
 from gridlens.agent.policy import AgentError
+from gridlens.agent.prompt import turn_prompt
 from gridlens.agent.runtime import RuntimeAdapter, RuntimeEvent
 from gridlens.agent.session import SessionContext, append_event, scoped_path, write_json
 
 
 MAX_PROMPT_CHARS = 12_000
 MAX_TURN_BYTES = 2 * 1024 * 1024
+MAX_REPLAY_TURNS = 6
 
 
 class AgentController:
-    """Synchronous worker API; the GUI calls it from a QThread."""
+    """Synchronous worker API; the GUI calls it from a QThread.
+
+    The controller owns the canonical conversation record. A runtime may resume its own session, but its
+    history is never the only copy: when an adapter reports supports_continuation as False, the next turn
+    is composed from this record instead.
+    """
     def __init__(self, context: SessionContext, adapter: RuntimeAdapter, *, timeout: float = 300) -> None:
         self.context = context
         self.adapter = adapter
         self.timeout = timeout
         self.prepared = None
         self.continuation = ""
+        self.history: list[dict] = []
         self.cancelled = threading.Event()
+
+    @property
+    def runtime_label(self) -> str:
+        return getattr(self.adapter, "label", None) or getattr(self.adapter, "provider", None) or "The agent runtime"
 
     def cancel(self) -> None:
         self.cancelled.set()
@@ -47,13 +59,16 @@ class AgentController:
             prompt_dir = scoped_path(self.context.directory, "prompts", directory=True)
             prompt_dir.mkdir(exist_ok=True, mode=0o700)
             prompt_path = scoped_path(prompt_dir, f"{time.time_ns()}.txt")
-            content = "Selected run IDs: " + json.dumps(self.context.run_ids) + "\nUser question:\n" + prompt
+            replay = [] if getattr(self.adapter, "supports_continuation", True) else self.history[-MAX_REPLAY_TURNS:]
+            content = turn_prompt(tuple(self.context.run_ids), prompt, replay)
             with os.fdopen(os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
                 handle.write(content)
+            self.history.append({"role": "user", "text": prompt})
             process = self.adapter.start_turn(self.prepared, prompt_path, self.continuation)
             deadline = time.monotonic() + self.timeout
             total = 0
             final = None
+            spoken: list[str] = []
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ, "stdout")
                 selector.register(process.stderr, selectors.EVENT_READ, "stderr")
@@ -88,22 +103,26 @@ class AgentController:
                                 raise
                             append_event(self.context.directory, "runtime_events.jsonl", asdict(event))
                             emit(event)
+                            if event.kind == "text" and event.text:
+                                spoken.append(event.text)
                             if event.kind == "error":
-                                raise AgentError("RUNTIME_ERROR", event.text[:2000] or "Hermes failed to complete the turn.")
+                                raise AgentError("RUNTIME_ERROR", event.text[:2000] or f"{self.runtime_label} failed to complete the turn.")
                             if event.kind == "completed":
-                                final = event.text
-                                self.continuation = event.data.get("session_id", "")
+                                # Some runtimes report the answer only as streamed text, not in the final event.
+                                final = event.text or "".join(spoken)[-MAX_PROMPT_CHARS:]
+                                self.continuation = event.data.get("session_id", "") if getattr(self.adapter, "supports_continuation", True) else ""
                                 write_json(self.context.directory / "usage.json", event.data.get("usage", {}))
                 return_code = process.wait(timeout=2)
             if buffers["stdout"].strip() or return_code or final is None or not final.strip():
-                raise AgentError("RUNTIME_INCOMPLETE", "Hermes exited without a complete answer. Check the local runtime/model and start a new session.")
+                raise AgentError("RUNTIME_INCOMPLETE", f"{self.runtime_label} exited without a complete answer. Check the runtime and the selected model, then start a new session.")
             final = normalize_citations(final, session_sources(self.context.directory))
+            self.history.append({"role": "assistant", "text": final})
             self.context.message("assistant", final)
             self.context.set_status("completed")
             return final
         except Exception as exc:
             code = exc.code if isinstance(exc, AgentError) else "RUNTIME_ERROR"
-            detail = str(exc) if isinstance(exc, AgentError) else "The local runtime failed. Check Hermes and Ollama, then start a new session."
+            detail = str(exc) if isinstance(exc, AgentError) else f"{self.runtime_label} failed. Check the runtime and its model, then start a new session."
             self.context.set_status("cancelled" if code == "CANCELLED" else "failed", detail)
             append_event(self.context.directory, "runtime_events.jsonl", {"kind": "error", "code": code, "text": detail})
             emit(RuntimeEvent("error", detail, {"code": code}))

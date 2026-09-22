@@ -12,6 +12,7 @@ from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from gridlens.agent.policy import AgentError, local_endpoint
+from gridlens.agent.providers import DEFAULT_PROVIDER, PROVIDER_IDS, route_for
 
 
 MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -95,7 +96,10 @@ class SessionContext:
     endpoint: str
     directory: Path
     session_id: str
-    runtime: str = "hermes"
+    runtime: str = DEFAULT_PROVIDER
+    route: str = "loopback_only"
+    # True only when the user confirmed, for this session, that a hosted runtime may receive project data.
+    remote_acknowledged: bool = False
 
     def run(self, run_id: str) -> Path:
         if run_id not in self.run_ids or not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id) or run_id in (".", ".."):
@@ -107,16 +111,28 @@ class SessionContext:
         return path
 
     @classmethod
-    def create(cls, project_root: Path, run_ids: tuple[str, ...], model: str, endpoint: str) -> "SessionContext":
+    def create(
+        cls, project_root: Path, run_ids: tuple[str, ...], model: str, endpoint: str,
+        *, runtime: str = DEFAULT_PROVIDER, remote_acknowledged: bool = False,
+    ) -> "SessionContext":
         root = project_root.expanduser().resolve(strict=True)
         read_json(scoped_path(root, "project.json"))
         if not run_ids or len(run_ids) > 2 or len(set(run_ids)) != len(run_ids):
             raise AgentError("INVALID_SELECTION", "Select one completed run, or two runs for comparison.")
         if not model or len(model) > 256:
-            raise AgentError("INVALID_MODEL", "Select an installed Ollama model.")
+            raise AgentError("INVALID_MODEL", "Select a model for the chosen runtime.")
+        # The route is decided here, before any user text or project name reaches a runtime process.
+        route = route_for(runtime)
+        if route == "remote":
+            if not remote_acknowledged:
+                raise AgentError("REMOTE_NOT_ACKNOWLEDGED", "Confirm the remote-data acknowledgement in the Agent tab before starting a hosted session.")
+            endpoint = ""
+        else:
+            endpoint = local_endpoint(endpoint)
+            remote_acknowledged = False
         identifier = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ_") + uuid4().hex[:12]
         directory = scoped_path(root, Path("agent/sessions") / identifier, directory=True)
-        context = cls(root, run_ids, model, local_endpoint(endpoint), directory, identifier)
+        context = cls(root, run_ids, model, endpoint, directory, identifier, runtime, route, remote_acknowledged)
         for run_id in run_ids:
             context.run(run_id)
         directory.mkdir(parents=True, mode=0o700)
@@ -136,15 +152,20 @@ class SessionContext:
             context = cls(
                 Path(data["project_root"]), tuple(data["run_ids"]), data["model"], data["endpoint"],
                 Path(data["directory"]), data["session_id"], data["runtime"],
+                str(data.get("route", "loopback_only")), bool(data.get("remote_acknowledged", False)),
             )
+            remote = context.route == "remote"
             if (
-                context.runtime != "hermes" or not context.project_root.is_absolute()
+                context.runtime not in PROVIDER_IDS
+                or context.route != route_for(context.runtime)
+                or (remote and (not context.remote_acknowledged or context.endpoint))
+                or (not remote and (context.remote_acknowledged or context.endpoint != local_endpoint(context.endpoint)))
+                or not context.project_root.is_absolute()
                 or context.project_root != context.project_root.resolve()
                 or not re.fullmatch(r"[A-Za-z0-9_]+", context.session_id)
                 or context.directory != scoped_path(context.project_root, Path("agent/sessions") / context.session_id, directory=True)
                 or path.absolute() != context.directory / "context.json"
                 or not 1 <= len(context.run_ids) <= 2
-                or context.endpoint != local_endpoint(context.endpoint)
             ):
                 raise ValueError
             read_json(scoped_path(context.project_root, "project.json"))

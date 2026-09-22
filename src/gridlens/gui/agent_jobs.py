@@ -26,4 +26,12 @@ class AgentAnalysisWorker(QThread):
                 AnalysisService.build(run, UtilizationBranchOptions(), lambda update: self.progress.emit(update.detail), self.cancelled, indexed=self.indexed, rebuild=True)
             self.outcome.emit("Analysis ready. Ask your question again.")
         except Exception as exc:
-            self.outcome.emit("Analysis cancelled." if self.cancelled.is_set() else f"Analysis failed: {exc}")
+            if self.cancelled.is_set():
+                self.outcome.emit("Analysis cancelled.")
+                return
+            # AnalysisService re-raises the worker traceback verbatim; outcome lands in a one-line label,
+            # so keep only the last line there and send the full detail to the activity pane.
+            detail = str(exc).strip()
+            summary = (detail.splitlines() or [type(exc).__name__])[-1][:200]
+            self.progress.emit(detail or type(exc).__name__)
+            self.outcome.emit(f"Analysis failed: {summary}")

@@ -12,7 +12,7 @@ import threading
 import time
 from uuid import uuid4
 
-from gridlens.agent.hermes import minimal_environment, terminate_process
+from gridlens.agent.process import minimal_environment, terminate_process
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import SessionContext, append_event, read_json, scoped_path, timestamp, write_json
 

@@ -27,6 +27,23 @@ def _build(run_dir, options, messages, indexed, rebuild):
         messages.put(("error", traceback.format_exc()))
 
 
+def _terminate_group(process) -> None:
+    # _build calls os.setsid(), so the worker pid is also its group id: signal the whole group so a
+    # grandchild (an index writer, a helper subprocess) cannot outlive a cancelled build.
+    if process.is_alive():
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            process.terminate()  # killed before os.setsid() took effect, so it has no group of its own
+        process.join(1)
+        if process.is_alive():
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                process.kill()
+    process.join()
+
+
 class AnalysisService:
     """Serialize analysis builds across GUI tabs and processes, with cancellable workers."""
 
@@ -68,13 +85,5 @@ class AnalysisService:
                     elif kind == "result":
                         return value
             finally:
-                if process.is_alive():
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        process.terminate()
-                    process.join(1)
-                    if process.is_alive():
-                        process.kill()
-                process.join()
+                _terminate_group(process)
                 messages.close()
