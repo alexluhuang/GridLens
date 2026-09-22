@@ -5,13 +5,17 @@ Produced 2026-09-21 by a seven-dimension review of the feature branch against
 then handed to an independent verifier instructed to **refute** it; only those that survived are listed
 here. Findings the verifier judged speculative, stylistic, or already covered were discarded.
 
-The **Fix** text is the verifier's corrected version, not the original finder's. That distinction matters:
-the corrections routinely identify concrete errors in the first proposal, such as a test that cannot pass
-because a fixture's CSV is header-only, a `toHtml()` that does not exist on `QPlainTextEdit`, a one-liner
-that raises `IndexError` on an empty exception message, or a mount narrowing that would break the user's
-own example questions. Follow the Fix text rather than re-deriving it.
+The **Defect** and **Fix** paragraphs are quoted verbatim from the review, so they keep the reviewer's
+wording and its exact file and line references. Editing them for house style would cost precision that a
+reader has to trust, so they are left as written.
 
-**Status: 7 of 34 applied, 27 open.** Applied: 1, 5, 12, 13, 14, 17, 28.
+The Fix text is the verifier's corrected version rather than the original finder's, and that distinction
+matters. The corrections routinely identify concrete errors in the first proposal, such as a test that
+cannot pass because a fixture's CSV is header-only, a `toHtml()` that does not exist on `QPlainTextEdit`, a
+one-liner that raises `IndexError` on an empty exception message, or a mount narrowing that would break the
+user's own example questions. Follow the Fix text rather than re-deriving it.
+
+**Status: 15 of 34 applied, 19 open.** Applied: 1, 5, 9, 10, 11, 12, 13, 14, 17, 23, 24, 25, 26, 27, 28.
 
 Severity is the verifier's: *major* means a reviewer would demand it before merge, *minor* means it is
 worth doing. No finding was rated a blocker.
@@ -26,9 +30,9 @@ worth doing. No finding was rated a blocker.
 | 6 | major | tests | **open** | Metric-semantics cases the plan enumerates are unasserted |
 | 7 | major | tests | **open** | Model evaluation collapses plan section 11's seven scoring dimensions into one assertion |
 | 8 | major | tests | **open** | Five of the fifteen tools have no test at all |
-| 9 | major | docs | **open** | The plan document still says it is not approved for implementation |
-| 10 | major | docs | **open** | docs/user_guide.md has no Agent tab section |
-| 11 | major | docs | **open** | docs/architecture.md documents no part of the agent architecture |
+| 9 | major | docs | applied | The plan document still says it is not approved for implementation |
+| 10 | major | docs | applied | docs/user_guide.md has no Agent tab section |
+| 11 | major | docs | applied | docs/architecture.md documents no part of the agent architecture |
 | 12 | major | docs | applied | CEII notes still claimed no AI model or cloud service is involved |
 | 13 | major | packaging | applied | The generated-script sandbox image cannot be built as written |
 | 14 | major | security | applied | The sandbox mount contradicts the written CEII container rule, and session artifacts have no retention policy |
@@ -40,11 +44,11 @@ worth doing. No finding was rated a blocker.
 | 20 | minor | gui | **open** | There is no Local/Remote route badge, and the diagnostics channel is conflated |
 | 21 | minor | gui | **open** | The Sources panel drops tool error codes and warnings it has already parsed |
 | 22 | minor | tests | **open** | No test asserts the untrusted-data caps on model-visible strings |
-| 23 | minor | docs | **open** | The plan's local-model baseline lists a model that is not installed |
-| 24 | minor | docs | **open** | Plan section 12's source layout and section 5's tool catalog diverge from what was delivered |
-| 25 | minor | docs | **open** | The csv_flat reference doc omits contingency_summary and the event index |
-| 26 | minor | docs | **open** | The developer guide and README do not mention the agent package |
-| 27 | minor | docs | **open** | docs/troubleshooting.md has no agent entries |
+| 23 | minor | docs | applied | The plan's local-model baseline lists a model that is not installed |
+| 24 | minor | docs | applied | Plan section 12's source layout and section 5's tool catalog diverge from what was delivered |
+| 25 | minor | docs | applied | The csv_flat reference doc omits contingency_summary and the event index |
+| 26 | minor | docs | applied | The developer guide and README do not mention the agent package |
+| 27 | minor | docs | applied | docs/troubleshooting.md has no agent entries |
 | 28 | minor | gui | applied | Analysis failures push a raw traceback into a one-line label |
 | 29 | minor | security | **open** | Path-escape rejections inside the event index are relabelled as a stale index |
 | 30 | minor | correctness | **open** | _optional_table stats the work source with no existence guard |
@@ -240,7 +244,7 @@ Adopt the four tests, with these corrections I verified against the code:
 
 ## 9. The plan document still says it is not approved for implementation
 
-*major · docs · **open***
+*major · docs · applied*
 
 **Defect.** All six contradictions check out against the tree, and the plan file was itself added on this branch (git diff --stat main...HEAD -- docs/ shows it as a 491-line new file), so the stale status text is not a leftover from an older commit. Line 3 says "revised proposal; not approved for implementation" while src/gridlens/agent/{tools,scripts,session,hermes,mcp_server,policy,runtime}.py, gui/agent_tab.py, gui/script_review.py and 8 agent test modules are delivered (186 passed / 4 skipped). …
 
@@ -260,7 +264,7 @@ Additions the proposed fix omits:
 
 ## 10. docs/user_guide.md has no Agent tab section
 
-*major · docs · **open***
+*major · docs · applied*
 
 **Defect.** Confirmed by direct inspection, not refutable. docs/user_guide.md is 88 lines, ends at "Generate Analysis Graphs", and contains no Agent content; a repo-wide grep for "agent|hermes|ollama" across README.md and every file in docs/ except docs/plans/ai_planning_agent.md returns zero hits, so the behavior does not exist "somewhere the finder did not look". …
 
@@ -270,7 +274,7 @@ Add an "Ask The Planning Agent" section to docs/user_guide.md after "Generate An
 
 ## 11. docs/architecture.md documents no part of the agent architecture
 
-*major · docs · **open***
+*major · docs · applied*
 
 **Defect.** I tried to refute this and could not. docs/architecture.md is the repo's architecture reference (linked from README.md:70) and grep for "agent|hermes|mcp" across every file in docs/*.md returns zero hits, so the information exists nowhere else in the reference docs - only in the plan document, which is a proposal, not the delivered-state reference. …
 
@@ -471,7 +475,7 @@ Add one test to tests/test_agent_tools.py, with these corrections to the proposa
 
 ## 23. The plan's local-model baseline lists a model that is not installed
 
-*minor · docs · **open***
+*minor · docs · applied*
 
 **Defect.** I tried to refute this and could not. The facts hold on both the doc and the environment. Doc side, `docs/plans/ai_planning_agent.md`: - Line 83: `| Local models | \`nemotron3:33b\`, \`llama3.3:latest\`, \`qwen3.6:35b\` | All report tool capability through \`/api/tags\` |`, sitting under the heading `### Local runtime baseline observed on 2026-09-21` (line 75) inside `## 3. Verified baseline`. …
 
@@ -495,7 +499,7 @@ Leave line 81 alone — Hermes' default `nemotron3:33b` is still installed and c
 
 ## 24. Plan section 12's source layout and section 5's tool catalog diverge from what was delivered
 
-*minor · docs · **open***
+*minor · docs · applied*
 
 **Defect.** The factual assertions all check out. §12 (docs/plans/ai_planning_agent.md:469-491) predicts agent/providers/{hermes,codex,claude}.py, an agent/tools/ subpackage, and gui/agent_view_models.py; the delivered code is flat (agent/{runtime,policy,session,controller,hermes,tools,mcp_server,scripts}.py, gui/{agent_tab,agent_jobs,script_review}.py) with no providers/, no tools/ package, and no agent_view_models.py. …
 
@@ -519,7 +523,7 @@ Do not freeze a hand-copied as-built tree into §12 — it was already stale wit
 
 ## 25. The csv_flat reference doc omits contingency_summary and the event index
 
-*minor · docs · **open***
+*minor · docs · applied*
 
 **Defect.** Confirmed, not refutable. docs/csv_flat_ca_scalability_v2.md:84 ("Parquet Conversion") documents only reports/parquet/<csv-file-name>/, yet the same flat-CSV pass now also emits contingency_summary (analysis/contingencies.py:8-9, wired into both the streaming update_summary and the accelerated summary_frames/summary_from_records paths via csv_flat.py:15, persisted to reports/interactive_tables/contingency_summary.csv by interactive.py:31,161 and reports/tables/ by dataset.py), and the Agent tab can build a second,  …
 
@@ -529,7 +533,7 @@ Apply the proposed two subsections to docs/csv_flat_ca_scalability_v2.md, but ex
 
 ## 26. The developer guide and README do not mention the agent package
 
-*minor · docs · **open***
+*minor · docs · applied*
 
 **Defect.** Could not refute; every factual assertion checks out. README.md:54-66 lists gui/core/runner/analysis/resources with no agent/, and its docs/ line omits docs/plans/. docs/developer_guide.md is 75 lines total and its module-organization paragraph (70-72) ends at analysis/dataset.py with no Agent content. …
 
@@ -553,7 +557,7 @@ Apply the proposed README and developer_guide edits, with these corrections and 
 
 ## 27. docs/troubleshooting.md has no agent entries
 
-*minor · docs · **open***
+*minor · docs · applied*
 
 **Defect.** Confirmed, with one correction to the framing. docs/troubleshooting.md is 94 lines with five pre-agent sections and no agent content, and the gap is wider than claimed: `grep -ci agent` returns 0 for architecture.md, user_guide.md, packaging_distribution.md, security_ceii.md, developer_guide.md, troubleshooting.md and README.md, so the whole delivered tab is undocumented, while the plan itself (ai_planning_agent.md:491) directs docs updates for delivered behavior. …
 
