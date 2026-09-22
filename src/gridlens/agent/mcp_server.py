@@ -1,3 +1,12 @@
+"""The MCP entry point, and a model-free CLI for the same tools.
+
+`main` is what `gridlens --mcp-server` dispatches to, before anything imports Qt, so the tool server can
+run without a GUI. It serves `ToolService` over stdio using the official MCP SDK rather than a local
+protocol implementation.
+
+`tool_cli` exposes the identical tools to a developer, so the tool layer can be exercised and debugged
+with no model and no MCP process in the way.
+"""
 from __future__ import annotations
 
 import argparse
