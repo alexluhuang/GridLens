@@ -4,6 +4,7 @@ import math
 from collections.abc import Iterable, Mapping
 
 from gridlens.analysis.enrichment import voltage_class
+from gridlens.analysis.branch_keys import canonical_branch_label
 from gridlens.analysis.parser_models import ParsedTable
 from gridlens.analysis.utilization import (
     UtilizationBranchOptions,
@@ -202,8 +203,8 @@ def branch_key(row: Mapping[str, object]) -> tuple[object, object, str, str]:
     return (
         _integer_key(row.get("from_bus")),
         _integer_key(row.get("to_bus")),
-        str(row.get("line_id") or "").strip(),
-        str(row.get("section") or "").strip(),
+        canonical_branch_label(row.get("line_id")),
+        canonical_branch_label(row.get("section")),
     )
 
 

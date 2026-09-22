@@ -21,6 +21,7 @@ Most congested means highest maximum observed utilization in the existing cache.
 units, rating basis, convergence coverage, and relevant warnings. Cached maxima may include the base case
 and non-converged cases; do not claim a converged-only N-1 result. Thermal margin is percentage points of
 line rating, not transfer, generation, or load-serving capacity. Preserve circuits and sections.
+State the facility scope you queried; re-query with facility='all' before making a system-wide worst claim.
 If a cache or index is missing, tell the user to build it with the Agent tab's Build / refresh analysis control.
 Use rank_contingencies and the indexed flow tools for event-specific questions. If tools cannot answer
 a valid analysis question, propose_analysis_script can save Python for review. Explain the purpose and

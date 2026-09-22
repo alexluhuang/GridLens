@@ -26,6 +26,17 @@ from gridlens.agent.providers import DEFAULT_PROVIDER, PROVIDER_IDS, route_for
 MAX_JSON_BYTES = 2 * 1024 * 1024
 
 
+def safe_utf8(value: object) -> object:
+    """Replace invalid Unicode in nested audit values before writing JSON for later tool use."""
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, dict):
+        return {str(safe_utf8(key)): safe_utf8(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [safe_utf8(item) for item in value]
+    return value
+
+
 def timestamp() -> str:
     """Return the current UTC time as an ISO-8601 string with millisecond precision."""
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
@@ -69,7 +80,7 @@ def write_json(path: Path, value: object, *, exclusive: bool = False) -> None:
     """Write JSON at mode 0600, through a descriptor that never follows a symlink."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if exclusive else os.O_TRUNC)
     with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8") as handle:
-        json.dump(value, handle, indent=2, ensure_ascii=False, allow_nan=False)
+        json.dump(safe_utf8(value), handle, indent=2, ensure_ascii=False, allow_nan=False)
         handle.write("\n")
 
 
@@ -77,7 +88,7 @@ def append_event(directory: Path, name: str, value: dict) -> None:
     """Append one timestamped JSON line to a session audit file."""
     path = scoped_path(directory, name)
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"timestamp": timestamp(), **value}, ensure_ascii=False, allow_nan=False) + "\n")
+        handle.write(json.dumps(safe_utf8({"timestamp": timestamp(), **value}), ensure_ascii=False, allow_nan=False) + "\n")
 
 
 def export_session(directory: Path, destination: Path) -> None:

@@ -22,9 +22,14 @@ def agent_project(tmp_path):
         (run / "logs").mkdir()
         (run / "status.json").write_text('{"status": "completed"}')
         (run / "manifest.json").write_text(json.dumps({"run_id": run_id, "gridpack_image": "synthetic:test", "gridpack_executable": "ca.x", "mpi_processes": 4, "xml_file": "input.xml", "command": ["mpirun", "-n", "4", "ca.x", "input.xml"], "input_files": []}))
-        (work / "input.xml").write_text("<Configuration><Contingency_analysis><FullBranchN1>true</FullBranchN1><minVoltage>0.9</minVoltage><maxVoltage>1.1</maxVoltage></Contingency_analysis></Configuration>")
+        (work / "input.xml").write_text("<Configuration><Contingency_analysis><FullBranchN1>true</FullBranchN1><minVoltage>0.9</minVoltage><maxVoltage>1.1</maxVoltage><contingencyRating>C</contingencyRating><qlim>true</qlim><qlimDeadband>0.1</qlimDeadband></Contingency_analysis><Powerflow><qlim>false</qlim><qlimDeadband>0.2</qlimDeadband></Powerflow></Configuration>")
         (work / "case.raw").write_text("Synthetic fixture only\n")
-        (work / "case_flat.csv").write_text("event_idx,from_bus,to_bus,circuit_id,section,loading_percent\n")
+        (work / "case_flat.csv").write_text(
+            "event_idx,contingency,from_bus,to_bus,circuit_id,section,rate_mva,loading_percent,viol\n"
+            "0,base,1,2,1,,100,70,0\n"
+            "1,line outage,1,2,1,,100,120,1\n"
+            "2,island,1,2,1,2,100,90,0\n"
+        )
         (work / "case_convergence.csv").write_text("event_idx,contingency,converged,status_code\n0,base,true,OK\n1,line outage,true,OK\n2,island,false,ISLANDED\n")
         rows = []
         for line_id, section, maximum, base, branch_type, kv in (

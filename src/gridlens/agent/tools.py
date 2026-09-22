@@ -24,7 +24,8 @@ from typing import Literal
 import xml.etree.ElementTree as ET
 
 from gridlens.agent.policy import AgentError
-from gridlens.agent.session import SessionContext, read_json, scoped_path, timestamp
+from gridlens.agent.session import SessionContext, read_json, safe_utf8, scoped_path, timestamp
+from gridlens.analysis.branch_keys import canonical_branch_label
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.loading import (
     branch_key,
@@ -33,7 +34,7 @@ from gridlens.analysis.loading import (
     summarize_voltage_group_utilization,
 )
 from gridlens.analysis.parser_models import PARSER_VERSION, ParsedTable
-from gridlens.analysis.utilization import UtilizationBranchOptions
+from gridlens.analysis.utilization import UtilizationBranchOptions, selected_utilization_branch_types
 
 
 MAX_ROWS = 50
@@ -67,13 +68,41 @@ def _number(value: object) -> float | None:
         return None
 
 
+def _normalize_bus_name(value: object) -> str:
+    """Normalize padded PSS/E names, including truncation markers, for bounded bus lookup."""
+    text = re.sub(r"~\d+(?=\s|$)", "", str(value or "").casefold())
+    return " ".join(re.sub(r"[^\w]+", " ", text).split())
+
+
+def _bus_match(query: str, bus_id: object, bus_name: object) -> str | None:
+    """Classify one cached bus as exact, prefix, fuzzy, or absent for search_buses."""
+    normalized = _normalize_bus_name(query)
+    name = _normalize_bus_name(bus_name)
+    if str(bus_id).strip() == query.strip() or name == normalized and name:
+        return "exact"
+    if name.startswith(normalized) and normalized:
+        return "prefix"
+    if len(normalized) >= 3 and name and (
+        normalized.startswith(name) or all(any(word.startswith(token) for word in name.split()) for token in normalized.split())
+    ):
+        return "fuzzy"
+    return None
+
+
+def _bus_sort_key(row: dict) -> tuple:
+    """Sort search rows by match quality, then numeric bus ID when available."""
+    bus_id = str(row.get("bus_id", row.get("bus", ""))).strip()
+    return ({"exact": 0, "prefix": 1, "fuzzy": 2}[row["match_kind"]], 0 if bus_id.lstrip("-").isdigit() else 1, int(bus_id) if bus_id.lstrip("-").isdigit() else bus_id)
+
+
 def _bounded_strings(value: object) -> object:
+    """Cap and sanitize model-visible strings and audit keys from untrusted artifacts."""
     if isinstance(value, str):
-        return value[:1024]
+        return safe_utf8(value)[:1024]
     if isinstance(value, list):
         return [_bounded_strings(item) for item in value[:MAX_TABLE_ROWS]]
     if isinstance(value, dict):
-        return {str(key)[:128]: _bounded_strings(item) for key, item in value.items()}
+        return {str(safe_utf8(key))[:128]: _bounded_strings(item) for key, item in value.items()}
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
@@ -143,6 +172,7 @@ class ToolService:
         self.warnings: list[str] = []
 
     def _invoke(self, method, args: tuple, kwargs: dict) -> dict:
+        """Call one tool with bounds and stable errors, then pair its started audit with completion."""
         audit = scoped_path(self.context.directory, "tool_calls.jsonl")
         with os.fdopen(os.open(audit, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a+", encoding="utf-8") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
@@ -159,32 +189,46 @@ class ToolService:
             handle.write(json.dumps({"call_id": call_id, "phase": "started", "tool": method.__name__, "arguments": _bounded_strings(arguments), "started_at": started}, allow_nan=False) + "\n")
             handle.flush()
             try:
-                if arguments.get("invalid_arguments"):
-                    raise ValueError
-                if len(json.dumps(arguments, allow_nan=False).encode()) > (MAX_SCRIPT_ARGUMENT_BYTES if method.__name__ == "propose_analysis_script" else MAX_ARGUMENT_BYTES):
-                    raise ValueError
-                if "limit" in arguments and (isinstance(arguments["limit"], bool) or not isinstance(arguments["limit"], int) or arguments["limit"] < 1):
-                    raise ValueError
-                data = method(self, *args, **kwargs)
-                rows = data.pop("rows", [])
-                total = data.pop("total_matching", len(rows))
-                limit = min(MAX_ROWS, max(1, int(arguments.get("limit", MAX_ROWS))))
-                result["data"] = {**data, "rows": rows[:limit], "returned": min(len(rows), limit), "total_matching": total, "truncated": total > limit}
-            except AgentError as exc:
-                result["error"] = {"code": exc.code, "remedy": str(exc)}
-            except (TypeError, ValueError, KeyError, AttributeError, csv.Error, ET.ParseError):
-                result["error"] = {"code": "INVALID_DATA_OR_ARGUMENT", "remedy": "Check the tool arguments and rebuild malformed analysis artifacts in GridLens."}
-            except OSError:
-                result["error"] = {"code": "ARTIFACT_UNAVAILABLE", "remedy": "Check that the selected run and its analysis files are readable."}
-            result["provenance"]["sources"] = list(self.sources.values())
-            result["warnings"] = list(dict.fromkeys(self.warnings))
-            result = _fit_to_budget(_bounded_strings(result))
-            handle.write(json.dumps({
-                "call_id": call_id, "phase": "completed", "tool": method.__name__,
-                "arguments": _bounded_strings(arguments), "started_at": started, "ended_at": timestamp(),
-                "outcome": "error" if result["error"] else "ok", "result": result,
-            }, ensure_ascii=False, allow_nan=False) + "\n")
-            handle.flush()
+                try:
+                    if arguments.get("invalid_arguments"):
+                        raise ValueError
+                    if len(json.dumps(arguments, allow_nan=False).encode()) > (MAX_SCRIPT_ARGUMENT_BYTES if method.__name__ == "propose_analysis_script" else MAX_ARGUMENT_BYTES):
+                        raise ValueError
+                    if "limit" in arguments and (isinstance(arguments["limit"], bool) or not isinstance(arguments["limit"], int) or arguments["limit"] < 1):
+                        raise ValueError
+                    data = method(self, *args, **kwargs)
+                    rows = data.pop("rows", [])
+                    total = data.pop("total_matching", len(rows))
+                    limit = min(MAX_ROWS, max(1, int(arguments.get("limit", MAX_ROWS))))
+                    result["data"] = {**data, "rows": rows[:limit], "returned": min(len(rows), limit), "total_matching": total, "truncated": total > limit}
+                except AgentError as exc:
+                    result["error"] = {"code": exc.code, "remedy": str(exc)}
+                except (TypeError, ValueError, KeyError, AttributeError, csv.Error, ET.ParseError):
+                    result["error"] = {"code": "INVALID_DATA_OR_ARGUMENT", "remedy": "Check the tool arguments and rebuild malformed analysis artifacts in GridLens."}
+                except OSError:
+                    result["error"] = {"code": "ARTIFACT_UNAVAILABLE", "remedy": "Check that the selected run and its analysis files are readable."}
+                except Exception:
+                    result["error"] = {"code": "INTERNAL_ERROR", "remedy": "The tool failed unexpectedly. Check the session audit and retry."}
+                except BaseException:
+                    result["error"] = {"code": "INTERNAL_ERROR", "remedy": "The tool was interrupted before completing."}
+                    raise
+            finally:
+                try:
+                    result["provenance"]["sources"] = list(self.sources.values())
+                    result["warnings"] = list(dict.fromkeys(self.warnings))
+                    result = _fit_to_budget(_bounded_strings(result))
+                    completed = {
+                        "call_id": call_id, "phase": "completed", "tool": method.__name__,
+                        "arguments": _bounded_strings(arguments), "started_at": started, "ended_at": timestamp(),
+                        "outcome": "error" if result["error"] else "ok", "result": result,
+                    }
+                    line = json.dumps(completed, ensure_ascii=False, allow_nan=False)
+                except Exception:
+                    result = _empty_result(call_id)
+                    result["error"] = {"code": "INTERNAL_ERROR", "remedy": "The tool failed unexpectedly. Check the session audit and retry."}
+                    line = json.dumps({"call_id": call_id, "phase": "completed", "tool": method.__name__, "outcome": "error", "error": {"code": "INTERNAL_ERROR"}, "result": result}, ensure_ascii=True)
+                handle.write(line + "\n")
+                handle.flush()
             return result
 
     def _source(self, path: Path, root: Path) -> Path:
@@ -238,6 +282,7 @@ class ToolService:
         raise AgentError("ANALYSIS_NOT_BUILT", "Build or refresh this run in Branch Analysis or Transformer Analysis, then ask again.")
 
     def _optional_table(self, run_id: str, name: str) -> list[dict] | None:
+        """Read an optional fresh cache or let its caller use a documented fallback."""
         run = self.context.run(run_id)
         path = scoped_path(run, f"reports/interactive_tables/{name}.csv")
         manifest_path = scoped_path(run, "reports/interactive_analysis_manifest.json")
@@ -247,8 +292,11 @@ class ToolService:
         info = manifest.get("tables", {}).get(name)
         if not info or manifest.get("dataset_version") != ANALYSIS_DATASET_VERSION or manifest.get("parser_version") != PARSER_VERSION:
             return None
-        source = scoped_path(run, Path("work") / info["source_file"])
-        if not source.stat().st_mtime_ns <= path.stat().st_mtime_ns <= manifest_path.stat().st_mtime_ns:
+        source_name = info.get("source_file")
+        if not source_name:
+            return None
+        source = scoped_path(run, Path("work") / source_name)
+        if not source.exists() or not source.stat().st_mtime_ns <= path.stat().st_mtime_ns <= manifest_path.stat().st_mtime_ns:
             return None
         self._source(source, run)
         return self._csv(path, run)
@@ -286,7 +334,42 @@ class ToolService:
             self.warnings.append(f"{len(failed)} of {len(rows)} recorded cases failed or were not converged; cached loading summaries do not exclude their rows.")
         return {"known": True, "total": len(rows), "converged": len(rows) - len(failed), "failed": len(failed), "rows": failed}
 
-    def _loading(self, run_id: str, facility: Facility, area: str, min_kv: float) -> tuple[list[dict], dict]:
+    def _xml_settings(self, run_id: str, manifest: dict | None = None) -> dict[str, str | None]:
+        """Read section-scoped XML settings from a run manifest for method and loading tools."""
+        run = self.context.run(run_id)
+        manifest = manifest if manifest is not None else self._json(run, "manifest.json")
+        xml_name = manifest.get("xml_file")
+        if not xml_name:
+            return {}
+        path = self._source(scoped_path(run, Path("work") / xml_name), run)
+        if path.stat().st_size > 1024 * 1024:
+            raise AgentError("ARTIFACT_TOO_LARGE", "The configuration XML exceeds the read limit.")
+        root = ET.fromstring(path.read_text(encoding="utf-8"))
+        settings = {}
+        unique = (
+            "networkConfiguration_v33", "networkConfiguration_v34", "networkConfiguration",
+            "minVoltage", "maxVoltage", "FullBranchN1", "FullGeneratorN1", "groupSize", "outputFormat",
+        )
+        scoped = (
+            "Contingency_analysis/contingencyRating", "Contingency_analysis/contingencyList",
+            "Contingency_analysis/monitorBranchesFile", "Contingency_analysis/monitorAreas",
+            "Contingency_analysis/monitorKvMin", "Contingency_analysis/monitorKvMax",
+            "Contingency_analysis/qlim", "Contingency_analysis/qlimDeadband", "Contingency_analysis/LTC",
+            "Powerflow/initStart", "Powerflow/tolerance", "Powerflow/maxIteration",
+            "Powerflow/qlim", "Powerflow/qlimDeadband", "Powerflow/LTC",
+        )
+        for name in unique:
+            node = root.find(f".//{name}")
+            if node is not None:
+                settings[name] = node.text
+        for name in scoped:
+            node = root.find(f".//{name}")
+            if node is not None:
+                settings[name] = node.text
+        return settings
+
+    def _loading(self, run_id: str, facility: Facility, area: str, min_kv: float) -> tuple[list[dict], dict, dict]:
+        """Return filtered facility rows, convergence, and the scope used by loading tools."""
         choices = {"line": 0, "two_winding_transformer": 1, "three_winding_transformer": 2, "transformer_equivalent": 3, "all": 4}
         if facility not in choices or not math.isfinite(min_kv) or min_kv < 50:
             raise AgentError("INVALID_FILTER", "Choose a supported facility type and a minimum voltage of at least 50 kV (the GUI analysis cutoff).")
@@ -296,16 +379,38 @@ class ToolService:
         rows = max_line_utilization_rows(tables, options)
         summary = {branch_key(row): row for row in tables["pflow_mm"].rows}
         metadata = {branch_key(row): row for row in tables["branch_metadata"].rows}
+        monitored = len(tables["pflow_mm"].rows)
+        selected_types = selected_utilization_branch_types(options)
+        excluded_facility = sum(
+            str(metadata.get(branch_key(row), {}).get("raw_branch_type") or "nontransformer_branch") not in selected_types
+            for row in tables["pflow_mm"].rows
+        )
+        below_cutoff = sum(
+            max(_number(metadata.get(branch_key(row), {}).get("from_base_kv")) or 0,
+                _number(metadata.get(branch_key(row), {}).get("to_base_kv")) or 0) < 50
+            for row in tables["pflow_mm"].rows
+        )
+        try:
+            configured_rating = self._xml_settings(run_id).get("Contingency_analysis/contingencyRating")
+        except (ET.ParseError, OSError):
+            configured_rating = None
+            self.warnings.append("The configuration XML could not be read; the configured contingency rating is unknown.")
         filtered = []
+        excluded_area = 0
+        excluded_min_kv = 0
+        legacy_rating = False
         for row in rows:
             if max(_number(row.get("from_base_kv")) or 0, _number(row.get("to_base_kv")) or 0) < min_kv:
+                excluded_min_kv += 1
                 continue
             details, branch = summary[branch_key(row)], metadata[branch_key(row)]
             if area and area.casefold() not in {str(value).casefold() for value in [*row["control_areas"], details.get("from_area"), details.get("to_area")]}:
+                excluded_area += 1
                 continue
             for name in ("base_utilization_pct", "mean_utilization_pct", "contingency_count", "overload_count"):
                 row[name] = _number(details.get(name))
             source = str(details.get("utilization_source") or "legacy.pflow_mm")
+            legacy_rating |= not source.startswith("csv_flat")
             rating = _number(branch.get("rate_mva")) if source.startswith("csv_flat") else _number(branch.get("ratec"))
             if rating is not None and rating <= 0:
                 rating = None
@@ -324,12 +429,25 @@ class ToolService:
             filtered.append(row)
         convergence = self._convergence(run_id)
         convergence.pop("rows")
+        if excluded_facility:
+            self.warnings.append(f"{excluded_facility} of {monitored} monitored facilities were excluded by facility='{facility}'; use facility='all' to include supported types above the voltage cutoff.")
+        if below_cutoff:
+            self.warnings.append(f"{below_cutoff} monitored facilities are below the fixed 50 kV GridLens analysis cutoff and are excluded for every facility filter.")
+        if excluded_min_kv:
+            self.warnings.append(f"{excluded_min_kv} facilities were excluded by min_kv={min_kv}.")
+        if excluded_area:
+            self.warnings.append(f"{excluded_area} facilities were excluded by area='{area}'.")
+        if configured_rating is None:
+            self.warnings.append("The configured contingency rating could not be established from the run XML.")
+        elif legacy_rating and configured_rating.upper() != "C":
+            self.warnings.append(f"The run configured contingencyRating={configured_rating}, but the legacy pflow_mm approximation divides by RAW rate C; those utilizations are not on the configured rating basis.")
         self.warnings.extend([
             "Maximum observed loading includes all rows in the cache, including the base case; it is not a converged N-1-only metric.",
             "Thermal margin is 100 minus maximum utilization, in percentage points. It is not available transfer, generation, or load-serving capacity.",
             "contingency_count counts recorded loading rows (including base); overload_count counts loading >=100% or a reported violation flag.",
         ])
-        return filtered, convergence
+        scope = {"filters": {"facility": facility, "min_kv": min_kv, "area": area}, "monitored_facility_count": monitored, "configured_contingency_rating": configured_rating}
+        return filtered, convergence, scope
 
     @tool
     def get_run_inventory(self) -> dict:
@@ -370,18 +488,7 @@ class ToolService:
         manifest = self._json(run, "manifest.json")
         fields = ("run_id", "created_at", "gridpack_image", "gridpack_executable", "mpi_processes", "docker_platform", "network_mode", "command", "input_files")
         row = {key: manifest.get(key) for key in fields}
-        xml_name = manifest.get("xml_file")
-        if xml_name:
-            path = self._source(scoped_path(run, Path("work") / xml_name), run)
-            if path.stat().st_size > 1024 * 1024:
-                raise AgentError("ARTIFACT_TOO_LARGE", "The configuration XML exceeds the read limit.")
-            root = ET.fromstring(path.read_text(encoding="utf-8"))
-            settings = {}
-            for name in ("networkConfiguration_v33", "networkConfiguration_v34", "networkConfiguration", "minVoltage", "maxVoltage", "qlim", "FullBranchN1", "FullGeneratorN1", "groupSize", "outputFormat"):
-                node = root.find(f".//{name}")
-                if node is not None:
-                    settings[name] = node.text
-            row["xml_settings"] = settings
+        row["xml_settings"] = self._xml_settings(run_id, manifest)
         cached = scoped_path(run, "reports/interactive_analysis_manifest.json")
         if cached.exists():
             analysis = self._json(run, "reports/interactive_analysis_manifest.json")
@@ -398,62 +505,73 @@ class ToolService:
         """Rank congestion by maximum observed loading, base loading, or largest thermal margin. Margin is not transfer capacity."""
         if metric not in ("max_utilization_pct", "base_utilization_pct", "thermal_margin_pct_points"):
             raise AgentError("INVALID_METRIC", "Choose maximum loading, base loading, or thermal margin.")
-        rows, convergence = self._loading(run_id, facility, area, min_kv)
+        rows, convergence, scope = self._loading(run_id, facility, area, min_kv)
         rows = [row for row in rows if row.get(metric) is not None]
         rows.sort(key=lambda row: (-float(row[metric]), tuple(str(item) for item in branch_key(row))))
-        return {"rows": rows, "metric": metric, "units": "percentage points" if metric == "thermal_margin_pct_points" else "%", "convergence": convergence}
+        return {"rows": rows, "metric": metric, "units": "percentage points" if metric == "thermal_margin_pct_points" else "%", "convergence": convergence, **scope}
 
     @tool
     def summarize_loading(self, run_id: str, group_by: Literal["area", "voltage"] = "area", facility: Facility = "line", area: str = "", min_kv: float = 50.0, limit: int = 20) -> dict:
         """Group the same facilities as the GUI; area ties belong to both endpoint areas. Values average facility maxima."""
         if group_by not in ("area", "voltage"):
             raise AgentError("INVALID_GROUP", "Choose area or voltage grouping.")
-        rows, convergence = self._loading(run_id, facility, area, min_kv)
+        rows, convergence, scope = self._loading(run_id, facility, area, min_kv)
         summarize = summarize_control_area_utilization if group_by == "area" else summarize_voltage_group_utilization
-        return {"rows": summarize(rows), "units": "%", "convergence": convergence}
+        return {"rows": summarize(rows), "units": "%", "convergence": convergence, **scope}
 
     @tool
     def list_thermal_violations(self, run_id: str, threshold_pct: float = 100.0, facility: Facility = "line", area: str = "", min_kv: float = 50.0, limit: int = 10) -> dict:
         """List facilities whose maximum recorded utilization strictly exceeds threshold_pct."""
         if not math.isfinite(threshold_pct) or threshold_pct < 0:
             raise AgentError("INVALID_THRESHOLD", "Use a finite, nonnegative percentage threshold.")
-        rows, convergence = self._loading(run_id, facility, area, min_kv)
+        rows, convergence, scope = self._loading(run_id, facility, area, min_kv)
         rows = [row for row in rows if row["max_utilization_pct"] > threshold_pct]
         rows.sort(key=lambda row: (-row["max_utilization_pct"], tuple(str(item) for item in branch_key(row))))
-        return {"rows": rows, "threshold_pct": threshold_pct, "convergence": convergence}
+        return {"rows": rows, "threshold_pct": threshold_pct, "convergence": convergence, **scope}
 
     @tool
     def get_branch_loading(self, run_id: str, from_bus: int, to_bus: int, line_id: str, section: str = "") -> dict:
         """Look up one full canonical facility key, including circuit and section, at the GUI's >=50 kV cutoff."""
-        rows, convergence = self._loading(run_id, "all", "", 50.0)
-        key = (from_bus, to_bus, line_id.strip(), section.strip())
-        return {"rows": [row for row in rows if branch_key(row) == key], "convergence": convergence}
+        rows, convergence, scope = self._loading(run_id, "all", "", 50.0)
+        key = (from_bus, to_bus, canonical_branch_label(line_id), canonical_branch_label(section))
+        return {"rows": [row for row in rows if branch_key(row) == key], "convergence": convergence, **scope}
 
     @tool
     def search_buses(self, run_id: str, query: str, limit: int = 10) -> dict:
-        """Find exact bus IDs or case-insensitive name prefixes in cached bus metadata, falling back to monitored endpoints."""
+        """Find exact IDs, name prefixes, or bounded fuzzy PSS/E name matches in cached buses or endpoints; return match_kind."""
+        if not query.strip():
+            raise AgentError("INVALID_QUERY", "Enter a bus number or at least one name character.")
         cached = self._optional_table(run_id, "bus_metadata")
         if cached is not None:
-            rows = [row for row in cached if str(row.get("bus_id", row.get("bus", ""))) == query or str(row.get("bus_name", "")).casefold().startswith(query.casefold())]
-            return {"rows": sorted(rows, key=lambda row: str(row.get("bus_id", row.get("bus", ""))))}
+            rows = []
+            for row in cached:
+                match = _bus_match(query, row.get("bus_id", row.get("bus", "")), row.get("bus_name", ""))
+                if match:
+                    rows.append({**row, "match_kind": match})
+            if not rows:
+                self.warnings.append("No bus matched; try a shorter name fragment. PSS/E names may be truncated to 12 characters.")
+            return {"rows": sorted(rows, key=_bus_sort_key)}
         tables = self._tables(run_id)
         buses = {}
         for row in tables["branch_metadata"].rows:
             for end in ("from", "to"):
                 bus_id = str(row.get(f"{end}_bus", ""))
                 name = str(row.get(f"{end}_bus_name", ""))
-                if bus_id == query or name.casefold().startswith(query.casefold()):
-                    buses[bus_id] = {"bus_id": bus_id, "bus_name": name, "base_kv": _number(row.get(f"{end}_base_kv")), "area": row.get(f"{end}_area", "")}
+                match = _bus_match(query, bus_id, name)
+                if match and (bus_id not in buses or {"exact": 0, "prefix": 1, "fuzzy": 2}[match] < {"exact": 0, "prefix": 1, "fuzzy": 2}[buses[bus_id]["match_kind"]]):
+                    buses[bus_id] = {"bus_id": bus_id, "bus_name": name, "base_kv": _number(row.get(f"{end}_base_kv")), "area": row.get(f"{end}_area", ""), "match_kind": match}
         self.warnings.append("Bus search covers monitored branch endpoints in the cache, not every bus in the RAW input.")
-        return {"rows": sorted(buses.values(), key=lambda row: row["bus_id"])}
+        if not buses:
+            self.warnings.append("No bus matched; try a shorter name fragment. PSS/E names may be truncated to 12 characters.")
+        return {"rows": sorted(buses.values(), key=_bus_sort_key)}
 
     @tool
     def compare_runs(self, run_id: str, other_run_id: str, facility: Facility = "line", limit: int = 10) -> dict:
         """Align full branch keys for two selected runs and rank maximum-loading increases (other minus run), in percentage points."""
         if run_id == other_run_id:
             raise AgentError("INVALID_COMPARISON", "Select two different completed runs.")
-        first, first_convergence = self._loading(run_id, facility, "", 50.0)
-        second, second_convergence = self._loading(other_run_id, facility, "", 50.0)
+        first, first_convergence, first_scope = self._loading(run_id, facility, "", 50.0)
+        second, second_convergence, second_scope = self._loading(other_run_id, facility, "", 50.0)
         left, right = {branch_key(row): row for row in first}, {branch_key(row): row for row in second}
         rows = []
         for key in left.keys() & right.keys():
@@ -461,7 +579,7 @@ class ToolService:
             rows.append({"from_bus": key[0], "to_bus": key[1], "line_id": key[2], "section": key[3], "first_max_pct": a["max_utilization_pct"], "second_max_pct": b["max_utilization_pct"], "delta_pct_points": round(b["max_utilization_pct"] - a["max_utilization_pct"], 6), "rating_changed": (a["rating_mva"], a["rating_basis"]) != (b["rating_mva"], b["rating_basis"])})
         rows.sort(key=lambda row: (-row["delta_pct_points"], tuple(str(item) for item in branch_key(row))))
         self.warnings.append("Compare dispatch, topology, contingency coverage, and rating changes before interpreting loading differences.")
-        return {"rows": rows, "first_only": len(left.keys() - right.keys()), "second_only": len(right.keys() - left.keys()), "first_convergence": first_convergence, "second_convergence": second_convergence}
+        return {"rows": rows, "first_only": len(left.keys() - right.keys()), "second_only": len(right.keys() - left.keys()), "first_convergence": first_convergence, "second_convergence": second_convergence, "first_scope": first_scope, "second_scope": second_scope}
 
     @tool
     def rank_contingencies(self, run_id: str, metric: Literal["max_loading_pct", "violation_count"] = "max_loading_pct", converged_only: bool = True, limit: int = 10) -> dict:
@@ -490,8 +608,12 @@ class ToolService:
             raise AgentError("INDEX_NOT_BUILT", "Enable Include contingency drill-down index, then select Build / refresh analysis in the Agent tab.")
         try:
             rows, total, paths = query_event_index(run, event_idx=event_idx, branch=branch, limit=min(limit, MAX_ROWS))
+        except AgentError:
+            raise
         except ValueError as exc:
             raise AgentError("INDEX_STALE", "Rebuild the contingency drill-down index in the Agent tab.") from exc
+        if branch is not None and total == 0 and branch in {branch_key(row) for row in self._tables(run_id)["pflow_mm"].rows}:
+            raise AgentError("KEY_NOT_INDEXED", "This cached branch is absent from the drill-down index; rebuild both analysis and index.")
         for path in paths:
             self._source(path, run)
         convergence = self._convergence(run_id)
@@ -509,7 +631,7 @@ class ToolService:
     @tool
     def get_branch_contingencies(self, run_id: str, from_bus: int, to_bus: int, line_id: str, section: str = "", limit: int = 10) -> dict:
         """Get the highest-loading cases for one complete branch key from the optional Parquet index."""
-        return self._indexed_rows(run_id, branch=(from_bus, to_bus, line_id.strip(), section.strip()), limit=limit)
+        return self._indexed_rows(run_id, branch=(from_bus, to_bus, canonical_branch_label(line_id), canonical_branch_label(section)), limit=limit)
 
     @tool
     def propose_analysis_script(self, run_id: str, purpose: str, code: str) -> dict:

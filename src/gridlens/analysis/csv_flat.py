@@ -578,19 +578,24 @@ def _normalized_lazy_flat_frame(
     backend_decision_path: Path | None = None,
 ):
     columns = _flat_lazy_columns(lookup)
-    data = _read_lazy_csv(backend, path, usecols=list(columns), blocksize=_dask_blocksize(backend_decision_path or path))
+    dtype = {original: "str" for original, canonical in columns.items() if canonical in ("line_id", "section")}
+    data = _read_lazy_csv(backend, path, usecols=list(columns), dtype=dtype, blocksize=_dask_blocksize(backend_decision_path or path))
     data = data.rename(columns=columns)
     return _normalize_flat_frame_columns(data)
 
 
 def _normalized_eager_flat_frame(path: Path, lookup: dict[str, str], backend: _LazyBackend):
     columns = _flat_lazy_columns(lookup)
-    data = _read_eager_csv(backend, path, usecols=list(columns))
+    dtype = {original: "str" for original, canonical in columns.items() if canonical in ("line_id", "section")}
+    data = _read_eager_csv(backend, path, usecols=list(columns), dtype=dtype)
     data = data.rename(columns=columns)
     return _normalize_flat_frame_columns(data)
 
 
 def _normalize_flat_frame_columns(data):
+    """Build typed flat-result columns for frame reductions while preserving circuit labels."""
+    from gridlens.analysis.branch_keys import canonical_branch_series
+
     for optional_column, default_value in (
         ("section", ""),
         ("event_idx", None),
@@ -604,23 +609,8 @@ def _normalize_flat_frame_columns(data):
     data = data.dropna(subset=["from_bus", "to_bus", "line_id", "loading_percent"])
     data["from_bus"] = data["from_bus"].astype("int64")
     data["to_bus"] = data["to_bus"].astype("int64")
-    data["line_id"] = (
-        data["line_id"]
-        .astype("str")
-        .str.strip()
-        .str.strip("'")
-        .str.strip('"')
-        .str.replace(r"\.0$", "", regex=True)
-    )
-    data["section"] = (
-        data["section"]
-        .astype("str")
-        .fillna("")
-        .str.strip()
-        .str.strip("'")
-        .str.strip('"')
-        .str.replace(r"\.0$", "", regex=True)
-    )
+    data["line_id"] = canonical_branch_series(data["line_id"])
+    data["section"] = canonical_branch_series(data["section"])
     data["loading_percent"] = data["loading_percent"].astype("float64")
     data["rate_mva"] = data["rate_mva"].astype("float64")
     data["event_idx"] = data["event_idx"].fillna(-1).astype("float64")
@@ -984,9 +974,12 @@ def _parse_bus_metadata(path: Path) -> tuple[ParsedTable, ParsedTable]:
 
 
 def _normalize_flat_result_row(raw_row: dict[str, str], lookup: dict[str, str]) -> dict[str, object] | None:
+    """Parse one CSV row into the branch-key and loading fields used by Python reductions."""
+    from gridlens.analysis.branch_keys import canonical_branch_label
+
     from_bus = _int_value(raw_row.get(_column(lookup, _FROM_BUS_ALIASES)))
     to_bus = _int_value(raw_row.get(_column(lookup, _TO_BUS_ALIASES)))
-    line_id = _clean_text(raw_row.get(_column(lookup, _CIRCUIT_ALIASES)))
+    line_id = canonical_branch_label(raw_row.get(_column(lookup, _CIRCUIT_ALIASES)))
     loading = _float_value(raw_row.get(_column(lookup, _LOADING_ALIASES)))
     if from_bus is None or to_bus is None or not line_id or loading is None:
         return None
@@ -997,7 +990,7 @@ def _normalize_flat_result_row(raw_row: dict[str, str], lookup: dict[str, str]) 
         "from_bus": from_bus,
         "to_bus": to_bus,
         "line_id": line_id,
-        "section": _clean_text(raw_row.get(_column(lookup, _SECTION_ALIASES))),
+        "section": canonical_branch_label(raw_row.get(_column(lookup, _SECTION_ALIASES))),
         "p_from_mw": _float_value(raw_row.get(_column(lookup, ("p_from_mw", "pflow", "p_mw")))),
         "q_from_mvar": _float_value(raw_row.get(_column(lookup, ("q_from_mvar", "qflow", "q_mvar")))),
         "mva_from": _float_value(raw_row.get(_column(lookup, ("mva_from", "mva")))),
@@ -1106,6 +1099,7 @@ def _read_lazy_csv(
     path: Path,
     *,
     usecols: list[str] | None = None,
+    dtype: dict[str, str] | None = None,
     blocksize: str,
 ):
     kwargs = {
@@ -1113,6 +1107,8 @@ def _read_lazy_csv(
     }
     if usecols is not None:
         kwargs["usecols"] = usecols
+    if dtype:
+        kwargs["dtype"] = dtype
     if backend.name == "dask":
         kwargs["assume_missing"] = True
 
@@ -1129,10 +1125,13 @@ def _read_eager_csv(
     path: Path,
     *,
     usecols: list[str] | None = None,
+    dtype: dict[str, str] | None = None,
 ):
     kwargs = {}
     if usecols is not None:
         kwargs["usecols"] = usecols
+    if dtype:
+        kwargs["dtype"] = dtype
     return backend.module.read_csv(str(path), **kwargs)
 
 

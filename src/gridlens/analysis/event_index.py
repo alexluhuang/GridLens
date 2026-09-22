@@ -28,6 +28,7 @@ def build_event_index(run_dir: Path, *, progress=None, output_dir: Path | None =
     import pyarrow.compute as pc
     import pyarrow.csv as csv
     import pyarrow.parquet as pq
+    from gridlens.analysis.branch_keys import canonical_branch_arrow
     from gridlens.analysis.csv_flat import _column_lookup, _flat_lazy_columns, _header
 
     if layout not in ("unpartitioned", "sorted", "buckets"):
@@ -54,10 +55,7 @@ def build_event_index(run_dir: Path, *, progress=None, output_dir: Path | None =
             if "section" not in table.column_names:
                 table = table.append_column("section", pa.array([""] * len(table)))
             for name in ("line_id", "section"):
-                value = pc.utf8_trim_whitespace(pc.fill_null(table[name], ""))
-                value = pc.replace_substring_regex(value, pattern=r"^'+|'+$", replacement="")
-                value = pc.replace_substring_regex(value, pattern=r'^"+|"+$', replacement="")
-                value = pc.replace_substring_regex(value, pattern=r"\s+", replacement=" ")
+                value = canonical_branch_arrow(table[name])
                 table = table.set_column(table.schema.get_field_index(name), name, value)
             for name in ("event_idx", "from_bus", "to_bus", "loading_percent"):
                 if name not in table.column_names:
