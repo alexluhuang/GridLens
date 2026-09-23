@@ -186,6 +186,18 @@ def test_large_results_are_saved_whole_and_group_means_use_all_rows(agent_contex
     assert grouped["data"]["rows"][0]["average_utilization_pct"] == 50.5
 
 
+def test_a_result_too_large_even_without_rows_keeps_only_its_page_fields(agent_context, monkeypatch):
+    """When the non-row data alone overflows the inline budget, the inline copy says no rows are shown."""
+    import gridlens.agent.tool_base as tool_base
+
+    monkeypatch.setattr(tool_base, "MAX_INLINE_BYTES", 1500)
+    ranked = ToolService(agent_context).rank_branch_loading("run_a", limit=0)
+    data = ranked["data"]
+    assert (data["rows"], data["inline_rows"], data["returned"], data["total_matching"]) == ([], 0, 3, 3)
+    assert "filters" not in data and Path(data["result_file"]).is_file()
+    assert any("0 of 3 rows are shown here" in warning for warning in ranked["warnings"])
+
+
 def test_session_roundtrip_and_tampered_directory(agent_context):
     path = agent_context.directory / "context.json"
     assert SessionContext.load(path) == agent_context

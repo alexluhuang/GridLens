@@ -244,7 +244,7 @@ class ToolBase:
             inline["data"] = {key: data.get(key) for key in PAGE_FIELDS} | {"rows": [], "inline_rows": 0, "result_file": json_path, "rows_file": csv_path}
             inline["provenance"]["sources"] = inline["provenance"]["sources"][:OVERSIZE_SOURCE_LIMIT]
             inline["warnings"] = inline["warnings"][:OVERSIZE_WARNING_LIMIT]
-        shown = f"{data['inline_rows']:,} of {len(rows):,} rows are shown here" if rows else "the data is not shown here"
+        shown = f"{inline['data']['inline_rows']:,} of {len(rows):,} rows are shown here" if rows else "the data is not shown here"
         saved = f" and its rows in {csv_path}" if csv_path else ""
         inline["warnings"].append(f"This result is too large to show whole, so {shown}. The complete result is in {json_path}{saved}. Read those files with your file or code tools, or page with offset and limit.")
         return inline
