@@ -32,9 +32,10 @@ from gridlens.analysis.parser_models import PARSER_VERSION
 from gridlens.core.validation import ValidationError
 
 
-# Runtimes spill tool results of roughly 50,000 characters to their own files; staying below that keeps
-# the complete copy in the GridLens session, where the audit can point to it.
-MAX_INLINE_BYTES = 40_000
+# Runtimes spill tool results of roughly 50,000 characters to their own files, measured after they embed
+# the result in their own JSON, which escapes quotes and adds about a tenth. Staying below that keeps the
+# complete copy in the GridLens session, where the audit can point to it.
+MAX_INLINE_BYTES = 36_000
 # Room kept inside MAX_INLINE_BYTES for the note that names the saved files.
 NOTE_ALLOWANCE = 1024
 MAX_STRING_CHARS = 8192

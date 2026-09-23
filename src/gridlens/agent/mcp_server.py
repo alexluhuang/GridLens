@@ -10,6 +10,7 @@ with no model and no MCP process in the way.
 from __future__ import annotations
 
 import argparse
+from functools import wraps
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,19 @@ import sys
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import SessionContext
 from gridlens.agent.tools import DESTRUCTIVE_TOOL_NAMES, TOOL_NAMES, WRITE_TOOL_NAMES, ToolService
+
+
+def compact_json(method):
+    """Wrap a tool so MCP returns its result as compact JSON text.
+
+    The SDK would otherwise pretty-print the result, which costs the model about a fifth more tokens and
+    can push a result the tool service sized to fit past the runtime's own spill threshold. The wrapper
+    keeps the tool's name, docstring, and signature, so its schema is unchanged.
+    """
+    @wraps(method)
+    def call(*args, **kwargs):
+        return json.dumps(method(*args, **kwargs), ensure_ascii=False)
+    return call
 
 
 def create_server(context: SessionContext):
@@ -29,7 +43,7 @@ def create_server(context: SessionContext):
     service = ToolService(context)
     for name in TOOL_NAMES:
         annotations = ToolAnnotations(readOnlyHint=name not in WRITE_TOOL_NAMES, destructiveHint=name in DESTRUCTIVE_TOOL_NAMES, openWorldHint=False)
-        server.add_tool(getattr(service, name), annotations=annotations)
+        server.add_tool(compact_json(getattr(service, name)), annotations=annotations, structured_output=False)
     return server
 
 

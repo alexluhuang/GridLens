@@ -51,6 +51,8 @@ def test_official_sdk_client_tools_and_scope(agent_context):
             assert not response.isError
             result = json.loads(response.content[0].text)
             assert result["data"]["rows"][0]["max_utilization_pct"] == 120
+            # Compact JSON: pretty-printing would cost tokens and push results past runtime spill limits.
+            assert "\n" not in response.content[0].text and response.structuredContent is None
             rejected = await client.call_tool("get_run_method", {"run_id": "../outside"})
             assert json.loads(rejected.content[0].text)["error"]["code"] == "INVALID_RUN_ID"
     asyncio.run(exercise())
