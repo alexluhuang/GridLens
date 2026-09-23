@@ -68,7 +68,7 @@ def job_folder(project_root: Path, job_id: str) -> Path:
     return folder
 
 
-def _log_tail(path: Path, lines: int = LOG_TAIL_LINES) -> list[str]:
+def log_tail(path: Path, lines: int = LOG_TAIL_LINES) -> list[str]:
     """Return the last lines of a log file, or an empty list when it does not exist."""
     if not path.is_file():
         return []
@@ -111,7 +111,7 @@ def read_job(project_root: Path, job_id: str) -> dict:
     status = read_json(folder / "status.json") if (folder / "status.json").is_file() else {"state": "queued", "message": ""}
     if status.get("state") not in FINAL_STATES and not _alive(record.get("pid")):
         status = {**status, "state": "failed", "message": "The job's worker process ended without recording a result. See output_tail."}
-    return {**record, **status, "output_log": str(folder / "output.log"), "output_tail": _log_tail(folder / "output.log")}
+    return {**record, **status, "output_log": str(folder / "output.log"), "output_tail": log_tail(folder / "output.log")}
 
 
 def list_jobs(project_root: Path) -> list[dict]:

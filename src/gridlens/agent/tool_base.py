@@ -29,6 +29,7 @@ from gridlens.agent.session import (
 )
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.parser_models import PARSER_VERSION
+from gridlens.core.validation import ValidationError
 
 
 # Runtimes spill tool results of roughly 50,000 characters to their own files; staying below that keeps
@@ -183,6 +184,9 @@ class ToolBase:
                     result["data"] = data
                 except AgentError as exc:
                     result["error"] = {"code": exc.code, "remedy": str(exc)}
+                except ValidationError as exc:
+                    # GridLens validation messages are written for the person who gave the value.
+                    result["error"] = {"code": "INVALID_INPUT", "remedy": str(exc)}
                 except (TypeError, ValueError, KeyError, AttributeError, csv.Error, ET.ParseError):
                     result["error"] = {"code": "INVALID_DATA_OR_ARGUMENT", "remedy": "Check the tool arguments and rebuild malformed analysis artifacts in GridLens."}
                 except OSError:

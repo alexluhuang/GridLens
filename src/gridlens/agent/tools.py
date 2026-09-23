@@ -7,8 +7,9 @@ lives: a per-call identifier, paging by offset and limit (limit=0 returns every 
 any result too large to send inline, provenance for every file read, stable error codes, and an
 append-only audit record written before and after the call.
 
-`ToolService` combines these analysis tools with the file tools in `gridlens.agent.file_tools`, and
-`TOOL_NAMES` lists everything exposed over MCP. Tools that read a run take `run_id` and an optional
+`ToolService` combines these analysis tools with the file tools in `gridlens.agent.file_tools` and the
+GridLens operation tools in `gridlens.agent.gridlens_tools`, and `TOOL_NAMES` lists everything exposed
+over MCP. Tools that read a run take `run_id` and an optional
 `project`. A blank project means the project open in the session; otherwise it is a project folder path
 or name, resolved by `gridlens.agent.session`. The analysis tools read the compact caches rather than a
 run's multi-gigabyte flat result, and refuse a stale cache rather than quote numbers from it.
@@ -23,6 +24,7 @@ from typing import Literal
 import xml.etree.ElementTree as ET
 
 from gridlens.agent.file_tools import FILE_TOOL_NAMES, FileTools
+from gridlens.agent.gridlens_tools import GRIDLENS_DESTRUCTIVE_TOOL_NAMES, GRIDLENS_TOOL_NAMES, GRIDLENS_WRITE_TOOL_NAMES, GridLensTools
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import RUN_ID_PATTERN, read_json, scoped_path
 from gridlens.agent.tool_base import MAX_TABLE_ROWS, ToolBase, tool
@@ -49,7 +51,10 @@ ANALYSIS_TOOL_NAMES = (
     "search_buses", "compare_runs", "rank_contingencies", "get_contingency_flows", "get_branch_contingencies",
     "propose_analysis_script", "get_script_result",
 )
-TOOL_NAMES = ANALYSIS_TOOL_NAMES + FILE_TOOL_NAMES
+TOOL_NAMES = ANALYSIS_TOOL_NAMES + FILE_TOOL_NAMES + GRIDLENS_TOOL_NAMES
+# Tools that change something on disk or in Docker; every other tool only reads.
+WRITE_TOOL_NAMES = GRIDLENS_WRITE_TOOL_NAMES | {"propose_analysis_script"}
+DESTRUCTIVE_TOOL_NAMES = GRIDLENS_DESTRUCTIVE_TOOL_NAMES
 
 
 def _number(value: object) -> float | None:
@@ -526,5 +531,5 @@ class AnalysisTools(ToolBase):
         return {"rows": rows}
 
 
-class ToolService(AnalysisTools, FileTools):
+class ToolService(AnalysisTools, FileTools, GridLensTools):
     """Every GridLens tool, bound to one session. TOOL_NAMES lists the ones exposed over MCP."""

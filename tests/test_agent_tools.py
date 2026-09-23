@@ -441,6 +441,9 @@ def test_all_tool_names_have_a_direct_result_contract(agent_context):
         "propose_analysis_script": ("run_a", "Count rows", "print(1)"), "get_script_result": ("not-a-proposal",),
         "list_files": (), "describe_file": ("runs/run_a/work/case_flat.csv",), "query_table": ("runs/run_a/work/case_flat.csv",),
         "read_text_file": ("runs/run_a/work/case_flat.csv",), "read_document": ("runs/run_a/manifest.json",),
+        "list_projects": (), "get_project": (), "create_project": ("Other", []), "add_project_inputs": ([],),
+        "get_run_configuration": (), "configure_run": ({},), "start_run": (), "get_run_status": ("run_a",),
+        "stop_run": ("run_x",), "run_analysis": ("missing",), "get_job": ("not-a-job",), "list_jobs": (), "cancel_job": ("not-a-job",),
     }
     assert set(arguments) == set(TOOL_NAMES)
     for name, args in arguments.items():
