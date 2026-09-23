@@ -275,10 +275,13 @@ class AnalysisTools(ToolBase):
                 thermal_margin_pct_points=round(100 - row["max_utilization_pct"], 6),
                 rating_mva=rating, rating_basis="GridPACK reported loading_percent / rate_mva" if source.startswith("csv_flat") else "RAW rate C; legacy MW flow / MVA rating approximation",
                 utilization_source=source,
+                # Without a positive rating GridPACK reports 0% loading, which means unknown, not unloaded.
+                utilization_known=rating is not None,
             )
-            if rating is None:
-                self.warnings.append("Some facilities lack a positive recorded rating; their reported utilization cannot establish an MVA margin.")
             filtered.append(row)
+        unrated = sum(1 for row in filtered if not row["utilization_known"])
+        if unrated:
+            self.warnings.append(f"{unrated} of {len(filtered)} facilities have no positive rating, so their reported utilization, often 0%, is unknown rather than low: it shows neither that they are unloaded nor an MVA margin. Rows with utilization_known false are these facilities.")
         convergence = self._convergence(run)
         convergence.pop("rows")
         if excluded_facility:

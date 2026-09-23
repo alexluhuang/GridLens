@@ -54,6 +54,8 @@ Analysis
 - Thermal margin is percentage points of line rating. It is not transfer, generation, or load-serving
   capacity, and it does not tell how much more MW or MVA a line can carry without another power-flow
   study.
+- A facility with utilization_known false has no positive rating, so its loading is unknown even when a
+  tool reports 0%. Say so; never call such a facility unloaded or uncongested.
 - Preserve circuits and sections. State the facility scope you queried, and re-query with facility='all'
   before making a system-wide worst claim.
 - Use rank_contingencies and the indexed flow tools for event-specific questions. If a cache or index is

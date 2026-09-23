@@ -291,8 +291,8 @@ def test_method_settings_rating_basis_and_filter_scope(agent_context):
     assert by_id["1"]["rating_mva"] == 200
     assert by_id["1"]["base_utilization_pct"] == 25
     assert "RAW rate C" in by_id["1"]["rating_basis"]
-    assert by_id["2"]["rating_mva"] is None
-    assert any("lack a positive recorded rating" in warning for warning in rows["warnings"])
+    assert (by_id["2"]["rating_mva"], by_id["2"]["utilization_known"], by_id["1"]["utilization_known"]) == (None, False, True)
+    assert any(warning.startswith("1 of 4 facilities have no positive rating") and "unknown rather than low" in warning for warning in rows["warnings"])
     assert any("configured contingencyRating=B" in warning for warning in rows["warnings"])
 
 
