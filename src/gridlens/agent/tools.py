@@ -24,11 +24,15 @@ import csv
 import math
 from pathlib import Path
 import re
-from typing import Any, Literal, TypedDict, get_args
+from typing import Literal, get_args
 import xml.etree.ElementTree as ET
 
-from gridlens.agent.file_tools import FILE_TOOL_NAMES, FILTER_OPERATORS, FileTools, FilterOperator, cell_passes
+from gridlens.agent.file_tools import FILE_TOOL_NAMES, FileTools
 from gridlens.agent.gridlens_tools import GRIDLENS_DESTRUCTIVE_TOOL_NAMES, GRIDLENS_TOOL_NAMES, GRIDLENS_WRITE_TOOL_NAMES, GridLensTools
+from gridlens.agent.objects import (
+    FACILITY_METRICS, FAMILIES, GROUP_DEFINITIONS, OBJECT_KINDS, ObjectField, ObjectFilter, ObjectGroup, ObjectKind,
+    ObjectMetric, Order, check_conditions, check_fields, facility_record, group_labels, qualifies, reported, shown,
+)
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import scoped_path
 from gridlens.agent.tool_base import MAX_TABLE_ROWS, ToolBase, page_result, tool
@@ -38,7 +42,6 @@ from gridlens.analysis.distribution_stats import GROUP_STATISTICS, STATISTIC_DEF
 from gridlens.analysis.loading import branch_key, max_line_utilization_rows
 from gridlens.analysis.parser_models import PARSER_VERSION, ParsedTable
 from gridlens.analysis.utilization import (
-    NONTRANSFORMER_BRANCH,
     TRANSFORMER_UTILIZATION_BRANCH_OPTIONS,
     UtilizationBranchOptions,
     selected_utilization_branch_types,
@@ -56,51 +59,6 @@ FACILITY_OPTIONS = {
     "transformer_equivalent": UtilizationBranchOptions(False, False, False, True),
     "transformer": TRANSFORMER_UTILIZATION_BRANCH_OPTIONS,
     "all": UtilizationBranchOptions(True, True, True, True),
-}
-
-# The vocabulary of rank and rank_groups. Branches are the non-transformer branches the other tools call lines.
-ObjectKind = Literal["branches", "transformers", "both"]
-ObjectMetric = Literal[
-    "max_utilization_pct", "base_utilization_pct", "mean_utilization_pct", "min_utilization_pct",
-    "thermal_margin_pct_points", "overload_count", "contingency_count", "rating_mva", "nominal_kv",
-]
-ObjectGroup = Literal["control_area", "voltage_class", "nominal_kv", "branch_type", "binding_contingency"]
-ObjectField = Literal[
-    "control_area", "voltage_class", "nominal_kv", "branch_type", "binding_contingency", "bus", "bus_name",
-    "from_bus", "to_bus", "line_id", "section", "max_utilization_pct", "base_utilization_pct",
-    "mean_utilization_pct", "min_utilization_pct", "thermal_margin_pct_points", "overload_count",
-    "contingency_count", "rating_mva",
-]
-Order = Literal["descending", "ascending"]
-
-
-class ObjectFilter(TypedDict):
-    """One qualifier. An object is kept only when every qualifier holds; control_area, bus, and bus_name match either end."""
-
-    column: ObjectField
-    op: FilterOperator
-    value: Any
-
-
-OBJECT_KINDS = {"branches": "line", "transformers": "transformer", "both": "all"}
-# Each metric's units, its definition, and whether it is a loading, which is unknown without a positive rating.
-OBJECT_METRICS = {
-    "max_utilization_pct": ("%", "highest loading over every recorded case, including the base case and non-converged cases", True),
-    "base_utilization_pct": ("%", "loading in the base case", True),
-    "mean_utilization_pct": ("%", "mean loading over every recorded case", True),
-    "min_utilization_pct": ("%", "lowest loading over every recorded case", True),
-    "thermal_margin_pct_points": ("percentage points", "100 minus maximum loading; not transfer, generation, or load-serving capacity", True),
-    "overload_count": ("cases", "recorded cases with loading of at least 100% or a reported violation", True),
-    "contingency_count": ("cases", "recorded loading cases, including the base case", False),
-    "rating_mva": ("MVA", "the rating that loading percentages are computed against", False),
-    "nominal_kv": ("kV", "the higher of the two end base voltages", False),
-}
-OBJECT_GROUPS = {
-    "control_area": "the control area of each end; an object joining two areas counts in both",
-    "voltage_class": "the GridLens voltage class of the higher end; transformers group as step-up, step-down, or same-voltage",
-    "nominal_kv": "the higher end's base voltage",
-    "branch_type": "the RAW branch type",
-    "binding_contingency": "the case in which the object reached its maximum loading",
 }
 
 ANALYSIS_TOOL_NAMES = (
@@ -126,94 +84,6 @@ def _descending(order: str) -> bool:
     if order not in get_args(Order):
         raise AgentError("INVALID_ORDER", "Choose order='descending' or order='ascending'.")
     return order == "descending"
-
-
-def _object_conditions(filters: list | None) -> list[tuple[str, str, object]]:
-    """Check rank qualifiers and return them as (column, op, value) triples."""
-    fields = get_args(ObjectField)
-    example = "{'column': 'control_area', 'op': '==', 'value': 'Coast'}"
-    if filters is None:
-        return []
-    if not isinstance(filters, list):
-        raise AgentError("INVALID_FILTER", f"Give filters as a list of qualifiers such as {example}.")
-    checked = []
-    for item in filters:
-        if not isinstance(item, dict) or item.get("column") not in fields or item.get("op") not in FILTER_OPERATORS or "value" not in item:
-            raise AgentError("INVALID_FILTER", f"Use qualifiers such as {example}, with op one of {', '.join(FILTER_OPERATORS)} and column one of {', '.join(fields)}.")
-        if item["op"] == "in" and not isinstance(item["value"], list):
-            raise AgentError("INVALID_FILTER", "The 'in' operator needs a list value.")
-        checked.append((item["column"], item["op"], item["value"]))
-    return checked
-
-
-def _object_record(row: dict) -> dict:
-    """Describe one _loading row as rank sees it: its identity, the fields qualifiers test, and its metric values.
-
-    A facility without a positive rating has an unknown loading, so its loading metrics are None rather
-    than the 0% GridPACK reports.
-    """
-    from_bus, to_bus, line_id, section = branch_key(row)
-    nominal = max(_number(row.get("from_base_kv")) or 0, _number(row.get("to_base_kv")) or 0) or None
-    values = {name: _number(row.get(name)) for name in OBJECT_METRICS}
-    values["nominal_kv"] = nominal
-    if not row["utilization_known"]:
-        values.update({name: None for name, (_, _, loading) in OBJECT_METRICS.items() if loading})
-    fields = {
-        "control_area": list(row["control_areas"]), "voltage_class": row["voltage_group"], "nominal_kv": nominal,
-        "branch_type": row.get("raw_branch_type") or NONTRANSFORMER_BRANCH,
-        "binding_contingency": row.get("max_contingency_label") or "unknown",
-        "bus": [from_bus, to_bus], "bus_name": [row.get("from_bus_name", ""), row.get("to_bus_name", "")],
-        "from_bus": from_bus, "to_bus": to_bus, "line_id": line_id, "section": section, **values,
-    }
-    identity = {"object": row["line_label"], "from_bus": from_bus, "to_bus": to_bus, "line_id": line_id, "section": section}
-    return {"identity": identity, "fields": fields, "values": values, "rating_basis": row["rating_basis"]}
-
-
-def _selected_fields(fields: list | None) -> list[str]:
-    """Check the extra fields rank returns beside each object's value, keeping their order."""
-    names = get_args(ObjectField)
-    if fields is None:
-        return []
-    if not isinstance(fields, list) or any(name not in names for name in fields):
-        raise AgentError("INVALID_FIELD", f"Choose fields from: {', '.join(names)}.")
-    return list(dict.fromkeys(fields))
-
-
-def _shown(value: object) -> object:
-    """Return a field value as a result row shows it: numbers as _reported gives them, others unchanged."""
-    if isinstance(value, float):
-        return _reported(value)
-    return value
-
-
-def _qualifies(record: dict, conditions: list[tuple[str, str, object]]) -> bool:
-    """Return whether an object meets every qualifier. An unknown value meets none; a two-ended field matches either end."""
-    for column, op, value in conditions:
-        cell = record["fields"][column]
-        if cell is None:
-            return False
-        if isinstance(cell, list):
-            ends = [cell_passes(item, op, value) for item in cell]
-            if not (all(ends) if op == "!=" else any(ends)):
-                return False
-        elif not cell_passes(cell, op, value):
-            return False
-    return True
-
-
-def _group_labels(record: dict, group: str) -> list[str]:
-    """Return the groups an object belongs to: two control areas for a tie, otherwise one."""
-    fields = record["fields"]
-    if group == "control_area":
-        return fields["control_area"] or ["unknown"]
-    if group == "nominal_kv":
-        return [f"{fields['nominal_kv']:g} kV" if fields["nominal_kv"] else "unknown"]
-    return [str(fields[group])]
-
-
-def _reported(value: float) -> float | int:
-    """Return a value as a whole number when it is one, else rounded to six decimals like the other tools."""
-    return int(value) if float(value).is_integer() else round(value, 6)
 
 
 class AnalysisTools(ToolBase):
@@ -441,12 +311,12 @@ class AnalysisTools(ToolBase):
         """
         if kind not in OBJECT_KINDS:
             raise AgentError("INVALID_OBJECT", "Choose object='branches', 'transformers', or 'both'.")
-        if metric not in OBJECT_METRICS:
-            raise AgentError("INVALID_METRIC", f"Choose a metric from: {', '.join(OBJECT_METRICS)}.")
-        conditions = _object_conditions(filters)
+        if metric not in FACILITY_METRICS:
+            raise AgentError("INVALID_METRIC", f"Choose a metric from: {', '.join(FACILITY_METRICS)}.")
+        conditions = check_conditions(kind, filters)
         rows, convergence, scope = self._loading(self._run(run_id, project), OBJECT_KINDS[kind], "", 50.0, argument=("object", kind, "both"))
-        records = [_object_record(row) for row in rows]
-        kept = [record for record in records if _qualifies(record, conditions)]
+        records = [facility_record(row) for row in rows]
+        kept = [record for record in records if qualifies(record, conditions)]
         known = [record for record in kept if record["values"][metric] is not None]
         if len(known) < len(kept):
             self.warnings.append(f"{len(kept) - len(known)} objects have no known {metric}, because they have no positive rating or the cache does not record it, and were left out.")
@@ -468,14 +338,14 @@ class AnalysisTools(ToolBase):
         object is branches (non-transformer), transformers (every kind), or both, at or above 50 kV. metric is a per-object value over all recorded cases: max_utilization_pct (congestion), base_utilization_pct, mean_utilization_pct, min_utilization_pct, thermal_margin_pct_points, overload_count, contingency_count, rating_mva, or nominal_kv. filters remove objects that fail any qualifier, e.g. [{"column": "control_area", "op": "==", "value": "Coast"}, {"column": "max_utilization_pct", "op": ">", "value": 100}]; total_matching counts every object that remains. fields adds those attributes to each row, such as ["control_area", "binding_contingency", "base_utilization_pct"]. For counts, means, or any other statistic use rank_groups, never these rows.
         """
         descending = _descending(order)
-        extra = _selected_fields(fields)
+        extra = check_fields(object, fields)
         objects, counts = self._objects(run_id, project, object, metric, filters)
         objects.sort(key=lambda record: (-record["values"][metric] if descending else record["values"][metric], tuple(str(record["identity"][name]) for name in ("from_bus", "to_bus", "line_id", "section"))))
         rows = [
-            {"rank": position, **record["identity"], "value": _reported(record["values"][metric]), **{name: _shown(record["fields"][name]) for name in extra}}
+            {"rank": position, **record["identity"], "value": reported(record["values"][metric]), **{name: shown(record["fields"][name]) for name in extra}}
             for position, record in enumerate(objects, 1)
         ]
-        units, definition, _ = OBJECT_METRICS[metric]
+        units, definition, _ = FACILITY_METRICS[metric]
         return {
             "object": object, "metric": metric, "order": order, "units": units, "definition": definition, "filters": filters or [], **counts,
             **page_result(rows[:magnitude] if magnitude else rows, len(rows), 0, magnitude),
@@ -487,24 +357,24 @@ class AnalysisTools(ToolBase):
 
         group is control_area (an object joining two areas counts in both), voltage_class (the voltage groups or categories of the Branch Analysis tab, such as 100-229 kV; transformers group by step direction), nominal_kv (each exact base voltage, such as 138 kV), branch_type, or binding_contingency (the case that set each object's maximum loading). statistic is mean, median, min, max, std, var (population), iqr, or count. metric is a per-object value as in rank, so statistic='mean' of metric='max_utilization_pct' is the mean maximum loading the Branch Analysis tab shows, and of mean_utilization_pct or min_utilization_pct it is the mean mean or mean min. object and filters are as in rank; filters remove objects before grouping.
         """
-        if group not in OBJECT_GROUPS:
-            raise AgentError("INVALID_GROUP", f"Choose a group from: {', '.join(OBJECT_GROUPS)}.")
+        if group not in FAMILIES["facility"]["groups"]:
+            raise AgentError("INVALID_GROUP", f"Choose a group from: {', '.join(FAMILIES['facility']['groups'])}.")
         if statistic not in GROUP_STATISTICS:
             raise AgentError("INVALID_STATISTIC", f"Choose a statistic from: {', '.join(GROUP_STATISTICS)}.")
         descending = _descending(order)
         objects, counts = self._objects(run_id, project, object, metric, filters)
         members: dict[str, list[float]] = {}
         for record in objects:
-            for label in _group_labels(record, group):
+            for label in group_labels(record["fields"], group):
                 members.setdefault(label, []).append(record["values"][metric])
         groups = [(label, group_statistic(values, statistic), len(values)) for label, values in members.items()]
         groups.sort(key=lambda item: (-item[1] if descending else item[1], item[0]))
-        rows = [{"rank": position, "group": label, "value": _reported(value), "count": count} for position, (label, value, count) in enumerate(groups, 1)]
-        units, definition, _ = OBJECT_METRICS[metric]
+        rows = [{"rank": position, "group": label, "value": reported(value), "count": count} for position, (label, value, count) in enumerate(groups, 1)]
+        units, definition, _ = FACILITY_METRICS[metric]
         return {
             "group": group, "object": object, "metric": metric, "statistic": statistic, "order": order,
             "units": "objects" if statistic == "count" else f"{units}²" if statistic == "var" else units,
-            "definitions": {"group": OBJECT_GROUPS[group], "metric": definition, "statistic": STATISTIC_DEFINITIONS[statistic], "count": "the objects each group's value was computed from"},
+            "definitions": {"group": GROUP_DEFINITIONS[group], "metric": definition, "statistic": STATISTIC_DEFINITIONS[statistic], "count": "the objects each group's value was computed from"},
             "filters": filters or [], **counts, "objects_used": len(objects),
             **page_result(rows[:magnitude] if magnitude else rows, len(rows), 0, magnitude),
         }
