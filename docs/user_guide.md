@@ -102,7 +102,7 @@ The **Agent** tab is a planning agent you talk to in plain language. It can:
   and builds the branch and transformer analysis, using the same functions as the other tabs.
 
 The agent is not the source of numerical truth. Every number in an answer comes from a GridLens function, and
-the answer cites the call that produced it, such as `[T1]`. The Sources pane lists those calls with the files
+the answer cites the call that produced it, such as `[T1]`. Open **Full activity and sources** to inspect those calls and the files
 each one read. A citation that does not match a recorded call is marked invalid, so you can tell a real number
 from an invented one.
 
@@ -123,7 +123,8 @@ prove that its built-in file and shell tools are isolated from project data.
 ### Ask a question
 
 1. Go to **Agent**.
-2. GridLens checks the selected runtime when the tab opens. **Check runtime** repeats the probe. The status
+2. GridLens checks the selected runtime when the tab opens. Expand **Session setup** to change the runtime,
+   model, or run. **Check runtime** repeats the probe. The status
    shows the CLI version, route, installed models, and sign-in state when sign-in applies. Local Ollama needs
    no sign-in. Use the setup command and documentation shown below the status if something is missing.
 3. Choose a **Local model**. If a project is open, you can also choose a run under **Start from run**, and
@@ -133,9 +134,15 @@ prove that its built-in file and shell tools are isolated from project data.
 4. If a run has no current analysis cache, click **Build / refresh analysis**, or ask the agent to build it.
    To also enable per-contingency drill-down, select **Include contingency drill-down index** first. Indexing
    reads the whole flat result once and takes a few minutes on a multi-gigabyte run.
-5. Type your question and click **Send**. **Stop** ends the turn and stops the model process.
+5. Type your question and press **Enter** or click **Send**. Press **Shift+Enter** for a new line. **Stop**
+   ends the turn and stops the model process.
 
-Changing the runtime, model, project, or run selection starts a new conversation.
+Your messages, the agent's streamed answer, and its process steps appear in one scrolling conversation.
+Expand a **Process** card to see tool names, arguments, audited row counts, truncation notices, and source
+paths. If the selected CLI supplies reasoning text, it appears there too. Hermes currently does not expose
+reasoning text through its event stream, so the card says when it is unavailable. Choose a saved session in
+the conversation selector to replay its messages and available process events. **New conversation** starts
+a fresh session. Changing the runtime, model, project, or run selection also starts a new conversation.
 
 ### Let the agent run a study
 

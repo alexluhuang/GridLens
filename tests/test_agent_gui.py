@@ -6,6 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json
 from types import SimpleNamespace
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
@@ -26,10 +27,9 @@ def test_agent_tab_scope_plain_text_and_provider_guidance(agent_project):
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", "http://127.0.0.1:11434", ("test:model",)))
     tab.input.setPlainText("Where are files?")
     assert tab.send_button.isEnabled()
-    tab.transcript.setPlainText('<img src="https://remote.invalid/data"> [T999]')
-    assert '<img src="https://remote.invalid/data">' in tab.transcript.toPlainText()
-    assert '<img src=' not in tab.transcript.document().toHtml()
-    assert '&lt;img' in tab.transcript.document().toHtml()
+    bubble = tab.conversation.add_message("assistant", '<img src="https://remote.invalid/data"> [T999]')
+    assert bubble.textFormat() == Qt.PlainText
+    assert '<img src="https://remote.invalid/data">' in bubble.text()
     tab.runtime_combo.blockSignals(True)
     tab.runtime_combo.setCurrentIndex(1)
     tab.runtime_combo.blockSignals(False)
@@ -48,7 +48,7 @@ def test_agent_tab_scope_plain_text_and_provider_guidance(agent_project):
     tab.remote_acknowledgement.setChecked(True)
     assert tab.send_button.isEnabled()
     tab.new_session()
-    assert not tab.transcript.toPlainText()
+    assert tab.conversation.messages() == []
     assert tab.shutdown()
     tab.deleteLater()
     app.processEvents()
@@ -63,8 +63,8 @@ def test_streamed_answer_replaced_by_cited_final_and_sources_show_errors(agent_c
     tab.controller = controller
     tab.worker = SimpleNamespace(controller=controller)
     tab.session_directory = agent_context.directory
-    tab._parts = ["You\nWhere is the line?"]
-    tab.transcript.setPlainText(tab._parts[0])
+    tab.conversation.add_message("user", "Where is the line?")
+    tab._process_card = tab.conversation.add_process()
     refreshes = []
     update_sources = tab.update_sources
     tab.update_sources = lambda: refreshes.append(True)
@@ -74,17 +74,17 @@ def test_streamed_answer_replaced_by_cited_final_and_sources_show_errors(agent_c
     tab.on_event(RuntimeEvent("tool_result", "rank_branch_loading"))
     assert refreshes == [True]
     tab.update_sources = update_sources
-    assert "Agent\npartial" in tab.transcript.toPlainText()
+    assert tab.conversation.messages()[-1] == ("assistant", "partial")
     records = [
         {"call_id": "T1", "phase": "completed", "tool": "rank_branch_loading", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 3, "truncated": True, "offset": 0, "limit": 2, "inline_rows": 1, "result_file": "/s/results/T1.json", "rows_file": "/s/results/T1.csv", "analyzed_facility_count": 3, "filters": {"facility": "line"}}, "warnings": ["failed cases included"], "provenance": {"sources": [{"path": "runs/run_a/reports/table.csv"}]}}},
         {"call_id": "T2", "phase": "completed", "tool": "get_run_method", "outcome": "error", "result": {"error": {"code": "INVALID_ARTIFACT", "remedy": "Rebuild the cache."}}},
     ]
     (agent_context.directory / "tool_calls.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n")
     tab.on_answer("final [T1] and [T99]")
-    rendered = tab.transcript.toPlainText()
-    assert rendered.count("Agent\n") == 1
-    assert "partial" not in rendered
-    assert "final [T1] and [T99: invalid source]" in rendered
+    rendered = tab.conversation.messages()
+    assert len([role for role, _ in rendered if role == "assistant"]) == 1
+    assert "partial" not in rendered[-1][1]
+    assert rendered[-1][1] == "final [T1] and [T99: invalid source]"
     assert "INVALID_ARTIFACT: Rebuild the cache." in tab.sources.toPlainText()
     assert "warning: failed cases included" in tab.sources.toPlainText()
     assert "facility" in tab.sources.toPlainText()
@@ -124,13 +124,69 @@ def test_conversation_can_start_without_a_project_and_shows_tool_arguments(tmp_p
     controller = object()
     tab.controller = controller
     tab.worker = SimpleNamespace(controller=controller)
+    tab.conversation.add_message("user", tab.input.toPlainText())
+    tab._process_card = tab.conversation.add_process()
     tab.on_event(RuntimeEvent("tool_start", "mcp__gridlens__create_project", {"input": '{"name": "Study"}'}))
     assert 'tool_start: mcp__gridlens__create_project {"name": "Study"}' in tab.activity.toPlainText()
+    assert 'Calling create_project\n{"name": "Study"}' in tab._process_card.plain_text()
     finished = []
     tab.turn_finished.connect(lambda: finished.append(True))
     tab.worker = None
     tab.finish_turn()
     assert finished == [True]
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()
+
+
+def test_saved_conversation_replays_messages_and_tool_steps_in_order(agent_context):
+    """Open a saved audit and verify its text and tool result appear in the same chat timeline."""
+    app = QApplication.instance() or QApplication([])
+    tab = AgentTab()
+    tab.set_project(Project("Synthetic Project", agent_context.project_root))
+    messages = [
+        {"timestamp": "2026-09-23T00:00:00.000+00:00", "role": "user", "text": "Which line is congested?"},
+        {"timestamp": "2026-09-23T00:00:00.004+00:00", "role": "assistant", "text": "ALPHA to BETA: 120% [T1]."},
+    ]
+    events = [
+        {"timestamp": "2026-09-23T00:00:00.001+00:00", "kind": "tool_start", "text": "mcp__gridlens__rank_branch_loading", "data": {"input": '{"limit": 1}'}},
+        {"timestamp": "2026-09-23T00:00:00.003+00:00", "kind": "tool_result", "text": "mcp__gridlens__rank_branch_loading", "data": {}},
+    ]
+    records = [{"call_id": "T1", "phase": "completed", "tool": "rank_branch_loading", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 3, "truncated": True}}}]
+    for name, rows in (("transcript.jsonl", messages), ("runtime_events.jsonl", events), ("tool_calls.jsonl", records)):
+        (agent_context.directory / name).write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    tab.refresh_history()
+    index = tab.history_combo.findData(str(agent_context.directory))
+    assert index > 0
+    tab.open_history(index)
+    assert tab.conversation.messages() == [("user", "Which line is congested?"), ("assistant", "ALPHA to BETA: 120% [T1].")]
+    assert "[T1] 1 of 3 rows returned; result truncated" in tab.conversation.processes()[0].plain_text()
+    assert not tab.send_button.isEnabled()
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()
+
+
+def test_live_tool_results_keep_their_own_audited_source_when_events_queue(agent_context):
+    """Match each queued result event to its own audited call rather than the latest file row."""
+    app = QApplication.instance() or QApplication([])
+    tab = AgentTab()
+    tab.session_directory = agent_context.directory
+    controller = object()
+    tab.controller = controller
+    tab.worker = SimpleNamespace(controller=controller)
+    tab._process_card = tab.conversation.add_process()
+    records = [
+        {"call_id": "T1", "phase": "completed", "result": {"data": {"returned": 1, "total_matching": 3}}},
+        {"call_id": "T2", "phase": "completed", "result": {"data": {"returned": 2, "total_matching": 4}}},
+    ]
+    (agent_context.directory / "tool_calls.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n")
+    for _ in records:
+        tab.on_event(RuntimeEvent("tool_result", "mcp__gridlens__rank_branch_loading"))
+    detail = tab._process_card.plain_text()
+    assert "[T1] 1 of 3 rows returned" in detail
+    assert "[T2] 2 of 4 rows returned" in detail
+    tab.worker = None
     assert tab.shutdown()
     tab.deleteLater()
     app.processEvents()

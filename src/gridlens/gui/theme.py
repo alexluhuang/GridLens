@@ -451,4 +451,114 @@ QProgressBar::chunk {
     background: #0039a6;
     border-radius: 3px;
 }
+
+QScrollArea#agentConversation,
+QWidget#agentConversationContent {
+    background: #ffffff;
+    border: 0;
+}
+
+QScrollArea#agentConversation {
+    border: 1px solid #d5d8dc;
+    border-radius: 8px;
+}
+
+QWidget#agentConversationRow {
+    background: transparent;
+}
+
+QLabel#agentEmptyState {
+    color: #636970;
+    font-size: 12pt;
+    padding: 28px;
+}
+
+QFrame#agentUserMessage {
+    background: #eaf1ff;
+    border: 1px solid #c8d8fa;
+    border-radius: 12px;
+}
+
+QFrame#agentAssistantMessage {
+    background: #ffffff;
+    border: 0;
+    border-left: 4px solid #fccc0a;
+    border-radius: 4px;
+}
+
+QFrame#agentNoticeMessage {
+    background: #fff8dc;
+    border: 1px solid #e3d69a;
+    border-radius: 8px;
+}
+
+QLabel#agentMessageHeading {
+    color: #0039a6;
+    font-size: 9pt;
+    font-weight: 800;
+}
+
+QLabel#agentMessageBody {
+    color: #111111;
+    font-size: 10.5pt;
+}
+
+QFrame#agentProcessCard {
+    background: #f6f7f8;
+    border: 1px solid #d5d8dc;
+    border-radius: 8px;
+}
+
+QToolButton#agentProcessToggle,
+QToolButton#agentSettingsToggle,
+QToolButton#agentAuditToggle {
+    background: transparent;
+    border: 0;
+    color: #0039a6;
+    font-weight: 700;
+    padding: 4px;
+    text-align: left;
+}
+
+QFrame#agentProcessStep {
+    background: #ffffff;
+    border: 1px solid #e1e3e5;
+    border-radius: 5px;
+}
+
+QLabel#agentProcessStepTitle {
+    color: #222222;
+    font-weight: 700;
+}
+
+QLabel#agentProcessStepDetail,
+QLabel#agentReasoningNote {
+    color: #555d66;
+    font-size: 9pt;
+}
+
+QFrame#agentSettingsPanel,
+QFrame#agentAuditPanel {
+    background: #ffffff;
+    border: 1px solid #d5d8dc;
+    border-radius: 6px;
+}
+
+QScrollArea#agentSettingsScroll {
+    background: #ffffff;
+    border: 1px solid #d5d8dc;
+    border-radius: 6px;
+}
+
+QPlainTextEdit#agentComposer {
+    background: #ffffff;
+    border: 1px solid #8d8d8d;
+    border-radius: 10px;
+    padding: 10px;
+    color: #111111;
+}
+
+QPlainTextEdit#agentComposer:focus {
+    border: 2px solid #0039a6;
+}
 """

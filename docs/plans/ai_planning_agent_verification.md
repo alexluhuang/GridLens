@@ -98,3 +98,27 @@ Hosted prompts remain unavailable until the CEII policy changes, and Codex needs
 for its built-in tools. The agent uses existing compact analysis caches; a missing or stale cache
 requires the user to press **Build / refresh analysis**. Generated code is saved for audit and needs
 explicit review and an operator-prepared pinned sandbox image before execution.
+
+## Conversation UI verification (2026-09-23)
+
+**Rationale.** The previous Agent tab separated the transcript from activity and sources. A user could miss
+tool limits while reading an answer, and the setup controls left little space for the conversation.
+
+**Method.** Ran `tests/test_agent_conversation.py` and `tests/test_agent_gui.py` with Qt offscreen, covering
+plain-text rendering, Enter and Shift+Enter, live answer replacement, tool arguments and audited counts,
+process collapse, saved-session replay, and unavailable reasoning. Rendered the tab offscreen at 1050×720
+and 760×560, inspected both screenshots, and checked that expanded setup controls fit at the smaller size.
+
+**Outcome.** The focused suite passed (10 tests). The desktop view showed user and agent text plus process
+cards in one scroll area; the small view retained scrollable setup and chat controls without horizontal
+clipping. Hermes' tested event stream provides tool events and answer text but no reasoning text, so the
+process card reports that limitation and displays reasoning only if a runtime supplies it.
+
+**Interpretation.** These checks verify the widget behavior and layout on an offscreen Qt platform. They do
+not measure legibility on every display scale or demonstrate a live model turn in the redesigned tab.
+
+**Broader regression check.** `.venv/bin/python -m pytest -q --ignore=tests/test_csv_flat.py` passed with
+243 tests and 5 opt-in skips. Nine CPU and analysis tests selected from `tests/test_csv_flat.py` also passed.
+The unrestricted suite was interrupted after 153 passes and 5 skips while a CSV acceleration test imported
+RMM; other local model evaluations were using the same GPU. The 15 deselected CSV tests therefore remain
+unverified in this run. The GUI change does not alter CSV parsing or acceleration code.
