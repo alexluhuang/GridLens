@@ -284,6 +284,19 @@ def test_controller_records_prompt_and_answer_without_shell(agent_context):
     assert json.loads((agent_context.directory / "status.json").read_text())["status"] == "completed"
 
 
+def test_restored_controller_replays_transcript_when_runtime_id_is_missing(agent_context):
+    """A saved conversation without a usable CLI ID still supplies its prior turns to the next prompt."""
+    controller = AgentController(agent_context, HermesAdapter(agent_context.endpoint))
+    messages = [{"role": "user", "text": "First question"}, {"role": "assistant", "text": "First answer"}]
+    controller.restore(messages, [])
+    assert controller.history == messages
+    assert controller.continuation == ""
+    prompt = controller._write_prompt("Follow-up question").read_text()
+    assert "User: First question" in prompt
+    assert "Assistant: First answer" in prompt
+    assert "Follow-up question" in prompt
+
+
 def test_controller_fetches_top_line_areas_when_model_omits_ranking(agent_context):
     """Check run_turn adds an audited ranking and replaces an unsupported area list."""
     context = SessionContext.create(agent_context.project_root, ("run_a",), "fixture:model", agent_context.endpoint)

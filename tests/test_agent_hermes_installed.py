@@ -90,7 +90,12 @@ def test_installed_hermes_exposes_only_gridlens_tools_and_resumes(agent_project)
         assert session_sources(context.directory)[0]["tool"] == "rank_branch_loading"
         first_id = controller.continuation
         assert first_id
-        assert "120%" in controller.run_turn("Repeat the result and cite it.", lambda event: None)
+        messages = [json.loads(line) for line in (context.directory / "transcript.jsonl").read_text().splitlines()]
+        events = [json.loads(line) for line in (context.directory / "runtime_events.jsonl").read_text().splitlines()]
+        resumed = AgentController(SessionContext.load(context.directory / "context.json"), HermesAdapter(endpoint), timeout=60)
+        resumed.restore(messages, events)
+        assert resumed.continuation == first_id
+        assert "120%" in resumed.run_turn("Repeat the result and cite it.", lambda event: None)
         tools_sent = [body["tools"] for body in requests if body.get("tools")]
         assert tools_sent
         expected = {"mcp__gridlens__" + name for name in TOOL_NAMES}

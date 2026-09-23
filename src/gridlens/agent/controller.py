@@ -65,6 +65,20 @@ class AgentController:
         """Ask the turn in flight to stop at its next checkpoint."""
         self.cancelled.set()
 
+    def restore(self, messages: list[dict], events: list[dict]) -> None:
+        """Load saved messages and events into this controller; open_history uses the state for another turn."""
+        self.history = [
+            {"role": item["role"], "text": item["text"]}
+            for item in messages if item.get("role") in ("user", "assistant") and isinstance(item.get("text"), str)
+        ]
+        self.continuation = ""
+        if self.history and self.history[-1]["role"] == "assistant" and getattr(self.adapter, "supports_continuation", True):
+            for item in reversed(events):
+                if item.get("kind") == "completed" and isinstance(item.get("data"), dict):
+                    session_id = item["data"].get("session_id")
+                    self.continuation = session_id if isinstance(session_id, str) else ""
+                    break
+
     def _write_prompt(self, prompt: str) -> Path:
         """Write this turn's prompt to its own file in the session folder, and return the path.
 
@@ -75,7 +89,7 @@ class AgentController:
         prompt_dir = scoped_path(self.context.directory, "prompts", directory=True)
         prompt_dir.mkdir(exist_ok=True, mode=0o700)
         prompt_path = scoped_path(prompt_dir, f"{time.time_ns()}.txt")
-        replay = [] if getattr(self.adapter, "supports_continuation", True) else self.history[-MAX_REPLAY_TURNS:]
+        replay = [] if getattr(self.adapter, "supports_continuation", True) and self.continuation else self.history[-MAX_REPLAY_TURNS:]
         content = turn_prompt(tuple(self.context.run_ids), prompt, replay, session_facts(self.context))
         with os.fdopen(os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
             handle.write(content)

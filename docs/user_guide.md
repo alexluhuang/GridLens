@@ -141,8 +141,9 @@ Your messages, the agent's streamed answer, and its process steps appear in one 
 Expand a **Process** card to see tool names, arguments, audited row counts, truncation notices, and source
 paths. If the selected CLI supplies reasoning text, it appears there too. Hermes currently does not expose
 reasoning text through its event stream, so the card says when it is unavailable. Choose a saved session in
-the conversation selector to replay its messages and available process events. **New conversation** starts
-a fresh session. Changing the runtime, model, project, or run selection also starts a new conversation.
+the conversation selector to replay its messages and available process events, then ask a follow-up in that
+session. The selector stays on the active session after each turn. **New conversation** starts a fresh
+session. Changing the runtime, model, project, or run selection also starts a new conversation.
 
 ### Let the agent run a study
 

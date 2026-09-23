@@ -159,3 +159,23 @@ cached rows reproduced. For the original transcript question, both models used `
 groups, statistics, and qualifiers. Each question was asked once, and nemotron3:33b sometimes produced
 malformed calls, so the controller checks remain necessary. Complex power and bus voltage are not metrics
 yet: the compact caches hold loading percentages, not MVA flows or bus voltages.
+
+## Saved-conversation continuation regression (2026-09-23)
+
+**Rationale.** Refreshing the conversation list after a turn selected the placeholder while the active chat
+remained on screen. Selecting the same saved session then opened a read-only replay and disabled Send.
+
+**Method.** Qt offscreen tests finish a synthetic turn, refresh the selector, reopen the active entry,
+and load an older saved session with tool activity and a runtime continuation ID. They check the selected
+model and runs, Send state, and that Send reuses the saved session. A controller test removes the runtime ID
+and inspects the next prompt for bounded transcript replay.
+
+**Outcome.** The focused GUI and controller suite passed (38 tests), as did the full default suite
+(270 passed, 5 opt-in skips). The active session stays selected; reopened sessions accept follow-up prompts
+with their original scope. When a CLI resume ID is unavailable, GridLens supplies prior user and assistant
+messages in the next prompt. The installed Hermes test also passed (1 test): it completed a turn, rebuilt
+the controller from the saved session, and completed a follow-up through the restored runtime ID.
+
+**Interpretation.** The GUI checks cover session selection and prompt construction without launching a model;
+the Hermes loopback test verifies persisted continuation with its installed CLI and a synthetic model API.
+It does not test an answer from a live Ollama model.

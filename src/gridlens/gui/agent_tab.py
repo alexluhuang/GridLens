@@ -86,7 +86,6 @@ class AgentTab(QWidget):
         self.runtime_status: RuntimeStatus | None = None
         self.session_directory: Path | None = None
         self._probed_once = False
-        self._history_view = False
         self._draft_label: QLabel | None = None
         self._process_card: ProcessCard | None = None
         self._shown_sources = 0
@@ -203,7 +202,7 @@ class AgentTab(QWidget):
 
         history_row = QHBoxLayout()
         self.history_combo = QComboBox()
-        self.history_combo.addItem("Current conversation", "")
+        self.history_combo.addItem("New conversation", "")
         self.history_combo.activated.connect(self.open_history)
         self.new_button = QPushButton("New conversation")
         self.new_button.clicked.connect(self.new_session)
@@ -280,6 +279,7 @@ class AgentTab(QWidget):
         # Fill the run list now, so the refresh after the first turn does not look like a new selection.
         self.refresh_runs()
         self.provider_changed(probe=False)
+        self.refresh_history()
         self.update_controls()
 
     def showEvent(self, event) -> None:  # noqa: N802
@@ -427,13 +427,16 @@ class AgentTab(QWidget):
         selected = self.model_combo.currentText()
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
-        self.model_combo.addItems(status.models if descriptor(status.provider).enumerates_models else (selected or "default",))
+        models = list(status.models) if descriptor(status.provider).enumerates_models else [selected or "default"]
+        if selected and selected not in models:
+            models.insert(0, selected)
+            if status.ready:
+                self.setup_message.setText(f"The selected model {selected} is unavailable. Install it or start a new conversation.")
+        self.model_combo.addItems(models)
         index = self.model_combo.findText(selected)
         if index >= 0:
             self.model_combo.setCurrentIndex(index)
         self.model_combo.blockSignals(False)
-        if selected != self.model_combo.currentText():
-            self.new_session()
         self.update_controls()
 
     def open_provider_docs(self) -> None:
@@ -454,7 +457,6 @@ class AgentTab(QWidget):
             self.controller.cancel()
         self.controller = None
         self.session_directory = None
-        self._history_view = False
         self._draft_label = None
         self._process_card = None
         self._shown_sources = 0
@@ -471,7 +473,7 @@ class AgentTab(QWidget):
             return
         prompt = self.input.toPlainText().strip()
         try:
-            if self.controller is None or self.controller.cancelled.is_set():
+            if self.controller is None:
                 run_ids = tuple(dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value))
                 context = SessionContext.create(
                     self.project.root_dir if self.project else None, run_ids, self.model_combo.currentText(), self.runtime_status.endpoint,
@@ -614,7 +616,16 @@ class AgentTab(QWidget):
         prompt = self.input.toPlainText().strip()
         ready = self.runtime_status is not None and self.runtime_status.ready and self.runtime_status.provider == self.runtime_combo.currentData()
         acknowledged = not descriptor(self.runtime_combo.currentData()).route == "remote" or self.remote_acknowledgement.isChecked()
-        self.send_button.setEnabled(bool(not busy and not probing and not self._history_view and ready and acknowledged and self.model_combo.currentText().strip() and prompt and len(prompt) <= MAX_PROMPT_CHARS))
+        model = self.model_combo.currentText().strip()
+        model_ready = not descriptor(self.runtime_combo.currentData()).enumerates_models or self.runtime_status is not None and model in self.runtime_status.models
+        context = self.controller.context if self.controller else None
+        selected_runs = tuple(dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value))
+        scope_matches = context is None or (
+            context.runtime == self.runtime_combo.currentData() and context.model == model
+            and context.endpoint == (self.runtime_status.endpoint if self.runtime_status else "")
+            and context.run_ids == selected_runs
+        )
+        self.send_button.setEnabled(bool(not busy and not probing and ready and acknowledged and model_ready and scope_matches and model and prompt and len(prompt) <= MAX_PROMPT_CHARS))
         self.folder_button.setEnabled(self.session_directory is not None)
         self.export_button.setEnabled(not busy and self.session_directory is not None)
         self.review_button.setEnabled(not busy and self.session_directory is not None)
@@ -673,9 +684,10 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def refresh_history(self) -> None:
-        """List saved conversations: the open project's, or those started with no project open."""
+        """List saved sessions and keep the displayed session selected after a completed turn."""
+        selected = str(self.session_directory) if self.session_directory else ""
         self.history_combo.clear()
-        self.history_combo.addItem("Current conversation", "")
+        self.history_combo.addItem("New conversation", "")
         base, sessions = sessions_location(self.project.root_dir if self.project else None, self.settings.default_projects_dir)
         try:
             root = scoped_path(base, sessions, directory=True)
@@ -684,34 +696,69 @@ class AgentTab(QWidget):
                     self.history_combo.addItem(path.name, str(path))
         except AgentError:
             self.activity.appendPlainText("The project session folder is not a regular directory.")
+        index = self.history_combo.findData(selected)
+        if selected and index < 0 and Path(selected).is_dir():
+            self.history_combo.addItem(Path(selected).name, selected)
+            index = self.history_combo.count() - 1
+        self.history_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def open_history(self, index: int) -> None:
-        """Load a saved session's messages and process events into the shared chat timeline."""
+        """Restore a selected session's scope, transcript, and runtime state for follow-up turns."""
         directory = self.history_combo.itemData(index)
         if not directory:
             self.new_session()
             return
-        self.new_session()
-        self._history_view = True
-        self.session_directory = Path(directory)
+        if self.controller and self.controller.context.directory == Path(directory):
+            return
         try:
-            path = scoped_path(self.session_directory, "transcript.jsonl")
+            context = SessionContext.load(Path(directory) / "context.json")
+            path = scoped_path(context.directory, "transcript.jsonl")
             if path.stat().st_size > 8 * 1024 * 1024:
                 raise AgentError("SESSION_LIMIT", "Open the session folder to inspect this large transcript.")
             messages = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-            records = session_sources(self.session_directory)
-            events_path = scoped_path(self.session_directory, "runtime_events.jsonl")
+            records = session_sources(context.directory)
+            events_path = scoped_path(context.directory, "runtime_events.jsonl")
             events = []
             if events_path.exists() and events_path.stat().st_size <= 8 * 1024 * 1024:
                 events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
-            self._render_saved_conversation(messages, events, records)
-            self._shown_sources = len(records)
-            self.update_sources()
-            self.activity.setPlainText("Saved session. Choose New conversation to ask another question.")
-            self.history_combo.setCurrentIndex(index)
-        except (OSError, ValueError) as exc:
-            self.activity.setPlainText(f"Could not load this session: {exc}")
+            controller = AgentController(context, create_adapter(context.runtime, context.endpoint))
+            controller.restore(messages, events)
+        except (AgentError, OSError, ValueError) as exc:
+            message = f"Could not load this session: {exc}"
+            self.activity.appendPlainText(message)
+            self.conversation.add_message("notice", message)
+            current = self.history_combo.findData(str(self.session_directory)) if self.session_directory else 0
+            self.history_combo.setCurrentIndex(max(0, current))
+            return
+        self.new_session()
+        self._restore_session_controls(context)
+        self.controller = controller
+        self.session_directory = context.directory
+        self._render_saved_conversation(messages, events, records)
+        self._shown_sources = len(records)
+        self.update_sources()
+        self.activity.setPlainText("Saved session loaded. Ask a follow-up once its runtime is ready.")
+        self.history_combo.setCurrentIndex(index)
+        self.check_runtime()
         self.update_controls()
+
+    def _restore_session_controls(self, context: SessionContext) -> None:
+        """Apply context's provider, model, endpoint, and runs before open_history enables follow-ups."""
+        self.runtime_combo.blockSignals(True)
+        self.runtime_combo.setCurrentIndex(self.runtime_combo.findData(context.runtime))
+        self.runtime_combo.blockSignals(False)
+        self.provider_changed(probe=False)
+        self.endpoint.setText(context.endpoint or DEFAULT_ENDPOINT)
+        self.model_combo.blockSignals(True)
+        if self.model_combo.findText(context.model) < 0:
+            self.model_combo.addItem(context.model)
+        self.model_combo.setCurrentText(context.model)
+        self.model_combo.blockSignals(False)
+        for combo, run_id in ((self.run_combo, context.run_ids[0] if context.run_ids else ""),
+                              (self.compare_combo, context.run_ids[1] if len(context.run_ids) > 1 else "")):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(run_id))
+            combo.blockSignals(False)
 
     def _render_saved_conversation(self, messages: list[dict], events: list[dict], records: list[dict]) -> None:
         """Merge timestamped messages/events with audited records for open_history's chat replay."""
