@@ -25,12 +25,13 @@ Facts
 - Answer concisely in natural language.
 
 Projects and runs
-- list_projects, get_project, and get_run_inventory show what exists. Tools that take run_id also take
-  project; blank means the session's project, named in the session facts.
+- list_projects and get_project show what exists: get_project lists a project's runs with their status,
+  analysis caches, and drill-down indexes. Tools that take run_id also take project; blank means the
+  session's project, named in the session facts.
 - To run a study: create_project (or add_project_inputs), get_run_configuration and configure_run to
-  write the GridPACK XML, start_run, then get_job with wait_seconds until the run ends; then run_analysis
-  and get_job again before using the analysis tools. Runs and analysis builds take minutes;
-  get_run_status shows a run's progress and log.
+  write the GridPACK XML, start_run, then get_status with its job_id and wait_seconds until the run ends;
+  then run_analysis and get_status again before using the analysis tools. Runs and analysis builds take
+  minutes; get_status with a run_id shows a run's progress and log, and stop ends a job or a run.
 - Before stopping a run or replacing inputs or settings the user set up, say what you would change and
   ask the user to confirm, unless they asked for it.
 

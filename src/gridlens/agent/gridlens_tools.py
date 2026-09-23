@@ -5,8 +5,9 @@ through the same functions those tabs call, so a project the agent sets up is on
 run it starts is recorded exactly like a run started from the Run tab.
 
 A GridPACK run and an analysis build take minutes, so `start_run` and `run_analysis` start a background
-job (see `gridlens.agent.jobs`) and return its ID at once. `get_job` reports a job's state and can wait
-for it to end; the analysis tools read a run's results once its analysis job has completed.
+job (see `gridlens.agent.jobs`) and return its ID at once. `get_status` reports a job's or a run's state
+and can wait for it to end; the analysis tools read a run's results once its analysis job has completed.
+`stop` ends a job or a run.
 
 Run settings the agent does not give, such as the Docker image and the MPI process count, come from the
 settings the Run tab saved last. Input files are imported from any absolute path; everything else these
@@ -20,8 +21,10 @@ from typing import Literal
 
 from gridlens.agent import jobs
 from gridlens.agent.policy import AgentError
-from gridlens.agent.session import PROJECT_FILE, project_folders, read_json, resolve_run, scoped_path
+from gridlens.agent.session import PROJECT_FILE, RUN_ID_PATTERN, project_folders, read_json, resolve_run, scoped_path
 from gridlens.agent.tool_base import ToolBase, tool
+from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
+from gridlens.analysis.parser_models import PARSER_VERSION
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project, ProjectData
 from gridlens.core.validation import validate_existing_files
@@ -45,13 +48,13 @@ from gridlens.runner.run_progress import GridpackProgressParser
 
 
 GRIDLENS_TOOL_NAMES = (
-    "list_projects", "get_project", "create_project", "add_project_inputs", "get_run_configuration",
-    "configure_run", "start_run", "get_run_status", "stop_run", "run_analysis", "get_job", "list_jobs", "cancel_job",
+    "list_projects", "get_project", "get_status", "create_project", "add_project_inputs", "get_run_configuration",
+    "configure_run", "start_run", "run_analysis", "stop",
 )
-GRIDLENS_WRITE_TOOL_NAMES = frozenset({"create_project", "add_project_inputs", "configure_run", "start_run", "stop_run", "run_analysis", "cancel_job"})
+GRIDLENS_WRITE_TOOL_NAMES = frozenset({"create_project", "add_project_inputs", "configure_run", "start_run", "run_analysis", "stop"})
 # Tools that can replace or end something the user already had: an input file, the XML, or a running job.
-GRIDLENS_DESTRUCTIVE_TOOL_NAMES = frozenset({"add_project_inputs", "configure_run", "stop_run", "cancel_job"})
-# get_job waits less than the runtime's tool-call timeout, so a long wait returns before the call is abandoned.
+GRIDLENS_DESTRUCTIVE_TOOL_NAMES = frozenset({"add_project_inputs", "configure_run", "stop"})
+# get_status waits less than the runtime's tool-call timeout, so a long wait returns before the call is abandoned.
 MAX_WAIT_SECONDS = 1500
 CONFIGURATION_CHOICES = {
     "contingency_rating": CONTINGENCY_RATING_OPTIONS,
@@ -135,16 +138,35 @@ class GridLensTools(ToolBase):
         return {"rows": rows, "projects_folder": str(self.context.projects_folder)}
 
     @tool
-    def get_project(self, project: str = "") -> dict:
-        """Show a project's name, folder, XML configuration file, and input files with their sizes and SHA-256 hashes."""
+    def get_project(self, project: str = "", offset: int = 0, limit: int = 50) -> dict:
+        """Show a project's name, folder, XML file, and input files with their sizes and SHA-256 hashes, and list its runs newest first with status, whether each has a current analysis cache, its cached tables, and whether it has a drill-down index."""
         root = self._project(project)
-        _, data = _project_record(root)
-        runs = root / "runs"
-        return {
-            "rows": [asdict(record) for record in data.input_files], "name": data.name, "folder": str(root),
-            "xml_file_name": data.xml_file_name, "created_at": data.created_at, "updated_at": data.updated_at,
-            "run_count": sum(1 for path in runs.iterdir() if path.is_dir()) if runs.is_dir() else 0,
-        }
+        try:
+            _, data = _project_record(root)
+            record = {"name": data.name, "xml_file_name": data.xml_file_name, "created_at": data.created_at, "updated_at": data.updated_at, "input_files": [asdict(item) for item in data.input_files]}
+        except AgentError as exc:
+            # The runs are still worth listing when project.json lacks the fields the Project tab saves.
+            self.warnings.append(str(exc))
+            saved = read_json(scoped_path(root, PROJECT_FILE))
+            record = {"name": saved.get("name", root.name), "xml_file_name": saved.get("xml_file_name", ""), "created_at": saved.get("created_at"), "updated_at": saved.get("updated_at"), "input_files": []}
+        runs = scoped_path(root, "runs", directory=True)
+        rows = []
+        for path in sorted(runs.iterdir(), reverse=True) if runs.is_dir() else []:
+            if path.is_symlink() or not path.is_dir() or not RUN_ID_PATTERN.fullmatch(path.name):
+                continue
+            status = self._json(path, "status.json").get("status") if (path / "status.json").is_file() else "not started"
+            manifest = self._json(path, "reports/interactive_analysis_manifest.json") if (path / "reports/interactive_analysis_manifest.json").is_file() else None
+            tables = path / "reports/interactive_tables"
+            rows.append({
+                "run_id": path.name, "status": status, "path": str(path),
+                "selected_in_gui": root == self.context.project_root and path.name in self.context.run_ids,
+                "interactive_analysis_available": manifest is not None,
+                # A cache written by an older GridLens is refused by the analysis tools until it is rebuilt.
+                "analysis_current": manifest is not None and (manifest.get("dataset_version"), manifest.get("parser_version")) == (ANALYSIS_DATASET_VERSION, PARSER_VERSION),
+                "cached_tables": sorted(item.stem for item in tables.glob("*.csv")) if tables.is_dir() else [],
+                "event_index_available": (path / "reports/event_index/manifest.json").is_file(),
+            })
+        return {"rows": rows, "folder": str(root), "run_count": len(rows), **record}
 
     @tool
     def create_project(self, name: str, input_files: list[str], xml_file_name: str = "", folder: str = "") -> dict:
@@ -218,13 +240,23 @@ class GridLensTools(ToolBase):
             raise AgentError("IMAGE_NOT_AVAILABLE", f"The image {form.image} is not on this machine and the pull policy is never. Load it first, or name an installed image.")
         run_dir = project_record.create_run_folder()
         job = jobs.start_job(root, "gridpack_run", run_dir, {"form": asdict(form), "notes": notes})
-        return {"rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "next_step": "Call get_job with this job_id and wait_seconds until the run ends."}
+        return {"rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "next_step": "Call get_status with this job_id and wait_seconds until the run ends."}
 
     @tool
-    def get_run_status(self, run_id: str, project: str = "") -> dict:
-        """Show a run's status, its contingency progress parsed from the GridPACK log, the last log lines, and its agent job, if any."""
+    def get_status(self, project: str = "", run_id: str = "", job_id: str = "", wait_seconds: int = 0, offset: int = 0, limit: int = 50) -> dict:
+        """Show a background job's state, progress, result, and last output lines (job_id), or a run's status, contingency progress parsed from its GridPACK log, last log lines, and latest job (run_id). With neither, list the project's jobs newest first. wait_seconds, at most 1500, waits for the job, or for the run's job, to end."""
         root = self._project(project)
+        if run_id and job_id:
+            raise AgentError("ONE_TARGET", "Give job_id or run_id, not both.")
+        wait = min(max(int(wait_seconds), 0), MAX_WAIT_SECONDS)
+        if job_id:
+            return {"rows": [jobs.wait_for_job(root, job_id, wait)], "target": "job"}
+        if not run_id:
+            return {"rows": jobs.list_jobs(root), "target": "jobs"}
         run = resolve_run(root, run_id, completed=False)
+        job = next((item for item in jobs.list_jobs(root) if item["run_id"] == run.name), None)
+        if job and wait and job["state"] not in jobs.FINAL_STATES:
+            job = jobs.wait_for_job(root, job["job_id"], wait)
         status = read_json(run / "status.json") if (run / "status.json").is_file() else {"status": "not started"}
         manifest = read_json(run / "manifest.json") if (run / "manifest.json").is_file() else {}
         parser, progress = GridpackProgressParser(), None
@@ -233,18 +265,21 @@ class GridLensTools(ToolBase):
             with terminal.open(encoding="utf-8", errors="replace") as handle:
                 for line in handle:
                     progress = parser.feed(line) or progress
-        job = next((item for item in jobs.list_jobs(root) if item["run_id"] == run.name), None)
         return {
-            "rows": [{"line": text} for text in jobs.log_tail(terminal)], "run_id": run.name, "status": status.get("status"),
+            "rows": [{"line": text} for text in jobs.log_tail(terminal)], "target": "run", "run_id": run.name, "status": status.get("status"),
             "return_code": status.get("return_code"), "updated_at": status.get("updated_at"),
             "progress": asdict(progress) if progress else None, "container_name": manifest.get("container_name"),
             "gridpack_image": manifest.get("gridpack_image"), "job": {key: job.get(key) for key in ("job_id", "kind", "state", "message")} if job else None,
         }
 
     @tool
-    def stop_run(self, run_id: str, project: str = "") -> dict:
-        """Stop a GridPACK run that is still running: its agent job if it has one, and its Docker container."""
+    def stop(self, project: str = "", run_id: str = "", job_id: str = "") -> dict:
+        """Stop a background job (job_id), such as an analysis build, or a GridPACK run still running (run_id): its agent job if it has one, else its Docker container. Stopping a GridPACK run's job also stops its container."""
         root = self._project(project)
+        if bool(run_id) == bool(job_id):
+            raise AgentError("ONE_TARGET", "Give the job_id of a job or the run_id of a run to stop.")
+        if job_id:
+            return {"rows": [jobs.cancel_job(root, job_id)]}
         run = resolve_run(root, run_id, completed=False)
         active = [item for item in jobs.list_jobs(root) if item["run_id"] == run.name and item["kind"] == "gridpack_run" and item["state"] not in jobs.FINAL_STATES]
         if active:
@@ -263,20 +298,4 @@ class GridLensTools(ToolBase):
         run = resolve_run(root, run_id)
         kinds = ["branch", "transformer"] if kind == "both" else [kind]
         job = jobs.start_job(root, "analysis", run, {"kinds": kinds, "include_index": include_index, "rebuild": rebuild})
-        return {"rows": [job], "job_id": job["job_id"], "next_step": "Call get_job with this job_id and wait_seconds until the analysis ends."}
-
-    @tool
-    def get_job(self, job_id: str, project: str = "", wait_seconds: int = 0) -> dict:
-        """Show a background job's state, progress, result, and last output lines, waiting up to wait_seconds (at most 1500) for it to end."""
-        root = self._project(project)
-        return {"rows": [jobs.wait_for_job(root, job_id, min(max(int(wait_seconds), 0), MAX_WAIT_SECONDS))]}
-
-    @tool
-    def list_jobs(self, project: str = "", offset: int = 0, limit: int = 50) -> dict:
-        """List a project's background jobs, newest first, with their state."""
-        return {"rows": jobs.list_jobs(self._project(project))}
-
-    @tool
-    def cancel_job(self, job_id: str, project: str = "") -> dict:
-        """Stop a background job; for a GridPACK run this also stops its Docker container."""
-        return {"rows": [jobs.cancel_job(self._project(project), job_id)]}
+        return {"rows": [job], "job_id": job["job_id"], "next_step": "Call get_status with this job_id and wait_seconds until the analysis ends."}

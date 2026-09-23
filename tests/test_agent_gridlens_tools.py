@@ -36,7 +36,8 @@ def test_create_list_and_describe_projects(workspace):
     listed = tools.list_projects()["data"]["rows"]
     assert [(row["name"], row["run_count"], row["open_in_gui"]) for row in listed] == [("Study One", 0, False)]
     project = tools.get_project("Study One")["data"]
-    assert [row["file_name"] for row in project["rows"]] == ["case.raw"]
+    assert [row["file_name"] for row in project["input_files"]] == ["case.raw"]
+    assert (project["rows"], project["run_count"]) == ([], 0)
     assert tools.create_project("Study One", [str(inputs / "case.raw")])["error"]["code"] == "PROJECT_EXISTS"
     assert tools.create_project("Study Two", ["case.raw"])["error"]["code"] == "ABSOLUTE_PATH_REQUIRED"
     missing = tools.create_project("Study Two", [str(inputs / "missing.raw")])["error"]
@@ -97,21 +98,27 @@ def test_start_run_checks_docker_then_starts_a_job(workspace, monkeypatch):
     assert result["data"]["run_id"] == run.name and (run / "work").is_dir()
 
 
-def test_run_status_analysis_job_and_stop(agent_context, monkeypatch):
-    """A completed run reports its status and progress; its analysis runs as a job that get_job can wait for."""
+def test_status_of_runs_and_jobs_and_stop(agent_context, monkeypatch):
+    """get_status reports a run, a job it can wait for, or every job; stop ends a job or a run."""
     tools = ToolService(agent_context)
     (agent_context.run("run_a") / "work/terminal.log").write_text("Total contingencies to analyze: 3\ncontingency: 1 success: true\n")
-    status = tools.get_run_status("run_a")["data"]
-    assert (status["status"], status["progress"]["total"], status["progress"]["completed"]) == ("completed", 3, 1)
+    status = tools.get_status(run_id="run_a")["data"]
+    assert (status["target"], status["status"], status["progress"]["total"], status["progress"]["completed"]) == ("run", "completed", 3, 1)
     assert status["rows"][-1] == {"line": "contingency: 1 success: true"}
     started = tools.run_analysis("run_a", kind="transformer")["data"]
-    finished = tools.get_job(started["job_id"], wait_seconds=120)["data"]["rows"][0]
+    assert "get_status" in started["next_step"]
+    finished = tools.get_status(job_id=started["job_id"], wait_seconds=120)["data"]["rows"][0]
     assert finished["state"] == "completed", finished["output_tail"]
     assert list(finished["result"]["summaries"]) == ["transformer"]
-    assert tools.get_run_status("run_a")["data"]["job"]["state"] == "completed"
-    assert [row["job_id"] for row in tools.list_jobs()["data"]["rows"]] == [started["job_id"]]
+    assert tools.get_status(run_id="run_a")["data"]["job"]["state"] == "completed"
+    listed = tools.get_status()["data"]
+    assert (listed["target"], [row["job_id"] for row in listed["rows"]]) == ("jobs", [started["job_id"]])
+    assert tools.get_status(run_id="run_a", job_id=started["job_id"])["error"]["code"] == "ONE_TARGET"
+    assert tools.get_status(job_id="not-a-job")["error"]["code"] == "INVALID_JOB_ID"
     assert tools.run_analysis("run_a", kind="lines")["error"]["code"] == "INVALID_KIND"
     stopped = []
     monkeypatch.setattr(gridlens_tools, "terminate_gridpack_run", lambda name: stopped.append(name) or GridpackTerminationResult(name, True, False, f"stopped {name}"))
-    assert tools.stop_run("run_a")["data"]["message"] == "stopped gridlens-run_a"
+    assert tools.stop(run_id="run_a")["data"]["message"] == "stopped gridlens-run_a"
     assert stopped == ["gridlens-run_a"]
+    assert tools.stop(job_id=started["job_id"])["data"]["rows"][0]["state"] == "completed"
+    assert tools.stop()["error"]["code"] == "ONE_TARGET"

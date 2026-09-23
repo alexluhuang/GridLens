@@ -172,14 +172,14 @@ def resolve_run(project_root: Path, run_id: str, *, completed: bool = True) -> P
     True, a run whose status.json does not say it completed.
     """
     if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id) or run_id in (".", ".."):
-        raise AgentError("INVALID_RUN_ID", "Use a run ID from get_project or get_run_inventory, such as 2026-07-28_14-46-26.")
+        raise AgentError("INVALID_RUN_ID", "Use a run ID from get_project, such as 2026-07-28_14-46-26.")
     path = scoped_path(project_root, Path("runs") / run_id, directory=True)
     if not path.is_dir():
-        raise AgentError("RUN_NOT_FOUND", f"The project has no run named {run_id}. Use get_run_inventory to list its runs.")
+        raise AgentError("RUN_NOT_FOUND", f"The project has no run named {run_id}. Use get_project to list its runs.")
     if completed:
         status_path = scoped_path(path, "status.json")
         if not status_path.is_file() or read_json(status_path).get("status") != "completed":
-            raise AgentError("RUN_NOT_COMPLETED", "This run has not completed. Check it with get_run_status, or choose a completed run.")
+            raise AgentError("RUN_NOT_COMPLETED", "This run has not completed. Check it with get_status, or choose a completed run.")
     return path
 
 

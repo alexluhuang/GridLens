@@ -61,10 +61,10 @@ def _write_status(folder: Path, state: str, message: str, **details: object) -> 
 def job_folder(project_root: Path, job_id: str) -> Path:
     """Return the folder of one job of a project, refusing an ID that is not a job ID."""
     if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
-        raise AgentError("INVALID_JOB_ID", "Use a job ID returned by start_run, run_analysis, or list_jobs.")
+        raise AgentError("INVALID_JOB_ID", "Use a job ID returned by start_run, run_analysis, or get_status.")
     folder = scoped_path(project_root, JOBS_FOLDER / job_id, directory=True)
     if not (folder / "job.json").is_file():
-        raise AgentError("JOB_NOT_FOUND", "This project has no such job. Use list_jobs to see its jobs.")
+        raise AgentError("JOB_NOT_FOUND", "This project has no such job. Call get_status without a job_id to list its jobs.")
     return folder
 
 

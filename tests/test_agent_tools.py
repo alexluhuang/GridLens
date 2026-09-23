@@ -94,7 +94,7 @@ def test_branch_search_method_and_comparison(agent_context):
     comparison = service.compare_runs("run_a", "run_b")
     assert all(row["delta_pct_points"] == 10 for row in comparison["data"]["rows"])
     assert comparison["data"]["first_only"] == comparison["data"]["second_only"] == 0
-    assert len(service.get_run_inventory()["data"]["rows"]) == 2
+    assert len(service.get_project()["data"]["rows"]) == 2
 
 
 @pytest.mark.parametrize("run_id,code", [("../run_b", "INVALID_RUN_ID"), ("/tmp", "INVALID_RUN_ID"), ("missing", "RUN_NOT_FOUND"), ("run_a/../../run_b", "INVALID_RUN_ID")])
@@ -116,9 +116,10 @@ def test_any_run_and_any_project_is_reachable(agent_project, tmp_path):
     assert service.rank("run_b")["error"]["code"] == "RUN_NOT_COMPLETED"
     # A run that has not completed still lists its files.
     assert [row["path"] for row in service.list_files(folder="runs/run_b/work", pattern="*.raw")["data"]["rows"]] == ["runs/run_b/work/case.raw"]
-    inventory = service.get_run_inventory()["data"]["rows"]
+    inventory = service.get_project()["data"]["rows"]
     assert [(row["run_id"], row["status"], row["selected_in_gui"]) for row in inventory] == [("run_b", "running", False), ("run_a", "completed", True)]
     assert inventory[1]["cached_tables"] == ["area_metadata", "branch_metadata", "pflow_mm"]
+    assert (inventory[1]["interactive_analysis_available"], inventory[1]["analysis_current"], inventory[1]["event_index_available"]) == (True, True, False)
 
 
 def test_session_without_a_project_lives_in_the_projects_folder(tmp_path):
@@ -126,7 +127,7 @@ def test_session_without_a_project_lives_in_the_projects_folder(tmp_path):
     context = SessionContext.create(None, (), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path / "projects")
     assert context.directory.parent == (tmp_path / "projects/.gridlens-agent/sessions").resolve()
     assert SessionContext.load(context.directory / "context.json") == context
-    assert ToolService(context).get_run_inventory()["error"]["code"] == "NO_PROJECT"
+    assert ToolService(context).get_project()["error"]["code"] == "NO_PROJECT"
     with pytest.raises(ValueError, match="at most two"):
         SessionContext.create(None, ("run_a",), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path)
 
@@ -535,14 +536,14 @@ def test_all_tool_names_have_a_direct_result_contract(agent_context):
     """Each exposed tool is callable under a scoped context and returns a stable result envelope."""
     service = ToolService(agent_context)
     arguments = {
-        "get_run_inventory": (), "rank": ("run_a",), "rank_groups": ("run_a",),
+        "rank": ("run_a",), "rank_groups": ("run_a",),
         "compare_runs": ("run_a", "run_b"), "rank_contingencies": ("run_a",),
         "get_contingency_flows": ("run_a", 1), "get_branch_contingencies": ("run_a", 1, 2, "1"),
         "propose_analysis_script": ("run_a", "Count rows", "print(1)"),
         "list_files": (), "read_file": ("runs/run_a/work/case_flat.csv",),
         "list_projects": (), "get_project": (), "create_project": ("Other", []), "add_project_inputs": ([],),
-        "get_run_configuration": (), "configure_run": ({},), "start_run": (), "get_run_status": ("run_a",),
-        "stop_run": ("run_x",), "run_analysis": ("missing",), "get_job": ("not-a-job",), "list_jobs": (), "cancel_job": ("not-a-job",),
+        "get_run_configuration": (), "configure_run": ({},), "start_run": (), "get_status": (),
+        "stop": ("", "run_x"), "run_analysis": ("missing",),
     }
     assert set(arguments) == set(TOOL_NAMES)
     for name, args in arguments.items():

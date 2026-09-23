@@ -30,7 +30,7 @@ import xml.etree.ElementTree as ET
 from gridlens.agent.file_tools import FILE_TOOL_NAMES, FILTER_OPERATORS, FileTools, FilterOperator, cell_passes
 from gridlens.agent.gridlens_tools import GRIDLENS_DESTRUCTIVE_TOOL_NAMES, GRIDLENS_TOOL_NAMES, GRIDLENS_WRITE_TOOL_NAMES, GridLensTools
 from gridlens.agent.policy import AgentError
-from gridlens.agent.session import RUN_ID_PATTERN, scoped_path
+from gridlens.agent.session import scoped_path
 from gridlens.agent.tool_base import MAX_TABLE_ROWS, ToolBase, page_result, tool
 from gridlens.analysis.branch_keys import canonical_branch_label
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
@@ -104,7 +104,7 @@ OBJECT_GROUPS = {
 }
 
 ANALYSIS_TOOL_NAMES = (
-    "get_run_inventory", "rank", "rank_groups", "compare_runs", "rank_contingencies", "get_contingency_flows", "get_branch_contingencies",
+    "rank", "rank_groups", "compare_runs", "rank_contingencies", "get_contingency_flows", "get_branch_contingencies",
     "propose_analysis_script",
 )
 TOOL_NAMES = ANALYSIS_TOOL_NAMES + FILE_TOOL_NAMES + GRIDLENS_TOOL_NAMES
@@ -460,26 +460,6 @@ class AnalysisTools(ToolBase):
             "rating_basis": sorted({record["rating_basis"] for record in known}), "convergence": convergence,
         }
         return known, counts
-
-    @tool
-    def get_run_inventory(self, project: str = "", limit: int = 50, offset: int = 0) -> dict:
-        """List a project's runs, newest first, with status and which analysis caches and indexes exist."""
-        root = self._project(project)
-        runs = scoped_path(root, "runs", directory=True)
-        rows = []
-        for path in sorted(runs.iterdir(), reverse=True) if runs.is_dir() else []:
-            if path.is_symlink() or not path.is_dir() or not RUN_ID_PATTERN.fullmatch(path.name):
-                continue
-            status = self._json(path, "status.json").get("status") if (path / "status.json").is_file() else "not started"
-            tables = path / "reports/interactive_tables"
-            rows.append({
-                "run_id": path.name, "status": status, "path": str(path),
-                "selected_in_gui": root == self.context.project_root and path.name in self.context.run_ids,
-                "interactive_analysis_available": (path / "reports/interactive_analysis_manifest.json").is_file(),
-                "cached_tables": sorted(item.stem for item in tables.glob("*.csv")) if tables.is_dir() else [],
-                "event_index_available": (path / "reports/event_index/manifest.json").is_file(),
-            })
-        return {"rows": rows, "project": str(root)}
 
     @tool
     def rank(self, run_id: str, object: ObjectKind = "branches", order: Order = "descending", metric: ObjectMetric = "max_utilization_pct", magnitude: int = 10, filters: list[ObjectFilter] | None = None, fields: list[ObjectField] | None = None, project: str = "") -> dict:

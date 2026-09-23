@@ -32,7 +32,7 @@ from gridlens.agent.tools import TOOL_NAMES
 
 SUPPORTED_HERMES = "0.21.4"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
-# A turn may start a GridPACK run and wait for it through get_job, so it gets an hour; Stop ends it sooner.
+# A turn may start a GridPACK run and wait for it through get_status, so it gets an hour; Stop ends it sooner.
 TURN_TIMEOUT_SECONDS = 3600
 DOCS_URL = "https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
 OLLAMA_DOCS_URL = "https://docs.ollama.com/quickstart"

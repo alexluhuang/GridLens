@@ -81,31 +81,31 @@ def test_agent_tool_cli_contract(agent_context):
         # Always a child process: argparse exits the interpreter on a rejected tool name or context.
         return subprocess.run(entry_point("--agent-tool", *arguments), env=entry_environment(None), capture_output=True, text=True, timeout=120)
 
-    completed = run(str(context), "get_run_inventory")
+    completed = run(str(context), "get_project")
     assert completed.returncode == 0
     assert json.loads(completed.stdout)["error"] is None
     completed = run(str(context), "rank", "--arguments", json.dumps({"run_id": "../x"}))
     assert completed.returncode == 1
     assert json.loads(completed.stdout)["error"]["code"] == "INVALID_RUN_ID"
     # An unexpected argument is a tool-envelope error (exit 1), not a usage error (exit 2).
-    completed = run(str(context), "get_run_inventory", "--arguments", json.dumps({"bogus": 1}))
+    completed = run(str(context), "get_project", "--arguments", json.dumps({"bogus": 1}))
     assert completed.returncode == 1
     assert json.loads(completed.stdout)["error"]["code"] == "INVALID_DATA_OR_ARGUMENT"
     for arguments in ("[]", "{not json"):
-        completed = run(str(context), "get_run_inventory", "--arguments", arguments)
+        completed = run(str(context), "get_project", "--arguments", arguments)
         assert completed.returncode == 2
         assert completed.stdout == ""
-    completed = run(str(context), "get_run_inventory", "--arguments", "[]")
+    completed = run(str(context), "get_project", "--arguments", "[]")
     assert "Arguments must be a JSON object." in completed.stderr
     completed = run(str(context), "no_such_tool")
     assert completed.returncode == 2
     assert completed.stdout == ""
-    completed = run(str(agent_context.project_root / "missing.json"), "get_run_inventory")
+    completed = run(str(agent_context.project_root / "missing.json"), "get_project")
     assert completed.returncode == 2
     assert "INVALID_SESSION" in completed.stderr
 
 
-@pytest.mark.parametrize("arguments", [("--agent-tool", "CONTEXT", "get_run_inventory"), ("--mcp-server",)])
+@pytest.mark.parametrize("arguments", [("--agent-tool", "CONTEXT", "get_project"), ("--mcp-server",)])
 def test_agent_entry_points_do_not_import_qt(agent_context, arguments):
     # -I keeps the child free of inherited PYTHON* settings; the source tree is put on the path explicitly
     # so the worktree, not an editable install elsewhere, is what runs.
