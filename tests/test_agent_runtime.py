@@ -68,8 +68,9 @@ def test_preparation_isolated_profile_and_no_inherited_credentials(agent_context
     assert prepared.command == (
         "/opt/hermes", "chat", "--oneshot", "--format", "stream-json", "--provider", "custom",
         "--model", agent_context.model, "--toolsets", "gridlens", "--ignore-rules", "--no-restore-cwd",
-        "--max-turns", "12", "--run-budget", "300", "--source", "tool", "--cli",
+        "--max-turns", "60", "--run-budget", "3600", "--source", "tool", "--cli",
     )
+    assert config["mcp_servers"]["gridlens"]["timeout"] == 1800
     manifest = json.loads((agent_context.directory / "manifest.json").read_text())
     # Literals, not hermes.TURN_TIMEOUT_SECONDS, so a silent budget or turn-cap change is caught here.
     assert manifest["command_template"] == list(prepared.command) + ["--query-file", "<session prompt file>"]

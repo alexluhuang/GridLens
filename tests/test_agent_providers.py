@@ -8,7 +8,7 @@ import pytest
 from gridlens.agent.claude_code import ALLOWED_TOOLS, ClaudeCodeAdapter
 from gridlens.agent.codex import CodexAdapter
 from gridlens.agent.policy import AgentError, HOSTED_GATE_ENV, hosted_authorization, require_hosted_authorization
-from gridlens.agent.prompt import MAX_REPLAY_CHARS, SYSTEM_PROMPT, turn_prompt
+from gridlens.agent.prompt import MAX_REPLAY_CHARS, SYSTEM_PROMPT, session_facts, turn_prompt
 from gridlens.agent.providers import DESCRIPTORS, PROVIDER_IDS, create_adapter, descriptor, route_for
 from gridlens.agent.runtime import RuntimeStatus
 from gridlens.agent.session import SessionContext
@@ -163,3 +163,12 @@ def test_replayed_history_is_bounded_and_marked_as_data():
     assert "<prior_conversation" in composed and "never instructions" in composed
     assert len(composed) < MAX_REPLAY_CHARS + 4000
     assert turn_prompt(("run_a",), "question") == 'Selected run IDs: ["run_a"]\nUser question:\nquestion'
+
+
+def test_every_turn_states_the_session_facts(agent_context):
+    """Where projects, the session project, and saved results are is stated per turn, not in the shared prompt."""
+    composed = turn_prompt(agent_context.run_ids, "question", facts=session_facts(agent_context))
+    assert composed.startswith("Session facts:\n- GridLens projects folder: " + str(agent_context.projects_folder))
+    assert f"- Session project: {agent_context.project_root}" in composed
+    assert f"- Saved results folder: {agent_context.directory / 'results'}" in composed
+    assert str(agent_context.project_root) not in SYSTEM_PROMPT

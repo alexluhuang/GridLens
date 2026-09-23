@@ -32,12 +32,16 @@ from gridlens.agent.tools import TOOL_NAMES
 
 SUPPORTED_HERMES = "0.21.4"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
-TURN_TIMEOUT_SECONDS = 300
+# A turn may start a GridPACK run and wait for it through get_job, so it gets an hour; Stop ends it sooner.
+TURN_TIMEOUT_SECONDS = 3600
 DOCS_URL = "https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
 OLLAMA_DOCS_URL = "https://docs.ollama.com/quickstart"
 VERSION_PATTERN = re.compile(rb"Hermes Agent v(\d+\.\d+\.\d+)")
-# The profile and the command line have to agree, so the turn cap is named once.
-MAX_TURNS = 12
+# The profile and the command line have to agree, so the turn cap is named once. A study that creates a
+# project, configures and starts a run, waits for it, and analyzes it needs a few dozen tool calls.
+MAX_TURNS = 60
+# One GridLens tool call may scan a multi-gigabyte result or wait for a job, so it may take this long.
+MCP_TOOL_TIMEOUT_SECONDS = 1800
 
 
 def _profile_config(session: SessionContext, command: list[str]) -> dict:
@@ -61,6 +65,7 @@ def _profile_config(session: SessionContext, command: list[str]) -> dict:
         "tools": {"tool_search": {"enabled": "off"}},
         "mcp_servers": {"gridlens": {
             "command": command[0], "args": command[1:], "env": mcp_server_environment(session.directory),
+            "timeout": MCP_TOOL_TIMEOUT_SECONDS,
             "tools": {"include": list(TOOL_NAMES), "resources": False, "prompts": False},
         }},
     }

@@ -22,14 +22,15 @@ import time
 from typing import Callable
 
 from gridlens.agent.policy import AgentError
-from gridlens.agent.prompt import turn_prompt
+from gridlens.agent.prompt import session_facts, turn_prompt
 from gridlens.agent.runtime import RuntimeAdapter, RuntimeEvent
 from gridlens.agent.session import SessionContext, append_event, scoped_path, write_json
 from gridlens.agent.tools import ToolService
 
 
 MAX_PROMPT_CHARS = 12_000
-MAX_TURN_BYTES = 2 * 1024 * 1024
+# A long study can make dozens of tool calls in one turn, and each call's events count toward this.
+MAX_TURN_BYTES = 16 * 1024 * 1024
 MAX_REPLAY_TURNS = 6
 READ_CHUNK_BYTES = 16384
 # Keep only the tail of stderr: it is a diagnostic, not a result.
@@ -46,7 +47,7 @@ class AgentController:
     history is never the only copy: when an adapter reports supports_continuation as False, the next turn
     is composed from this record instead.
     """
-    def __init__(self, context: SessionContext, adapter: RuntimeAdapter, *, timeout: float = 300) -> None:
+    def __init__(self, context: SessionContext, adapter: RuntimeAdapter, *, timeout: float = 3600) -> None:
         self.context = context
         self.adapter = adapter
         self.timeout = timeout
@@ -75,7 +76,7 @@ class AgentController:
         prompt_dir.mkdir(exist_ok=True, mode=0o700)
         prompt_path = scoped_path(prompt_dir, f"{time.time_ns()}.txt")
         replay = [] if getattr(self.adapter, "supports_continuation", True) else self.history[-MAX_REPLAY_TURNS:]
-        content = turn_prompt(tuple(self.context.run_ids), prompt, replay)
+        content = turn_prompt(tuple(self.context.run_ids), prompt, replay, session_facts(self.context))
         with os.fdopen(os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
             handle.write(content)
         return prompt_path
@@ -281,7 +282,7 @@ def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
     """Return an answer with a rebuild note for stale-cache turn_sources in run_turn."""
     ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT"]
     if ids:
-        return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " reported ANALYSIS_NOT_BUILT. The current cache is unavailable; no returned rows do not establish that congestion is absent. Use Build / refresh analysis and ask again."
+        return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " reported ANALYSIS_NOT_BUILT. The current cache is unavailable; no returned rows do not establish that congestion is absent. Build it with run_analysis or Build / refresh analysis, and ask again."
     return answer
 
 

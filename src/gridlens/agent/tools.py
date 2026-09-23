@@ -133,7 +133,7 @@ class AnalysisTools(ToolBase):
                 tables[name] = ParsedTable(name, source_name, list(rows[0]) if rows else [], rows, info.get("notes", []))
             if len(tables) == 3:
                 return tables
-        raise AgentError("ANALYSIS_NOT_BUILT", "Build or refresh this run in Branch Analysis or Transformer Analysis, then ask again.")
+        raise AgentError("ANALYSIS_NOT_BUILT", "Build this run's analysis with run_analysis, or in Branch Analysis, Transformer Analysis, or the Agent tab, then ask again.")
 
     def _optional_table(self, run: Path, name: str) -> list[dict] | None:
         """Read an optional fresh cache or let its caller use a documented fallback."""
@@ -454,7 +454,7 @@ class AnalysisTools(ToolBase):
             raise AgentError("INVALID_METRIC", "Choose maximum loading or violation count.")
         rows = self._optional_table(self._run(run_id, project), "contingency_summary")
         if rows is None:
-            raise AgentError("ANALYSIS_NOT_BUILT", "Select Build / refresh analysis in the Agent tab to create the contingency summary.")
+            raise AgentError("ANALYSIS_NOT_BUILT", "Rebuild the analysis with run_analysis(rebuild=True), or with Build / refresh analysis in the Agent tab, to create the contingency summary.")
         candidates = [row for row in rows if _number(row.get("event_idx")) != 0]
         converged = [row for row in candidates if str(row.get("converged")).lower() in ("true", "1") and row.get("status_code", "").upper() in ("", "OK")]
         selected = converged if converged_only else candidates
@@ -475,13 +475,13 @@ class AnalysisTools(ToolBase):
 
         manifest = scoped_path(run, "reports/event_index/manifest.json")
         if not manifest.exists():
-            raise AgentError("INDEX_NOT_BUILT", "Enable Include contingency drill-down index, then select Build / refresh analysis in the Agent tab.")
+            raise AgentError("INDEX_NOT_BUILT", "Build the index with run_analysis(include_index=True), or with Include contingency drill-down index and Build / refresh analysis in the Agent tab.")
         try:
             rows, total, paths = query_event_index(run, event_idx=event_idx, branch=branch, limit=offset + limit if limit else 0)
         except AgentError:
             raise
         except ValueError as exc:
-            raise AgentError("INDEX_STALE", "Rebuild the contingency drill-down index in the Agent tab.") from exc
+            raise AgentError("INDEX_STALE", "Rebuild the index with run_analysis(include_index=True, rebuild=True), or in the Agent tab.") from exc
         if branch is not None and total == 0 and branch in {branch_key(row) for row in self._tables(run)["pflow_mm"].rows}:
             raise AgentError("KEY_NOT_INDEXED", "This cached branch is absent from the drill-down index; rebuild both analysis and index.")
         for path in paths:
