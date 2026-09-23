@@ -63,6 +63,32 @@ def test_raw_sections_name_every_field(tmp_path):
     assert read_raw_sections(newer)[1][0].rows == [{"I": 7, "NAME": "GAMMA", "BASKV": 69.0, "field_4": 1}]
 
 
+def test_version_34_cases_name_only_the_fields_that_match(tmp_path):
+    """A leading @! line names the case fields; lines shaped like version 33 get its names, others field_<n>."""
+    path = tmp_path / "v34.raw"
+    path.write_text(
+        "@!IC, SBASE,REV,XFRRAT,NXFRAT,BASFRQ\n"
+        "0,   100.00, 34,     0,     1, 60.00     / PSS(R)E 34 RAW\n"
+        "TITLE ONE\nTITLE TWO\n"
+        "GENERAL, THRSHZ=0.0001, PQBRAK=0.7\n"
+        'RATING, 1, "RATE1 ", "RATING SET 1"\n'
+        " 0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA \n"
+        "     1,' LBUS01     ',345.0000,1,   1,   1,   1,1.036230,-8.485371,1.100000,0.900000,1.100000,0.900000\n"
+        "0 / END OF BUS DATA, BEGIN LOAD DATA\n"
+        "     3,'1 ',1,   1,   1,   322.100,     2.401,     0.000,     0.000,     0.000,     0.000,   1,1,0,     0.000,     0.000,0\n"
+        "0 / END OF LOAD DATA\n"
+        "0 / END OF SUBSTATION DATA\n"
+        "Q\n"
+    )
+    header, sections = read_raw_sections(path)
+    assert (header["REV"], header["NXFRAT"], header["TITLE1"]) == (34, 1, "TITLE ONE")
+    assert [section.name for section in sections] == ["SYSTEM-WIDE", "BUS", "LOAD", "SUBSTATION"]
+    assert find_section(sections, "system-wide").rows[1] == {"field_1": "RATING", "field_2": 1, "field_3": "RATE1", "field_4": "RATING SET 1"}
+    assert find_section(sections, "bus").rows[0]["NAME"] == "LBUS01"
+    load = find_section(sections, "load").rows[0]
+    assert (len(load), load["field_1"], load["field_6"]) == (17, 3, 322.1)
+
+
 def test_list_and_describe_project_files(project_files, agent_context):
     """Files are listed with their kind, and each kind is described in its own terms."""
     listed = project_files.list_files(limit=0)["data"]["rows"]

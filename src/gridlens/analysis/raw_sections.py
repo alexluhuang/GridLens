@@ -4,9 +4,11 @@ The metadata parsers in `raw_parsers` read only the bus, branch, transformer, an
 analysis needs. This module reads the whole case. It splits the file at its `0 / END OF ... DATA, BEGIN
 ... DATA` markers, joins the multi-line records of transformers and DC lines, and names every field.
 
-Field names follow the PSS/E version 33 layout when the case header says revision 33. A section with
-`@!` header lines, as version 35 writes, takes its names from those lines instead. Any other field is
-named `field_<n>`, so no value is ever dropped, only left unnamed.
+Field names follow the PSS/E version 33 layout when the case header says revision 33. For another
+revision a record line takes the version 33 names only when it has exactly as many fields as the version
+33 line, so no field is ever given a wrong name. A section with `@!` header lines, as versions 34 and 35
+can write, takes its names from those lines instead. Any other field is named `field_<n>`, so no value is
+ever dropped, only left unnamed.
 """
 from __future__ import annotations
 
@@ -145,8 +147,6 @@ def _record_layout(section: str, first_line: list[object], version: int, headers
     """Return the field names of each line of the record that starts with first_line."""
     if headers:
         return headers
-    if version != 33:
-        return []
     if section == "TRANSFORMER":
         three_winding = len(first_line) > 2 and first_line[2] not in (0, "0", "")
         return V33_THREE_WINDING if three_winding else V33_TWO_WINDING
@@ -174,6 +174,8 @@ def _records(section: str, lines: list[str], version: int, headers: list[list[st
                 break
             values = first if offset == 0 else _fields(lines[index + offset])
             names = layout[offset] if offset < len(layout) else []
+            if version != 33 and not headers and len(values) != len(names):
+                names = []
             row.update(_named(values, names, set(row)))
         index += count
         result.rows.append(row)
@@ -184,13 +186,16 @@ def _records(section: str, lines: list[str], version: int, headers: list[list[st
 def read_raw_sections(path: Path) -> tuple[dict[str, object], list[RawSection]]:
     """Read a RAW case into its header fields and a list of sections, in file order.
 
-    The first data section of a version 33 or 34 case is bus data, which has no BEGIN marker; each
-    section takes its name from the marker that ends it, so the order of sections in the file does not
-    matter. Reading stops at a line holding only Q.
+    The first data section follows the case line and two title lines, and has no BEGIN marker: bus data
+    in versions 33 and 34, system-wide data when a file has it. Each section therefore takes its name from
+    the marker that ends it. Reading stops at a line holding only Q.
     """
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    header_names = HEADER_FIELDS
+    while lines and lines[0].strip().startswith("@!"):
+        header_names = [str(_value(text, False)).upper() for text, _ in _split(lines.pop(0).strip()[2:])]
     header_values = _fields(lines[0]) if lines else []
-    header = _named(header_values, HEADER_FIELDS, set())
+    header = _named(header_values, header_names, set())
     header["TITLE1"] = lines[1].strip() if len(lines) > 1 else ""
     header["TITLE2"] = lines[2].strip() if len(lines) > 2 else ""
     try:
@@ -208,14 +213,13 @@ def read_raw_sections(path: Path) -> tuple[dict[str, object], list[RawSection]]:
             continue
         if _MARKER.match(stripped):
             ended, begun = _section_name(stripped)
-            sections.append(_records(ended or current, data, version, headers))
-            current, data, headers = begun or f"SECTION {len(sections) + 1}", [], []
-            if begun is None:
-                break
+            sections.append(_records(ended or current or f"SECTION {len(sections) + 1}", data, version, headers))
+            # A marker that begins nothing is followed only by sections that name themselves as they end.
+            current, data, headers = begun or "", [], []
             continue
         data.append(line)
     if data:
-        sections.append(_records(current, data, version, headers))
+        sections.append(_records(current or f"SECTION {len(sections) + 1}", data, version, headers))
     return header, sections
 
 
