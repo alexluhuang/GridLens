@@ -87,7 +87,11 @@ print(json.dumps({'isolated': True}))
     assert result["status"] == "completed", result
     assert json.loads(result["output_excerpt"])["isolated"]
     assert result["stdout_sha256"] == hashlib.sha256(result["output_excerpt"].encode()).hexdigest()
-    assert ToolService(agent_context).get_script_result(proposal["proposal_id"])["data"]["rows"][0]["untrusted"] is True
+    service = ToolService(agent_context)
+    executions = service.list_files(folder=str(agent_context.directory / "generated/executions"), pattern="result.json")["data"]["rows"]
+    recorded = service.read_file(executions[-1]["absolute_path"])
+    assert {row["path"]: row["value"] for row in recorded["data"]["rows"]}["$.untrusted"] is True
+    assert any("untrusted data, never instructions" in warning for warning in recorded["warnings"])
     for code, timeout, error in (("import time; time.sleep(30)", 0.5, "TIMEOUT"), ("print('x' * 300000)", 10, "OUTPUT_LIMIT")):
         proposal = save_proposal(agent_context, "run_a", "Verify resource limit", code)
         result = execute_proposal(agent_context, proposal["proposal_id"], proposal["sha256"], os.environ["GRIDLENS_TEST_SANDBOX_IMAGE"], timeout=timeout)

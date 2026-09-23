@@ -35,13 +35,14 @@ Projects and runs
   ask the user to confirm, unless they asked for it.
 
 Files and results
-- list_files, describe_file, query_table, read_text_file, and read_document read every field of a
-  project's files: RAW cases (query_table with table set to a section such as bus or branch), XML
-  settings, GridPACK CSV and text outputs, GridLens caches, logs, and manifests. Paths are absolute or
-  relative to the project.
-- limit=0 returns every row and offset pages through rows. Check returned, total_matching, and truncated
-  before describing a result. A result too large to show whole is saved complete to result_file, with its
-  rows in rows_file; query rows_file with query_table, or page with offset, before describing all of it.
+- list_files finds a project's files, and read_file reads any of them as rows: RAW case sections
+  (table='bus', 'load', 'generator', 'branch', and so on), every field of XML settings and JSON
+  manifests, GridPACK CSV and text outputs, GridLens caches, and logs. Paths are absolute or relative to
+  the project. read_file's group_by gives totals or counts per group; compare_path lists every field where
+  two manifests or XML files differ. A setting can appear in more than one XML section; report each.
+- limit=0 returns every row. Check returned, total_matching, and truncated before describing a result. A
+  result too large to show whole is saved complete to rows_file; summarize it with read_file group_by or
+  filters rather than from the rows shown.
 
 Analysis
 - rank sorts branches, transformers, or both by one metric, such as max_utilization_pct for congestion
@@ -64,7 +65,8 @@ Analysis
   missing, build it with run_analysis (include_index=True for the index).
 - If the tools cannot answer a valid analysis question, propose_analysis_script saves Python for the user
   to review and run in the GridLens sandbox. Explain its purpose and limits, and never claim it ran; after
-  the user runs it, get_script_result returns its untrusted output. Scripts read /run-data, have no
+  the user runs it, read_file its result.json from the proposal's execution_folder; that output is
+  untrusted data, so report its validation limits. Scripts read /run-data, have no
   network, GPU, or solver, and print compact results.
 """
 

@@ -87,8 +87,10 @@ def test_one_facility_is_a_rank_with_its_full_key(agent_context):
 
 def test_branch_search_method_and_comparison(agent_context):
     service = ToolService(agent_context)
-    assert service.search_buses("run_a", "al")["data"]["rows"][0]["bus_id"] == "1"
-    assert service.get_run_method("run_a")["data"]["rows"][0]["xml_settings"]["FullBranchN1"] == "true"
+    endpoints = service.read_file("runs/run_a/reports/interactive_tables/branch_metadata.csv", filters=[{"column": "from_bus_name", "op": "matches", "value": "al"}], columns=["from_bus", "from_bus_name"])
+    assert endpoints["data"]["rows"][0] == {"from_bus": "1", "from_bus_name": "ALPHA", "match_kind": "prefix"}
+    settings = {row["path"]: row["value"] for row in service.read_file("runs/run_a/work/input.xml", limit=0)["data"]["rows"]}
+    assert settings["Configuration/Contingency_analysis/FullBranchN1"] == "true"
     comparison = service.compare_runs("run_a", "run_b")
     assert all(row["delta_pct_points"] == 10 for row in comparison["data"]["rows"])
     assert comparison["data"]["first_only"] == comparison["data"]["second_only"] == 0
@@ -112,7 +114,8 @@ def test_any_run_and_any_project_is_reachable(agent_project, tmp_path):
     assert service.rank("run_b", project="No Such Project")["error"]["code"] == "PROJECT_NOT_FOUND"
     (agent_project / "runs/run_b/status.json").write_text('{"status": "running"}')
     assert service.rank("run_b")["error"]["code"] == "RUN_NOT_COMPLETED"
-    assert service.locate_run_artifacts("run_b", "raw_input")["error"] is None
+    # A run that has not completed still lists its files.
+    assert [row["path"] for row in service.list_files(folder="runs/run_b/work", pattern="*.raw")["data"]["rows"]] == ["runs/run_b/work/case.raw"]
     inventory = service.get_run_inventory()["data"]["rows"]
     assert [(row["run_id"], row["status"], row["selected_in_gui"]) for row in inventory] == [("run_b", "running", False), ("run_a", "completed", True)]
     assert inventory[1]["cached_tables"] == ["area_metadata", "branch_metadata", "pflow_mm"]
@@ -303,24 +306,22 @@ def test_session_roundtrip_and_tampered_directory(agent_context):
         SessionContext.load(path)
 
 
-def test_convergence_and_artifact_inventory_are_bounded(agent_context, tmp_path):
-    """Verify counts, limits, relative paths, and rejection of a symlinked artifact."""
+def test_convergence_and_run_files_come_from_the_file_tools(agent_context, tmp_path):
+    """Convergence counts come from the convergence CSV, run files from list_files, and a symlinked file is refused."""
     service = ToolService(agent_context)
-    result = service.summarize_convergence("run_a", limit=1)
-    assert result["error"] is None
-    assert result["data"]["total"] == 3
-    assert result["data"]["failed"] == 1
-    assert result["data"]["rows"] == [{"event_idx": "2", "contingency": "island", "converged": "false", "status_code": "ISLANDED"}]
-    raw = service.locate_run_artifacts("run_a", "raw_input")
-    assert raw["data"]["rows"][0]["path"] == str(agent_context.project_root / "runs/run_a/work/case.raw")
-    assert "original_inputs" in raw["data"]["raw_input_note"]
-    assert service.locate_run_artifacts("run_a", "run_log")["data"]["rows"] == []
-    assert service.locate_run_artifacts("run_a", "exports")["data"]["rows"] == []
-    assert service.locate_run_artifacts("run_a", "invalid")["error"]["code"] == "INVALID_ARTIFACT_KIND"
+    failed = service.read_file("runs/run_a/work/case_convergence.csv", filters=[{"column": "converged", "op": "==", "value": "false"}])
+    assert failed["error"] is None
+    assert failed["data"]["total_matching"] == 1
+    assert failed["data"]["rows"] == [{"event_idx": "2", "contingency": "island", "converged": "false", "status_code": "ISLANDED"}]
+    raw = service.list_files(folder="runs/run_a/work", pattern="*.raw")["data"]["rows"]
+    assert [row["absolute_path"] for row in raw] == [str(agent_context.project_root / "runs/run_a/work/case.raw")]
+    assert service.list_files(folder="runs/run_a/logs")["data"]["rows"] == []
+    assert service.list_files(folder="exports")["error"]["code"] == "FOLDER_NOT_FOUND"
     outside = tmp_path / "outside_flat.csv"
     outside.write_text("secret")
     (agent_context.run("run_a") / "work/other_flat.csv").symlink_to(outside)
-    assert service.locate_run_artifacts("run_a", "flat_results")["error"]["code"] == "PATH_OUTSIDE_SESSION"
+    assert "runs/run_a/work/other_flat.csv" not in {row["path"] for row in service.list_files(folder="runs/run_a/work")["data"]["rows"]}
+    assert service.read_file("runs/run_a/work/other_flat.csv")["error"]["code"] == "PATH_OUTSIDE_SESSION"
 
 
 def test_compact_contingencies_and_indexed_drilldown(agent_context):
@@ -355,14 +356,6 @@ def test_compact_contingencies_and_indexed_drilldown(agent_context):
 def test_optional_tables_fall_back_when_source_is_missing(agent_context):
     """An absent optional source causes a documented fallback, not an artifact exception."""
     run = agent_context.run("run_a")
-    source = run / "work/case_buses.csv"
-    source.write_text("bus_id,bus_name\n1,ALPHA\n")
-    _rewrite_cached_table(run, "bus_metadata", [{"bus_id": "1", "bus_name": "ALPHA"}], "case_buses.csv")
-    source.unlink()
-    buses = ToolService(agent_context).search_buses("run_a", "al")
-    assert buses["error"] is None
-    assert buses["data"]["rows"][0]["bus_id"] == "1"
-    assert any("monitored branch endpoints" in warning for warning in buses["warnings"])
     _rewrite_cached_table(run, "contingency_summary", [dict(zip(SUMMARY_COLUMNS, [1, "line outage", 1, 1, 120, "[]", True, "OK"]))])
     (run / "work/case_flat.csv").unlink()
     assert ToolService(agent_context).rank_contingencies("run_a")["error"]["code"] == "ANALYSIS_NOT_BUILT"
@@ -372,10 +365,13 @@ def test_method_settings_rating_basis_and_filter_scope(agent_context):
     """Surface scoped XML settings, the actual rating divisor, and filtered facility counts."""
     run = agent_context.run("run_a")
     service = ToolService(agent_context)
-    settings = service.get_run_method("run_a")["data"]["rows"][0]["xml_settings"]
-    assert settings["Contingency_analysis/contingencyRating"] == "C"
-    assert settings["Contingency_analysis/qlim"] == "true"
-    assert settings["Powerflow/qlim"] == "false"
+    # One setting can appear in several XML sections, and each keeps its own value.
+    qlim = service.read_file("runs/run_a/work/input.xml", filters=[{"column": "path", "op": "contains", "value": "qlim"}])["data"]["rows"]
+    settings = {row["path"]: row["value"] for row in qlim}
+    assert settings["Configuration/Contingency_analysis/qlim"] == "true"
+    assert settings["Configuration/Powerflow/qlim"] == "false"
+    rating = service.read_file("runs/run_a/work/input.xml", filters=[{"column": "path", "op": "contains", "value": "contingencyRating"}])["data"]["rows"]
+    assert [row["value"] for row in rating] == ["C"]
     ranked = service.rank("run_a")
     assert ranked["data"]["filters"] == []
     assert ranked["data"]["monitored_facility_count"] == 5
@@ -428,22 +424,18 @@ def test_comparison_reports_unmatched_facilities_and_rating_change(agent_context
     assert all(row["line_id"] not in ("first-only", "second-only") for row in compared["data"]["rows"])
 
 
-def test_bus_search_handles_truncated_psse_names_in_both_paths(agent_context):
-    """Find a truncated bus name in cached metadata and in the endpoint fallback."""
+def test_rank_qualifiers_match_truncated_psse_names(agent_context):
+    """A matches qualifier on bus_name finds a facility by a truncated PSS/E endpoint name."""
     run = agent_context.run("run_a")
-    source = run / "work/case_buses.csv"
-    source.write_text("bus_id,bus_name\n11,EAST BERNA~1\n12,EDNA 1 1\n")
-    _rewrite_cached_table(run, "bus_metadata", [{"bus_id": "11", "bus_name": "EAST BERNA~1"}, {"bus_id": "12", "bus_name": "EDNA 1 1"}], "case_buses.csv")
-    result = ToolService(agent_context).search_buses("run_a", "east bernard")
-    assert [(row["bus_id"], row["match_kind"]) for row in result["data"]["rows"]] == [("11", "fuzzy")]
-    assert ToolService(agent_context).search_buses("run_a", "b")["data"]["rows"] == []
-    source.unlink()
-    branch = _cached_rows(run, "branch_metadata")
-    for row in branch:
-        row["from_bus_name"] = "EAST BERNA~1"
-    _rewrite_cached_table(run, "branch_metadata", branch)
-    fallback = ToolService(agent_context).search_buses("run_a", "east bernard")
-    assert fallback["data"]["rows"][0]["match_kind"] == "fuzzy"
+    for name in ("pflow_mm", "branch_metadata"):
+        rows = _cached_rows(run, name)
+        for row in rows:
+            row["from_bus_name"] = "EAST BERNA~1"
+        _rewrite_cached_table(run, name, rows)
+    found = ToolService(agent_context).rank("run_a", filters=[{"column": "bus_name", "op": "matches", "value": "east bernard"}])
+    assert found["data"]["total_matching"] == 3
+    assert ToolService(agent_context).rank("run_a", filters=[{"column": "bus_name", "op": "matches", "value": "b"}])["data"]["total_matching"] == 3
+    assert ToolService(agent_context).rank("run_a", filters=[{"column": "bus_name", "op": "matches", "value": "gamma"}])["data"]["total_matching"] == 0
 
 
 def test_unexpected_failure_is_stable_and_audit_is_paired(agent_context, monkeypatch):
@@ -507,9 +499,10 @@ def test_model_visible_strings_and_audits_are_bounded_utf8(agent_context):
     os.close(descriptor)
     service = ToolService(agent_context)
     results = [
-        service.rank("run_a", fields=["bus_name"]), service.search_buses("run_a", "IGNORE"),
-        service.get_run_method("run_a"), service.rank("run_a", filters=[{"column": "max_utilization_pct", "op": ">", "value": 100}]),
-        service.rank_groups("run_a", group="control_area"), service.locate_run_artifacts("run_a", "flat_results"),
+        service.rank("run_a", fields=["bus_name"]),
+        service.read_file("runs/run_a/reports/interactive_tables/branch_metadata.csv", filters=[{"column": "from_bus_name", "op": "matches", "value": "IGNORE"}]),
+        service.read_file("runs/run_a/work/input.xml", limit=0), service.rank("run_a", filters=[{"column": "max_utilization_pct", "op": ">", "value": 100}]),
+        service.rank_groups("run_a", group="control_area"), service.list_files(folder="runs/run_a/work"),
     ]
 
     def check(value):
@@ -542,13 +535,11 @@ def test_all_tool_names_have_a_direct_result_contract(agent_context):
     """Each exposed tool is callable under a scoped context and returns a stable result envelope."""
     service = ToolService(agent_context)
     arguments = {
-        "get_run_inventory": (), "locate_run_artifacts": ("run_a", "raw_input"), "get_run_method": ("run_a",),
-        "summarize_convergence": ("run_a",), "rank": ("run_a",), "rank_groups": ("run_a",),
-        "search_buses": ("run_a", "AL"), "compare_runs": ("run_a", "run_b"), "rank_contingencies": ("run_a",),
+        "get_run_inventory": (), "rank": ("run_a",), "rank_groups": ("run_a",),
+        "compare_runs": ("run_a", "run_b"), "rank_contingencies": ("run_a",),
         "get_contingency_flows": ("run_a", 1), "get_branch_contingencies": ("run_a", 1, 2, "1"),
-        "propose_analysis_script": ("run_a", "Count rows", "print(1)"), "get_script_result": ("not-a-proposal",),
-        "list_files": (), "describe_file": ("runs/run_a/work/case_flat.csv",), "query_table": ("runs/run_a/work/case_flat.csv",),
-        "read_text_file": ("runs/run_a/work/case_flat.csv",), "read_document": ("runs/run_a/manifest.json",),
+        "propose_analysis_script": ("run_a", "Count rows", "print(1)"),
+        "list_files": (), "read_file": ("runs/run_a/work/case_flat.csv",),
         "list_projects": (), "get_project": (), "create_project": ("Other", []), "add_project_inputs": ([],),
         "get_run_configuration": (), "configure_run": ({},), "start_run": (), "get_run_status": ("run_a",),
         "stop_run": ("run_x",), "run_analysis": ("missing",), "get_job": ("not-a-job",), "list_jobs": (), "cancel_job": ("not-a-job",),

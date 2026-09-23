@@ -61,7 +61,7 @@ def test_official_sdk_client_tools_and_scope(agent_context):
             # The schema names the qualifier columns, so an unknown one is refused before the tool runs.
             unknown_column = await client.call_tool("rank", {"run_id": "run_a", "filters": [{"column": "zone", "op": "==", "value": 1}]})
             assert unknown_column.isError
-            rejected = await client.call_tool("get_run_method", {"run_id": "../outside"})
+            rejected = await client.call_tool("rank", {"run_id": "../outside"})
             assert json.loads(rejected.content[0].text)["error"]["code"] == "INVALID_RUN_ID"
     asyncio.run(exercise())
 
@@ -84,7 +84,7 @@ def test_agent_tool_cli_contract(agent_context):
     completed = run(str(context), "get_run_inventory")
     assert completed.returncode == 0
     assert json.loads(completed.stdout)["error"] is None
-    completed = run(str(context), "get_run_method", "--arguments", json.dumps({"run_id": "../x"}))
+    completed = run(str(context), "rank", "--arguments", json.dumps({"run_id": "../x"}))
     assert completed.returncode == 1
     assert json.loads(completed.stdout)["error"]["code"] == "INVALID_RUN_ID"
     # An unexpected argument is a tool-envelope error (exit 1), not a usage error (exit 2).
