@@ -26,6 +26,13 @@ class UtilizationBranchOptions:
 
 
 DEFAULT_UTILIZATION_BRANCH_OPTIONS = UtilizationBranchOptions()
+# The facility types Transformer Analysis shows: every transformer kind and no plain lines.
+TRANSFORMER_UTILIZATION_BRANCH_OPTIONS = UtilizationBranchOptions(
+    include_nontransformer_branches=False,
+    include_two_winding_transformers=True,
+    include_three_winding_transformers=True,
+    include_transformer_equivalents=True,
+)
 
 
 def selected_utilization_branch_types(
@@ -66,6 +73,7 @@ def is_transformer_branch_type(branch_type: object) -> bool:
 
 __all__ = [
     "DEFAULT_UTILIZATION_BRANCH_OPTIONS",
+    "TRANSFORMER_UTILIZATION_BRANCH_OPTIONS",
     "NONTRANSFORMER_BRANCH",
     "THREE_WINDING_TRANSFORMER_BRANCH",
     "TRANSFORMER_BRANCH_TYPES",

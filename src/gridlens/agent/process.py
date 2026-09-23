@@ -30,11 +30,16 @@ def minimal_environment(*, loopback_only: bool = True) -> dict[str, str]:
     return environment
 
 
+def gridlens_command(*arguments: str) -> list[str]:
+    """Return the argv that runs GridLens with arguments, for the source and frozen entry points."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *arguments]
+    return [sys.executable, "-m", "gridlens", *arguments]
+
+
 def mcp_command() -> list[str]:
     """Return the argv that starts the GridLens MCP server, for the source and frozen entry points."""
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "--mcp-server"]
-    return [sys.executable, "-m", "gridlens", "--mcp-server"]
+    return gridlens_command("--mcp-server")
 
 
 def mcp_server_environment(session_directory: Path) -> dict[str, str]:

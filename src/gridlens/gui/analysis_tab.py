@@ -45,7 +45,7 @@ from gridlens.analysis.interactive import (
 )
 from gridlens.analysis.progress import AnalysisProgress, ProgressCallback
 from gridlens.analysis.service import AnalysisService
-from gridlens.analysis.utilization import UtilizationBranchOptions
+from gridlens.analysis.utilization import TRANSFORMER_UTILIZATION_BRANCH_OPTIONS, UtilizationBranchOptions
 from gridlens.core.project import Project
 from gridlens.gui.analysis_view_models import (
     numeric_value,
@@ -492,12 +492,7 @@ class AnalysisTab(QWidget):
 
     def _utilization_branch_options(self) -> UtilizationBranchOptions:
         if self.transformer_analysis:
-            return UtilizationBranchOptions(
-                include_nontransformer_branches=False,
-                include_two_winding_transformers=True,
-                include_three_winding_transformers=True,
-                include_transformer_equivalents=True,
-            )
+            return TRANSFORMER_UTILIZATION_BRANCH_OPTIONS
         return UtilizationBranchOptions()
 
     def _update_generated_status(self) -> None:
