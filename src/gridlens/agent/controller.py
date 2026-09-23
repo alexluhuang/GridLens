@@ -185,16 +185,16 @@ class AgentController:
                 current = sources[prior_calls:]
                 complete = any(group_mean_source(row, group_by, facility) and not row["result"]["data"].get("truncated") for row in current)
                 if not complete:
-                    emit(RuntimeEvent("tool_start", "summarize_loading (verified scope)"))
-                    summary = ToolService(self.context).summarize_loading(self.context.run_ids[0], group_by=group_by, facility=facility, limit=0)
-                    emit(RuntimeEvent("tool_result", "summarize_loading (verified scope)", {"is_error": bool(summary["error"])}))
+                    emit(RuntimeEvent("tool_start", "rank_groups (verified scope)"))
+                    summary = ToolService(self.context).rank_groups(self.context.run_ids[0], group=RANK_GROUPS_GROUP[group_by], object=RANK_GROUPS_OBJECT[facility], magnitude=0)
+                    emit(RuntimeEvent("tool_result", "rank_groups (verified scope)", {"is_error": bool(summary["error"])}))
                     sources = session_sources(self.context.directory)
             top_count = top_line_area_request(prompt)
             if top_count and len(self.context.run_ids) == 1:
                 if ranked_line_source(sources[prior_calls:], self.context.run_ids[0], top_count) is None:
-                    emit(RuntimeEvent("tool_start", "rank_branch_loading (verified areas)"))
-                    ranking = ToolService(self.context).rank_branch_loading(self.context.run_ids[0], limit=top_count)
-                    emit(RuntimeEvent("tool_result", "rank_branch_loading (verified areas)", {"is_error": bool(ranking["error"])}))
+                    emit(RuntimeEvent("tool_start", "rank (verified areas)"))
+                    ranking = ToolService(self.context).rank(self.context.run_ids[0], magnitude=top_count, fields=list(AREA_FIELDS))
+                    emit(RuntimeEvent("tool_result", "rank (verified areas)", {"is_error": bool(ranking["error"])}))
                     sources = session_sources(self.context.directory)
             final = normalize_citations(final, sources)
             final = cite_uncited_turn(final, sources[prior_calls:])
@@ -278,12 +278,19 @@ def disclose_truncated_results(answer: str, turn_sources: list[dict]) -> str:
     for row in turn_sources:
         data = ((row.get("result") or {}).get("data") or {})
         if data.get("truncated"):
-            notes.append(f"[{row['call_id']}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching rows; more are available from offset {data.get('next_offset') or 0:,}")
+            notes.append(f"[{row['call_id']}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching rows; {_more_rows(row)}")
         if data.get("result_file"):
             notes.append(f"[{row['call_id']}] showed {data.get('inline_rows', 0):,} rows inline; its complete result is in {data.get('rows_file') or data['result_file']}")
     if not notes:
         return answer
     return answer.rstrip() + "\n\nGridLens audit: " + "; ".join(notes[:10]) + "."
+
+
+def _more_rows(row: dict) -> str:
+    """Say how to get the rest of a partial result: a larger magnitude for the rank tools, else an offset."""
+    if row.get("tool") in ("rank", "rank_groups"):
+        return "more are available with a larger magnitude, or magnitude=0 for all"
+    return f"more are available from offset {((row.get('result') or {}).get('data') or {}).get('next_offset') or 0:,}"
 
 
 def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
@@ -319,24 +326,23 @@ def group_mean_request(question: str) -> tuple[str, str] | None:
     return group_by, "all" if all_types else "line"
 
 
-# The rank_groups arguments that compute the same whole-population means as summarize_loading.
+# The rank_groups arguments that answer a whole-run group-mean question, by the question's grouping and scope.
 RANK_GROUPS_GROUP = {"area": "control_area", "voltage": "voltage_class"}
 RANK_GROUPS_OBJECT = {"line": "branches", "all": "both"}
+# The fields an audited top-line ranking needs so area answers can name both endpoints.
+AREA_FIELDS = ("control_area", "bus_name")
 
 
 def group_mean_source(row: dict, group_by: str, facility: str) -> bool:
-    """Return whether an audited call computed mean maximum loading over every facility of each group.
+    """Return whether an audited rank_groups call computed mean maximum loading over every facility of each group.
 
-    That is summarize_loading for group_by and facility over every area at the 50 kV cutoff, or
-    rank_groups with the same group and objects, no qualifiers, and statistic='mean' of max_utilization_pct.
+    It must use the question's group and objects, no qualifiers, no comparison run, and statistic='mean'
+    of max_utilization_pct.
     """
     arguments = row.get("arguments") or {}
-    if row.get("outcome") != "ok":
-        return False
-    if row.get("tool") == "summarize_loading":
-        return (arguments.get("group_by"), arguments.get("facility"), arguments.get("area") or "", arguments.get("min_kv", 50.0)) == (group_by, facility, "", 50.0)
     return (
-        row.get("tool") == "rank_groups" and not arguments.get("filters")
+        row.get("tool") == "rank_groups" and row.get("outcome") == "ok"
+        and not arguments.get("filters") and not arguments.get("compare_run_id")
         and (arguments.get("group"), arguments.get("object"), arguments.get("metric"), arguments.get("statistic"))
         == (RANK_GROUPS_GROUP[group_by], RANK_GROUPS_OBJECT.get(facility), "max_utilization_pct", "mean")
     )
@@ -349,15 +355,15 @@ def verified_group_mean_answer(answer: str, question: str, turn_sources: list[di
         return answer
     group_by, facility = request
     if group_by == "voltage":
-        key, title, mean_label = "voltage_group", "Voltage groups", "voltage-group"
+        title, mean_label = "Voltage groups", "voltage-group"
     else:
-        key, title, mean_label = "control_area", "Control areas", "control-area"
+        title, mean_label = "Control areas", "control-area"
     matching = [row for row in turn_sources if group_mean_source(row, group_by, facility) and row["arguments"].get("run_id") == run_ids[0]]
     if not matching:
         if any(((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT" for row in turn_sources):
             return "The analysis cache is unavailable. Use Build / refresh analysis and ask again."
-        needed = f"rank_groups(group='{RANK_GROUPS_GROUP[group_by]}', object='{RANK_GROUPS_OBJECT.get(facility)}') or summarize_loading(group_by='{group_by}', facility='{facility}')"
-        ranked = [row for row in turn_sources if row.get("tool") in ("rank_branch_loading", "rank") and row.get("outcome") == "ok"]
+        needed = f"rank_groups(group='{RANK_GROUPS_GROUP[group_by]}', object='{RANK_GROUPS_OBJECT.get(facility)}')"
+        ranked = [row for row in turn_sources if row.get("tool") == "rank" and row.get("outcome") == "ok"]
         if ranked:
             data = ranked[-1]["result"]["data"]
             return f"I cannot verify whole-run {mean_label} means from ranked rows. [{ranked[-1]['call_id']}] returned {data['returned']:,} of {data['total_matching']:,} facilities. A complete {needed} result is needed."
@@ -366,13 +372,8 @@ def verified_group_mean_answer(answer: str, question: str, turn_sources: list[di
     data = source["result"]["data"]
     if data.get("truncated") or data.get("returned") != data.get("total_matching"):
         return f"[{source['call_id']}] returned only {data.get('returned', 0)} of {data.get('total_matching', 0)} {title.lower()}; I cannot rank every category from it. Narrow the filters and ask again."
-    if source["tool"] == "rank_groups":
-        groups = [(row["group"], float(row["value"]), row["count"]) for row in data["rows"]]
-        count = data.get("objects_used", 0)
-    else:
-        groups = [(row[key], float(row["average_utilization_pct"]), row["line_count"]) for row in data["rows"]]
-        count = data.get("analyzed_facility_count", 0)
-    groups.sort(key=lambda group: -group[1])
+    groups = sorted(((row["group"], float(row["value"]), row["count"]) for row in data["rows"]), key=lambda group: -group[1])
+    count = data.get("objects_used", 0)
     noun = "facility" if count == 1 else "facilities"
     lines = [f"{title}, ranked by mean maximum observed loading across all {count:,} matching {noun} ({facility}, all control areas, at least 50 kV) [{source['call_id']}]:"]
     lines.extend(f"- {label}: {value:.1f}% ({members:,} facilities)" for label, value, members in groups)
@@ -400,13 +401,15 @@ def top_line_area_request(question: str) -> int | None:
 
 
 def ranked_line_source(sources: list[dict], run_id: str, count: int) -> dict | None:
-    """Find an audited unfiltered line ranking with count rows for the area-answer helpers."""
+    """Find an audited, unqualified line ranking by maximum loading, with endpoint areas, of at least count rows."""
     for source in reversed(sources):
         args = source.get("arguments") or {}
         data = ((source.get("result") or {}).get("data") or {})
-        if source.get("tool") != "rank_branch_loading" or source.get("outcome") != "ok":
+        if source.get("tool") != "rank" or source.get("outcome") != "ok" or args.get("filters") or args.get("compare_run_id"):
             continue
-        if (args.get("run_id"), args.get("metric"), args.get("facility"), args.get("area"), args.get("min_kv")) != (run_id, "max_utilization_pct", "line", "", 50.0):
+        if (args.get("run_id"), args.get("metric"), args.get("object"), args.get("order")) != (run_id, "max_utilization_pct", "branches", "descending"):
+            continue
+        if not set(AREA_FIELDS) <= set(args.get("fields") or ()):
             continue
         if data.get("returned", 0) >= count or data.get("returned") == data.get("total_matching"):
             return source
@@ -427,8 +430,8 @@ def verified_top_line_areas(answer: str, question: str, turn_sources: list[dict]
         return f"No eligible lines were found in the selected run [{source['call_id']}]."
     lines = [f"Top {len(rows)} congested lines by maximum observed loading, with both endpoint control areas where they differ [{source['call_id']}]:"]
     for index, row in enumerate(rows, 1):
-        areas = ", ".join(row.get("control_areas") or ["unknown"])
-        lines.append(f"{index}. {row['line_label']}: {areas} ({float(row['max_utilization_pct']):.1f}%).")
+        areas = ", ".join(row.get("control_area") or ["unknown"])
+        lines.append(f"{index}. {row['object']}: {areas} ({float(row['value']):.1f}%).")
     if len(rows) < count:
         lines.append(f"Only {data['total_matching']:,} eligible lines matched the run scope.")
     return "\n".join(lines)
@@ -446,11 +449,11 @@ def verified_singular_line_area(answer: str, question: str, previous_answer: str
         return "I cannot verify that line's area from an audited ranking. Ask for the most congested line again."
     row = source["result"]["data"]["rows"][0]
     prior = " ".join(previous_answer.casefold().split())
-    endpoints = (str(row.get("from_bus_name") or "").casefold(), str(row.get("to_bus_name") or "").casefold())
+    endpoints = [str(name or "").casefold() for name in row.get("bus_name") or ()]
     if any(endpoint and " ".join(endpoint.split()) not in prior for endpoint in endpoints):
         return "The line named in the previous answer does not match the audited top line. Name its buses and circuit."
-    areas = ", ".join(row.get("control_areas") or ["unknown"])
-    return f"{row['line_label']} has endpoint control area(s): {areas} [{source['call_id']}]."
+    areas = ", ".join(row.get("control_area") or ["unknown"])
+    return f"{row['object']} has endpoint control area(s): {areas} [{source['call_id']}]."
 
 
 def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) -> str:
@@ -469,21 +472,23 @@ def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) ->
         data = result.get("data") or {}
         error = result.get("error") or {}
         call_id = row["call_id"]
-        requested = data.get("limit", (row.get("arguments") or {}).get("limit"))
+        by_magnitude = row.get("tool") in ("rank", "rank_groups")
+        requested = (row.get("arguments") or {}).get("magnitude") if by_magnitude else data.get("limit", (row.get("arguments") or {}).get("limit"))
         if error:
             lines.append(f"[{call_id}] returned no rows because the call failed with {error.get('code', 'UNKNOWN')}.")
         else:
-            kind = {"summarize_loading": "category rows", "rank_groups": "group rows"}.get(row.get("tool"), "facility rows")
+            kind = {"rank_groups": "group rows", "rank": "object rows"}.get(row.get("tool"), "rows")
             lines.append(f"[{call_id}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching {kind}; truncated: {bool(data.get('truncated'))}.")
-            if row.get("tool") == "summarize_loading":
-                lines.append(f"Its group means were computed from all {data.get('analyzed_facility_count', 0):,} matching facilities before limiting category rows.")
-            elif row.get("tool") == "rank_groups":
+            if row.get("tool") == "rank_groups":
                 lines.append(f"Its group statistics were computed from all {data.get('objects_used', 0):,} matching objects before limiting group rows.")
         if requested is not None:
             requested_text = "all rows" if requested == 0 else f"{requested:,}" if isinstance(requested, int) else str(requested)
-            lines.append(f"Requested row limit: {requested_text}; offset: {data.get('offset') or 0:,}.")
+            if by_magnitude:
+                lines.append(f"Requested magnitude: {requested_text}.")
+            else:
+                lines.append(f"Requested row limit: {requested_text}; offset: {data.get('offset') or 0:,}.")
         if data.get("next_offset") is not None:
-            lines.append(f"More matching rows are available from offset {data['next_offset']:,}.")
+            lines.append("More matching rows are " + _more_rows(row).removeprefix("more are ") + ".")
         if data.get("result_file"):
             lines.append(f"{data.get('inline_rows', 0):,} rows were shown inline; the complete result is in {data.get('rows_file') or data['result_file']}.")
     lines.append("GridLens applies no maximum row count: limit=0, or magnitude=0 for rank and rank_groups, returns every matching row, and offset pages the other tools.")

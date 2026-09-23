@@ -41,12 +41,12 @@ def _cached_rows(run: Path, name: str) -> list[dict]:
 
 def test_ranking_matches_gui_and_keeps_circuits_sections(agent_context):
     service = ToolService(agent_context)
-    result = service.rank_branch_loading("run_a", limit=2)
+    result = service.rank("run_a", magnitude=2)
     assert result["error"] is None
     assert result["data"]["total_matching"] == 3
     assert result["data"]["truncated"] is True
     assert (result["data"]["offset"], result["data"]["limit"], result["data"]["next_offset"]) == (0, 2, 2)
-    assert [row["max_utilization_pct"] for row in result["data"]["rows"]] == [120, 110]
+    assert [row["value"] for row in result["data"]["rows"]] == [120, 110]
     assert [row["section"] for row in result["data"]["rows"]] == ["", "2"]
     gui = max_line_utilization_rows(_load_cached_interactive_dataset(agent_context.run("run_a")).tables)
     assert sorted(row["max_utilization_pct"] for row in gui) == [80, 110, 120]
@@ -58,21 +58,35 @@ def test_ranking_matches_gui_and_keeps_circuits_sections(agent_context):
 
 def test_margin_base_transformers_groups_and_threshold(agent_context):
     service = ToolService(agent_context)
-    margin = service.rank_branch_loading("run_a", metric="thermal_margin_pct_points")
-    assert [row["thermal_margin_pct_points"] for row in margin["data"]["rows"]] == [20, -10, -20]
-    base = service.rank_branch_loading("run_a", metric="base_utilization_pct")
-    assert base["data"]["rows"][0]["base_utilization_pct"] == 70
-    transformer = service.rank_branch_loading("run_a", facility="two_winding_transformer")
-    assert transformer["data"]["rows"][0]["line_id"] == "T"
-    assert service.list_thermal_violations("run_a", threshold_pct=110)["data"]["total_matching"] == 1
-    grouped = service.summarize_loading("run_a", group_by="area")
-    assert [row["line_count"] for row in grouped["data"]["rows"]] == [3, 3]
-    assert grouped["data"]["rows"][0]["average_utilization_pct"] == pytest.approx(103.333333)
+    margin = service.rank("run_a", metric="thermal_margin_pct_points")
+    assert [row["value"] for row in margin["data"]["rows"]] == [20, -10, -20]
+    assert margin["data"]["units"] == "percentage points"
+    base = service.rank("run_a", metric="base_utilization_pct")
+    assert base["data"]["rows"][0]["value"] == 70
+    two_winding = [{"column": "branch_type", "op": "==", "value": "two_winding_transformer_branch"}]
+    assert service.rank("run_a", object="transformers", filters=two_winding)["data"]["rows"][0]["line_id"] == "T"
+    assert service.rank("run_a", filters=[{"column": "max_utilization_pct", "op": ">", "value": 110}])["data"]["total_matching"] == 1
+    grouped = service.rank_groups("run_a", group="control_area")
+    assert [row["count"] for row in grouped["data"]["rows"]] == [3, 3]
+    assert grouped["data"]["rows"][0]["value"] == pytest.approx(103.333333)
+
+
+def test_one_facility_is_a_rank_with_its_full_key(agent_context):
+    """Looking up one facility is a rank over the full key, and a parallel circuit stays its own object."""
+    service = ToolService(agent_context)
+    key = [{"column": "from_bus", "op": "==", "value": 1}, {"column": "to_bus", "op": "==", "value": 2}, {"column": "line_id", "op": "==", "value": "1"}]
+    both_sections = service.rank("run_a", object="both", filters=key, fields=["base_utilization_pct", "control_area", "rating_mva"])
+    assert [(row["section"], row["value"], row["base_utilization_pct"]) for row in both_sections["data"]["rows"]] == [("", 120, 70), ("2", 110, 60)]
+    assert both_sections["data"]["rows"][0]["control_area"] == ["North", "South"]
+    assert both_sections["data"]["rows"][0]["rating_mva"] == 100
+    section = service.rank("run_a", object="both", filters=[*key, {"column": "section", "op": "==", "value": "2"}])
+    assert [row["value"] for row in section["data"]["rows"]] == [110]
+    assert service.rank("run_a", filters=[{"column": "from_bus", "op": "==", "value": 99}])["data"]["total_matching"] == 0
+    assert service.rank("run_a", fields=["zone"])["error"]["code"] == "INVALID_FIELD"
 
 
 def test_branch_search_method_and_comparison(agent_context):
     service = ToolService(agent_context)
-    assert service.get_branch_loading("run_a", 1, 2, "1", "2")["data"]["rows"][0]["max_utilization_pct"] == 110
     assert service.search_buses("run_a", "al")["data"]["rows"][0]["bus_id"] == "1"
     assert service.get_run_method("run_a")["data"]["rows"][0]["xml_settings"]["FullBranchN1"] == "true"
     comparison = service.compare_runs("run_a", "run_b")
@@ -83,7 +97,7 @@ def test_branch_search_method_and_comparison(agent_context):
 
 @pytest.mark.parametrize("run_id,code", [("../run_b", "INVALID_RUN_ID"), ("/tmp", "INVALID_RUN_ID"), ("missing", "RUN_NOT_FOUND"), ("run_a/../../run_b", "INVALID_RUN_ID")])
 def test_run_ids_must_name_a_run_folder(agent_context, run_id, code):
-    result = ToolService(agent_context).rank_branch_loading(run_id)
+    result = ToolService(agent_context).rank(run_id)
     assert result["error"]["code"] == code
 
 
@@ -92,12 +106,12 @@ def test_any_run_and_any_project_is_reachable(agent_project, tmp_path):
     context = SessionContext.create(agent_project, ("run_a",), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path)
     service = ToolService(context)
     assert service.compare_runs("run_a", "run_b")["error"] is None
-    assert service.rank_branch_loading("run_b", project=agent_project.name)["error"] is None
-    assert service.rank_branch_loading("run_b", project=str(agent_project))["error"] is None
-    assert service.rank_branch_loading("run_b", project="Synthetic Project")["error"] is None
-    assert service.rank_branch_loading("run_b", project="No Such Project")["error"]["code"] == "PROJECT_NOT_FOUND"
+    assert service.rank("run_b", project=agent_project.name)["error"] is None
+    assert service.rank("run_b", project=str(agent_project))["error"] is None
+    assert service.rank("run_b", project="Synthetic Project")["error"] is None
+    assert service.rank("run_b", project="No Such Project")["error"]["code"] == "PROJECT_NOT_FOUND"
     (agent_project / "runs/run_b/status.json").write_text('{"status": "running"}')
-    assert service.rank_branch_loading("run_b")["error"]["code"] == "RUN_NOT_COMPLETED"
+    assert service.rank("run_b")["error"]["code"] == "RUN_NOT_COMPLETED"
     assert service.locate_run_artifacts("run_b", "raw_input")["error"] is None
     inventory = service.get_run_inventory()["data"]["rows"]
     assert [(row["run_id"], row["status"], row["selected_in_gui"]) for row in inventory] == [("run_b", "running", False), ("run_a", "completed", True)]
@@ -119,7 +133,7 @@ def test_stale_cache_never_reads_flat_data(agent_context, monkeypatch):
     os.utime(source, (2_000_000_000, 2_000_000_000))
     import gridlens.analysis.dataset as dataset
     monkeypatch.setattr(dataset, "build_run_analysis", lambda *a, **k: pytest.fail("cold parse must not run"))
-    assert ToolService(agent_context).rank_branch_loading("run_a")["error"]["code"] == "ANALYSIS_NOT_BUILT"
+    assert ToolService(agent_context).rank("run_a")["error"]["code"] == "ANALYSIS_NOT_BUILT"
 
 
 def test_symlink_escape_blocked(agent_context, tmp_path):
@@ -127,7 +141,7 @@ def test_symlink_escape_blocked(agent_context, tmp_path):
     target = tmp_path / "outside.csv"
     cache.rename(target)
     cache.symlink_to(target)
-    assert ToolService(agent_context).rank_branch_loading("run_a")["error"]["code"] == "PATH_OUTSIDE_SESSION"
+    assert ToolService(agent_context).rank("run_a")["error"]["code"] == "PATH_OUTSIDE_SESSION"
 
 
 def test_source_path_in_manifest_cannot_escape(agent_context):
@@ -135,7 +149,7 @@ def test_source_path_in_manifest_cannot_escape(agent_context):
     data = json.loads(manifest.read_text())
     data["tables"]["pflow_mm"]["source_file"] = "../../run_b/work/case_flat.csv"
     manifest.write_text(json.dumps(data))
-    assert ToolService(agent_context).rank_branch_loading("run_a")["error"]["code"] == "PATH_OUTSIDE_SESSION"
+    assert ToolService(agent_context).rank("run_a")["error"]["code"] == "PATH_OUTSIDE_SESSION"
 
 
 def test_rank_returns_each_object_with_the_value_it_was_sorted_by(agent_context):
@@ -194,7 +208,6 @@ def test_rank_groups_computes_each_statistic_over_every_object(agent_context):
     data = grouped["data"]
     assert grouped["error"] is None
     assert data["rows"] == [{"rank": 1, "group": "230-344 kV", "value": pytest.approx(103.333333), "count": 3}]
-    assert data["rows"][0]["value"] == pytest.approx(service.summarize_loading("run_a", group_by="voltage")["data"]["rows"][0]["average_utilization_pct"])
     assert (data["objects_used"], data["units"], data["statistic"]) == (3, "%", "mean")
     # The group holds 120, 80, and 110; percentiles interpolate linearly and std and var divide by n.
     expected = {"mean": 103.333333, "median": 110, "min": 80, "max": 120, "std": 16.996732, "var": 288.888889, "iqr": 20, "count": 3}
@@ -223,52 +236,49 @@ def test_rank_groups_groups_filters_orders_and_limits(agent_context):
     assert service.rank_groups("run_a", group="binding_contingency", statistic="max")["data"]["rows"] == [{"rank": 1, "group": "line outage", "value": 120, "count": 3}]
 
 
-def test_paging_has_no_row_cap_and_is_audited(agent_context):
-    """Any limit is accepted, limit=0 returns every row, offset pages, and every call is audited."""
+def test_any_magnitude_is_accepted_and_every_call_is_audited(agent_context):
+    """Any magnitude is accepted, magnitude=0 returns every object, and every call is audited."""
     service = ToolService(agent_context)
-    assert service.rank_branch_loading("run_a", min_kv=0)["error"]["code"] == "INVALID_FILTER"
-    assert service.rank_branch_loading("run_a", limit=-1)["error"]["code"] == "INVALID_DATA_OR_ARGUMENT"
-    everything = service.rank_branch_loading("run_a", limit=10_000)
+    assert service.rank("run_a", magnitude=-1)["error"]["code"] == "INVALID_DATA_OR_ARGUMENT"
+    everything = service.rank("run_a", magnitude=10_000)
     assert everything["error"] is None
     assert (everything["data"]["returned"], everything["data"]["total_matching"], everything["data"]["truncated"]) == (3, 3, False)
-    assert service.rank_branch_loading("run_a", limit=0)["data"]["rows"] == everything["data"]["rows"]
-    second = service.rank_branch_loading("run_a", offset=1, limit=1)
-    assert second["data"]["rows"] == everything["data"]["rows"][1:2]
-    assert (second["data"]["offset"], second["data"]["next_offset"]) == (1, 2)
+    assert service.rank("run_a", magnitude=0)["data"]["rows"] == everything["data"]["rows"]
     records = [json.loads(line) for line in (agent_context.directory / "tool_calls.jsonl").read_text().splitlines()]
     completed = [record for record in records if record["phase"] == "completed"]
-    assert [record["call_id"] for record in completed] == ["T1", "T2", "T3", "T4", "T5"]
-    assert completed[1]["outcome"] == "error"
-    assert completed[2]["result"] == everything
+    assert [record["call_id"] for record in completed] == ["T1", "T2", "T3"]
+    assert completed[0]["outcome"] == "error"
+    assert completed[1]["result"] == everything
 
 
 def test_large_results_are_saved_whole_and_group_means_use_all_rows(agent_context):
     """A result too large to send inline keeps every row in the session's results folder."""
     run = agent_context.run("run_a")
     template = _cached_rows(run, "pflow_mm")[0]
-    rows = [{**template, "line_id": str(number), "max_utilization_pct": number} for number in range(1, 101)]
+    # Enough compact rank rows to pass the inline budget.
+    rows = [{**template, "line_id": str(number), "max_utilization_pct": number} for number in range(1, 401)]
     _rewrite_cached_table(run, "pflow_mm", rows)
     _rewrite_cached_table(run, "branch_metadata", rows)
     service = ToolService(agent_context)
-    ranked = service.rank_branch_loading("run_a", limit=0)
+    ranked = service.rank("run_a", magnitude=0)
     data = ranked["data"]
     assert ranked["error"] is None
-    assert (data["returned"], data["total_matching"], data["truncated"]) == (100, 100, False)
-    assert 0 < data["inline_rows"] == len(data["rows"]) < 100
+    assert (data["returned"], data["total_matching"], data["truncated"]) == (400, 400, False)
+    assert 0 < data["inline_rows"] == len(data["rows"]) < 400
     assert len(json.dumps(ranked, ensure_ascii=False).encode()) <= MAX_INLINE_BYTES
     assert Path(data["result_file"]).parent == agent_context.directory / "results"
-    assert len(json.loads(Path(data["result_file"]).read_text())["data"]["rows"]) == 100
+    assert len(json.loads(Path(data["result_file"]).read_text())["data"]["rows"]) == 400
     with open(data["rows_file"], newline="") as handle:
-        assert [row["line_id"] for row in csv.DictReader(handle)] == [str(number) for number in range(100, 0, -1)]
+        assert [row["line_id"] for row in csv.DictReader(handle)] == [str(number) for number in range(400, 0, -1)]
     assert any("too large to show whole" in warning for warning in ranked["warnings"])
     audit = [json.loads(line) for line in (agent_context.directory / "tool_calls.jsonl").read_text().splitlines()]
     assert audit[-1]["result"] == ranked
-    grouped = service.summarize_loading("run_a", group_by="voltage")
+    grouped = service.rank_groups("run_a", group="voltage_class")
     assert grouped["error"] is None
-    assert grouped["data"]["analyzed_facility_count"] == 100
+    assert grouped["data"]["objects_used"] == 400
     assert grouped["data"]["truncated"] is False
-    assert grouped["data"]["rows"][0]["line_count"] == 100
-    assert grouped["data"]["rows"][0]["average_utilization_pct"] == 50.5
+    assert grouped["data"]["rows"][0]["count"] == 400
+    assert grouped["data"]["rows"][0]["value"] == 200.5
 
 
 def test_a_result_too_large_even_without_rows_keeps_only_its_page_fields(agent_context, monkeypatch):
@@ -276,7 +286,7 @@ def test_a_result_too_large_even_without_rows_keeps_only_its_page_fields(agent_c
     import gridlens.agent.tool_base as tool_base
 
     monkeypatch.setattr(tool_base, "MAX_INLINE_BYTES", 1500)
-    ranked = ToolService(agent_context).rank_branch_loading("run_a", limit=0)
+    ranked = ToolService(agent_context).rank("run_a", magnitude=0)
     data = ranked["data"]
     assert (data["rows"], data["inline_rows"], data["returned"], data["total_matching"]) == ([], 0, 3, 3)
     assert "filters" not in data and Path(data["result_file"]).is_file()
@@ -366,11 +376,12 @@ def test_method_settings_rating_basis_and_filter_scope(agent_context):
     assert settings["Contingency_analysis/contingencyRating"] == "C"
     assert settings["Contingency_analysis/qlim"] == "true"
     assert settings["Powerflow/qlim"] == "false"
-    ranked = service.rank_branch_loading("run_a")
-    assert ranked["data"]["filters"] == {"facility": "line", "min_kv": 50.0, "area": ""}
+    ranked = service.rank("run_a")
+    assert ranked["data"]["filters"] == []
     assert ranked["data"]["monitored_facility_count"] == 5
     assert ranked["data"]["configured_contingency_rating"] == "C"
-    assert any("excluded by facility='line'" in warning for warning in ranked["warnings"])
+    assert ranked["data"]["rating_basis"] == ["GridPACK reported loading_percent / rate_mva"]
+    assert any("excluded by object='branches'; use object='both'" in warning for warning in ranked["warnings"])
     assert any("fixed 50 kV" in warning for warning in ranked["warnings"])
     pflow = _cached_rows(run, "pflow_mm")
     branch = _cached_rows(run, "branch_metadata")
@@ -383,12 +394,13 @@ def test_method_settings_rating_basis_and_filter_scope(agent_context):
     _rewrite_cached_table(run, "branch_metadata", branch)
     xml = run / "work/input.xml"
     xml.write_text(xml.read_text().replace("<contingencyRating>C</contingencyRating>", "<contingencyRating>B</contingencyRating>"))
-    rows = ToolService(agent_context).rank_branch_loading("run_a", facility="all")
+    rows = ToolService(agent_context).rank("run_a", object="both", fields=["rating_mva", "base_utilization_pct"])
     by_id = {row["line_id"]: row for row in rows["data"]["rows"] if row["section"] == ""}
     assert by_id["1"]["rating_mva"] == 200
     assert by_id["1"]["base_utilization_pct"] == 25
-    assert "RAW rate C" in by_id["1"]["rating_basis"]
-    assert (by_id["2"]["rating_mva"], by_id["2"]["utilization_known"], by_id["1"]["utilization_known"]) == (None, False, True)
+    assert any("RAW rate C" in basis for basis in rows["data"]["rating_basis"])
+    # A facility without a positive rating has unknown loading, so it is left out rather than ranked at 0%.
+    assert "2" not in by_id and rows["data"]["excluded_unknown_value"] == 1
     assert any(warning.startswith("1 of 4 facilities have no positive rating") and "unknown rather than low" in warning for warning in rows["warnings"])
     assert any("configured contingencyRating=B" in warning for warning in rows["warnings"])
 
@@ -438,7 +450,7 @@ def test_unexpected_failure_is_stable_and_audit_is_paired(agent_context, monkeyp
     """An unexpected tool exception returns no Python detail and still closes its audit record."""
     service = ToolService(agent_context)
     monkeypatch.setattr(service, "_tables", lambda *_: (_ for _ in ()).throw(ImportError("internal path /private/secret")))
-    result = service.rank_branch_loading("run_a")
+    result = service.rank("run_a")
     assert result["error"]["code"] == "INTERNAL_ERROR"
     assert "private" not in json.dumps(result)
     records = [json.loads(line) for line in (agent_context.directory / "tool_calls.jsonl").read_text().splitlines()]
@@ -474,10 +486,10 @@ def test_malformed_and_stale_cache_manifests_are_distinct(agent_context):
     path = agent_context.run("run_a") / "reports/interactive_analysis_manifest.json"
     original = json.loads(path.read_text())
     path.write_text("{not json")
-    assert ToolService(agent_context).rank_branch_loading("run_a")["error"]["code"] == "INVALID_ARTIFACT"
+    assert ToolService(agent_context).rank("run_a")["error"]["code"] == "INVALID_ARTIFACT"
     original["dataset_version"] = "old-version"
     path.write_text(json.dumps(original))
-    assert ToolService(agent_context).rank_branch_loading("run_a")["error"]["code"] == "ANALYSIS_NOT_BUILT"
+    assert ToolService(agent_context).rank("run_a")["error"]["code"] == "ANALYSIS_NOT_BUILT"
 
 
 def test_model_visible_strings_and_audits_are_bounded_utf8(agent_context):
@@ -495,9 +507,9 @@ def test_model_visible_strings_and_audits_are_bounded_utf8(agent_context):
     os.close(descriptor)
     service = ToolService(agent_context)
     results = [
-        service.rank_branch_loading("run_a"), service.search_buses("run_a", "IGNORE"),
-        service.get_run_method("run_a"), service.list_thermal_violations("run_a"),
-        service.summarize_loading("run_a", group_by="area"), service.locate_run_artifacts("run_a", "flat_results"),
+        service.rank("run_a", fields=["bus_name"]), service.search_buses("run_a", "IGNORE"),
+        service.get_run_method("run_a"), service.rank("run_a", filters=[{"column": "max_utilization_pct", "op": ">", "value": 100}]),
+        service.rank_groups("run_a", group="control_area"), service.locate_run_artifacts("run_a", "flat_results"),
     ]
 
     def check(value):
@@ -532,8 +544,6 @@ def test_all_tool_names_have_a_direct_result_contract(agent_context):
     arguments = {
         "get_run_inventory": (), "locate_run_artifacts": ("run_a", "raw_input"), "get_run_method": ("run_a",),
         "summarize_convergence": ("run_a",), "rank": ("run_a",), "rank_groups": ("run_a",),
-        "rank_branch_loading": ("run_a",), "summarize_loading": ("run_a",),
-        "list_thermal_violations": ("run_a",), "get_branch_loading": ("run_a", 1, 2, "1"),
         "search_buses": ("run_a", "AL"), "compare_runs": ("run_a", "run_b"), "rank_contingencies": ("run_a",),
         "get_contingency_flows": ("run_a", 1), "get_branch_contingencies": ("run_a", 1, 2, "1"),
         "propose_analysis_script": ("run_a", "Count rows", "print(1)"), "get_script_result": ("not-a-proposal",),

@@ -23,8 +23,8 @@ PLAN_TARGET_MODELS = ("nemotron3:33b", "gemma4:31b")
 
 
 def line_ranking(row: dict, metric: str) -> bool:
-    """Return whether an audited call ranked facilities by metric with rank or rank_branch_loading."""
-    return row["outcome"] == "ok" and row["tool"] in ("rank", "rank_branch_loading") and row.get("arguments", {}).get("metric") == metric
+    """Return whether an audited call ranked facilities by metric with rank."""
+    return row["outcome"] == "ok" and row["tool"] == "rank" and row.get("arguments", {}).get("metric") == metric
 
 
 @pytest.mark.skipif(os.environ.get("GRIDLENS_TEST_HERMES") != "1", reason="Set GRIDLENS_TEST_HERMES=1 to exercise the installed Hermes CLI against a synthetic loopback API.")
@@ -58,7 +58,7 @@ def test_installed_hermes_exposes_only_gridlens_tools_and_resumes(agent_project)
                 return
             requests.append(body)
             has_result = any(message.get("role") == "tool" for message in body.get("messages", []))
-            call = {"id": "synthetic_call", "type": "function", "function": {"name": "mcp__gridlens__rank_branch_loading", "arguments": '{"run_id":"run_a","limit":1}'}}
+            call = {"id": "synthetic_call", "type": "function", "function": {"name": "mcp__gridlens__rank", "arguments": '{"run_id":"run_a","magnitude":1}'}}
             message = {"role": "assistant", "content": "The maximum observed loading is 120% [T1]." if has_result else None}
             if not has_result:
                 message["tool_calls"] = [call]
@@ -87,7 +87,7 @@ def test_installed_hermes_exposes_only_gridlens_tools_and_resumes(agent_project)
     try:
         answer = controller.run_turn("Which line is most congested?", lambda event: None)
         assert "120%" in answer
-        assert session_sources(context.directory)[0]["tool"] == "rank_branch_loading"
+        assert session_sources(context.directory)[0]["tool"] == "rank"
         first_id = controller.continuation
         assert first_id
         messages = [json.loads(line) for line in (context.directory / "transcript.jsonl").read_text().splitlines()]
@@ -128,7 +128,7 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
         ranked = [row for row in sources if line_ranking(row, "max_utilization_pct")]
         first = {
             "tool_selection": bool(ranked),
-            "arguments": any(row["arguments"].get("run_id") == "run_a" and (row["arguments"].get("facility") == "line" or row["arguments"].get("object") == "branches") for row in ranked),
+            "arguments": any(row["arguments"].get("run_id") == "run_a" and row["arguments"].get("object") == "branches" for row in ranked),
             "numeric_fidelity": bool(re.search(r"\b120(?:\.0+)?\s*%", answer)),
             "units": "%" in answer or "percent" in answer.casefold(),
             "metric_wording": bool(re.search(r"(maximum|highest|worst).{0,35}(observed|loading|utilization)", answer, re.I)),
@@ -217,9 +217,9 @@ def test_installed_local_models_use_complete_voltage_groups(agent_project):
         events = []
         answer = AgentController(context, HermesAdapter(status.endpoint)).run_turn("In run_a, rank all voltage groups by mean maximum observed line utilization across all monitored lines. Include the percentage for each group.", events.append)
         summaries = [row for row in session_sources(context.directory) if group_mean_source(row, "voltage", "line")]
-        repaired = any(event.kind == "tool_start" and event.text == "summarize_loading (verified scope)" for event in events)
+        repaired = any(event.kind == "tool_start" and event.text == "rank_groups (verified scope)" for event in events)
         final = summaries[-1]["result"]["data"] if summaries else {}
-        correct = bool(summaries and final.get("analyzed_facility_count", final.get("objects_used")) == 11 and not final.get("truncated"))
+        correct = bool(summaries and final.get("objects_used") == 11 and not final.get("truncated"))
         record = {"model": model, "summary_tool": bool(summaries), "model_selected_correct_scope": bool(correct and not repaired), "controller_repaired_scope": repaired, "full_population": correct, "answer": answer}
         records.append(record)
         print(json.dumps(record))
@@ -239,7 +239,7 @@ def test_sample_project_cache_benchmark(tmp_path):
     tracemalloc.start()
     for _ in range(2):
         started = time.monotonic()
-        result = service.rank_branch_loading(run_id)
+        result = service.rank(run_id)
         times.append(round(time.monotonic() - started, 3))
         assert result["error"] is None, result["error"]
         assert result["data"]["rows"]

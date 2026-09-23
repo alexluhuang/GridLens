@@ -45,12 +45,12 @@ def test_official_sdk_client_tools_and_scope(agent_context):
             assert {tool.name for tool in listing.tools} == set(TOOL_NAMES)
             assert all(tool.annotations.readOnlyHint == (tool.name not in WRITE_TOOL_NAMES) for tool in listing.tools)
             assert {tool.name for tool in listing.tools if tool.annotations.destructiveHint} == set(DESTRUCTIVE_TOOL_NAMES)
-            ranking = next(tool for tool in listing.tools if tool.name == "rank_branch_loading")
+            ranking = next(tool for tool in listing.tools if tool.name == "rank")
             assert "metric" in ranking.inputSchema["properties"]
-            response = await client.call_tool("rank_branch_loading", {"run_id": "run_a", "limit": 1})
+            response = await client.call_tool("rank", {"run_id": "run_a", "magnitude": 1})
             assert not response.isError
             result = json.loads(response.content[0].text)
-            assert result["data"]["rows"][0]["max_utilization_pct"] == 120
+            assert result["data"]["rows"][0]["value"] == 120
             # Compact JSON: pretty-printing would cost tokens and push results past runtime spill limits.
             assert "\n" not in response.content[0].text and response.structuredContent is None
             grouping = next(tool for tool in listing.tools if tool.name == "rank_groups")

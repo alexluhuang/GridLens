@@ -35,12 +35,7 @@ from gridlens.agent.tool_base import MAX_TABLE_ROWS, ToolBase, page_result, tool
 from gridlens.analysis.branch_keys import canonical_branch_label
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.distribution_stats import GROUP_STATISTICS, STATISTIC_DEFINITIONS, group_statistic
-from gridlens.analysis.loading import (
-    branch_key,
-    max_line_utilization_rows,
-    summarize_control_area_utilization,
-    summarize_voltage_group_utilization,
-)
+from gridlens.analysis.loading import branch_key, max_line_utilization_rows
 from gridlens.analysis.parser_models import PARSER_VERSION, ParsedTable
 from gridlens.analysis.utilization import (
     NONTRANSFORMER_BRANCH,
@@ -52,7 +47,6 @@ from gridlens.analysis.utilization import (
 
 MAX_TABLE_BYTES = 64 * 1024 * 1024
 Facility = Literal["line", "two_winding_transformer", "three_winding_transformer", "transformer_equivalent", "all"]
-Metric = Literal["max_utilization_pct", "base_utilization_pct", "thermal_margin_pct_points"]
 Artifact = Literal["raw_input", "flat_results", "configuration", "run_log", "interactive_tables", "exports"]
 # The facility types each facility argument selects. "transformer" is every transformer kind, as the
 # Transformer Analysis tab shows them.
@@ -113,9 +107,7 @@ OBJECT_GROUPS = {
 
 ANALYSIS_TOOL_NAMES = (
     "get_run_inventory", "locate_run_artifacts", "get_run_method", "summarize_convergence",
-    "rank", "rank_groups",
-    "rank_branch_loading", "summarize_loading", "list_thermal_violations", "get_branch_loading",
-    "search_buses", "compare_runs", "rank_contingencies", "get_contingency_flows", "get_branch_contingencies",
+    "rank", "rank_groups", "search_buses", "compare_runs", "rank_contingencies", "get_contingency_flows", "get_branch_contingencies",
     "propose_analysis_script", "get_script_result",
 )
 TOOL_NAMES = ANALYSIS_TOOL_NAMES + FILE_TOOL_NAMES + GRIDLENS_TOOL_NAMES
@@ -204,7 +196,24 @@ def _object_record(row: dict) -> dict:
         "from_bus": from_bus, "to_bus": to_bus, "line_id": line_id, "section": section, **values,
     }
     identity = {"object": row["line_label"], "from_bus": from_bus, "to_bus": to_bus, "line_id": line_id, "section": section}
-    return {"identity": identity, "fields": fields, "values": values}
+    return {"identity": identity, "fields": fields, "values": values, "rating_basis": row["rating_basis"]}
+
+
+def _selected_fields(fields: list | None) -> list[str]:
+    """Check the extra fields rank returns beside each object's value, keeping their order."""
+    names = get_args(ObjectField)
+    if fields is None:
+        return []
+    if not isinstance(fields, list) or any(name not in names for name in fields):
+        raise AgentError("INVALID_FIELD", f"Choose fields from: {', '.join(names)}.")
+    return list(dict.fromkeys(fields))
+
+
+def _shown(value: object) -> object:
+    """Return a field value as a result row shows it: numbers as _reported gives them, others unchanged."""
+    if isinstance(value, float):
+        return _reported(value)
+    return value
 
 
 def _qualifies(record: dict, conditions: list[tuple[str, str, object]]) -> bool:
@@ -477,7 +486,8 @@ class AnalysisTools(ToolBase):
         counts = {
             "monitored_facility_count": scope["monitored_facility_count"], "objects_in_scope": len(records),
             "excluded_by_filters": len(records) - len(kept), "excluded_unknown_value": len(kept) - len(known),
-            "configured_contingency_rating": scope["configured_contingency_rating"], "convergence": convergence,
+            "configured_contingency_rating": scope["configured_contingency_rating"],
+            "rating_basis": sorted({record["rating_basis"] for record in known}), "convergence": convergence,
         }
         return known, counts
 
@@ -543,15 +553,19 @@ class AnalysisTools(ToolBase):
         return self._convergence(self._run(run_id, project))
 
     @tool
-    def rank(self, run_id: str, object: ObjectKind = "branches", order: Order = "descending", metric: ObjectMetric = "max_utilization_pct", magnitude: int = 10, filters: list[ObjectFilter] | None = None, project: str = "") -> dict:
+    def rank(self, run_id: str, object: ObjectKind = "branches", order: Order = "descending", metric: ObjectMetric = "max_utilization_pct", magnitude: int = 10, filters: list[ObjectFilter] | None = None, fields: list[ObjectField] | None = None, project: str = "") -> dict:
         """Sort objects by one metric over every object in scope and return the first `magnitude` (0 returns all), each with the value it was sorted by.
 
-        object is branches (non-transformer), transformers (every kind), or both, at or above 50 kV. metric is a per-object value over all recorded cases: max_utilization_pct (congestion), base_utilization_pct, mean_utilization_pct, min_utilization_pct, thermal_margin_pct_points, overload_count, contingency_count, rating_mva, or nominal_kv. filters remove objects that fail any qualifier, e.g. [{"column": "control_area", "op": "==", "value": "Coast"}, {"column": "max_utilization_pct", "op": ">", "value": 100}]; total_matching counts every object that remains. For counts, means, or any other statistic use rank_groups, never these rows.
+        object is branches (non-transformer), transformers (every kind), or both, at or above 50 kV. metric is a per-object value over all recorded cases: max_utilization_pct (congestion), base_utilization_pct, mean_utilization_pct, min_utilization_pct, thermal_margin_pct_points, overload_count, contingency_count, rating_mva, or nominal_kv. filters remove objects that fail any qualifier, e.g. [{"column": "control_area", "op": "==", "value": "Coast"}, {"column": "max_utilization_pct", "op": ">", "value": 100}]; total_matching counts every object that remains. fields adds those attributes to each row, such as ["control_area", "binding_contingency", "base_utilization_pct"]. For counts, means, or any other statistic use rank_groups, never these rows.
         """
         descending = _descending(order)
+        extra = _selected_fields(fields)
         objects, counts = self._objects(run_id, project, object, metric, filters)
         objects.sort(key=lambda record: (-record["values"][metric] if descending else record["values"][metric], tuple(str(record["identity"][name]) for name in ("from_bus", "to_bus", "line_id", "section"))))
-        rows = [{"rank": position, **record["identity"], "value": _reported(record["values"][metric])} for position, record in enumerate(objects, 1)]
+        rows = [
+            {"rank": position, **record["identity"], "value": _reported(record["values"][metric]), **{name: _shown(record["fields"][name]) for name in extra}}
+            for position, record in enumerate(objects, 1)
+        ]
         units, definition, _ = OBJECT_METRICS[metric]
         return {
             "object": object, "metric": metric, "order": order, "units": units, "definition": definition, "filters": filters or [], **counts,
@@ -585,42 +599,6 @@ class AnalysisTools(ToolBase):
             "filters": filters or [], **counts, "objects_used": len(objects),
             **page_result(rows[:magnitude] if magnitude else rows, len(rows), 0, magnitude),
         }
-
-    @tool
-    def rank_branch_loading(self, run_id: str, metric: Metric = "max_utilization_pct", facility: Facility = "line", area: str = "", min_kv: float = 50.0, limit: int = 10, offset: int = 0, project: str = "") -> dict:
-        """Return only the top ranked facilities; use summarize_loading for full-population means."""
-        if metric not in ("max_utilization_pct", "base_utilization_pct", "thermal_margin_pct_points"):
-            raise AgentError("INVALID_METRIC", "Choose maximum loading, base loading, or thermal margin.")
-        rows, convergence, scope = self._loading(self._run(run_id, project), facility, area, min_kv)
-        rows = [row for row in rows if row.get(metric) is not None]
-        rows.sort(key=lambda row: (-float(row[metric]), tuple(str(item) for item in branch_key(row))))
-        return {"rows": rows, "metric": metric, "units": "percentage points" if metric == "thermal_margin_pct_points" else "%", "convergence": convergence, **scope}
-
-    @tool
-    def summarize_loading(self, run_id: str, group_by: Literal["area", "voltage"] = "area", facility: Facility = "line", area: str = "", min_kv: float = 50.0, limit: int = 20, offset: int = 0, project: str = "") -> dict:
-        """Average every matching facility's maximum loading by area or voltage, as the GUI does."""
-        if group_by not in ("area", "voltage"):
-            raise AgentError("INVALID_GROUP", "Choose area or voltage grouping.")
-        rows, convergence, scope = self._loading(self._run(run_id, project), facility, area, min_kv)
-        summarize = summarize_control_area_utilization if group_by == "area" else summarize_voltage_group_utilization
-        return {"rows": summarize(rows), "units": "%", "convergence": convergence, **scope}
-
-    @tool
-    def list_thermal_violations(self, run_id: str, threshold_pct: float = 100.0, facility: Facility = "line", area: str = "", min_kv: float = 50.0, limit: int = 10, offset: int = 0, project: str = "") -> dict:
-        """List facilities whose maximum recorded utilization strictly exceeds threshold_pct."""
-        if not math.isfinite(threshold_pct) or threshold_pct < 0:
-            raise AgentError("INVALID_THRESHOLD", "Use a finite, nonnegative percentage threshold.")
-        rows, convergence, scope = self._loading(self._run(run_id, project), facility, area, min_kv)
-        rows = [row for row in rows if row["max_utilization_pct"] > threshold_pct]
-        rows.sort(key=lambda row: (-row["max_utilization_pct"], tuple(str(item) for item in branch_key(row))))
-        return {"rows": rows, "threshold_pct": threshold_pct, "convergence": convergence, **scope}
-
-    @tool
-    def get_branch_loading(self, run_id: str, from_bus: int, to_bus: int, line_id: str, section: str = "", project: str = "") -> dict:
-        """Look up one full canonical facility key, including circuit and section, at the GUI's >=50 kV cutoff."""
-        rows, convergence, scope = self._loading(self._run(run_id, project), "all", "", 50.0)
-        key = (from_bus, to_bus, canonical_branch_label(line_id), canonical_branch_label(section))
-        return {"rows": [row for row in rows if branch_key(row) == key], "convergence": convergence, **scope}
 
     @tool
     def search_buses(self, run_id: str, query: str, limit: int = 10, offset: int = 0, project: str = "") -> dict:

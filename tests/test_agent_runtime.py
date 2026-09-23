@@ -116,8 +116,8 @@ def test_structured_events_and_unexpected_tool():
     result = adapter.parse_event('{"type":"result","exit_code":0,"text":"Done [T1]","tokens":{"total":10},"session_id":"abc"}')
     assert result.kind == "completed"
     assert result.data["usage"] == {"total": 10}
-    call = adapter.parse_event('{"type":"tool_use","name":"mcp__gridlens__rank_branch_loading","input":{"run_id":"run_a","limit":0}}')
-    assert (call.kind, call.data["input"]) == ("tool_start", '{"run_id": "run_a", "limit": 0}')
+    call = adapter.parse_event('{"type":"tool_use","name":"mcp__gridlens__rank","input":{"run_id":"run_a","magnitude":0}}')
+    assert (call.kind, call.data["input"]) == ("tool_start", '{"run_id": "run_a", "magnitude": 0}')
     with pytest.raises(AgentError, match="non-GridLens"):
         adapter.parse_event('{"type":"tool_use","name":"terminal"}')
     with pytest.raises(AgentError):
@@ -150,11 +150,11 @@ def test_group_mean_answer_requires_complete_audited_summary(agent_context):
     """Use a scoped fixture to reject ranked-row averages and format all-row voltage means."""
     service = ToolService(agent_context)
     question = "Rank all voltage categories by mean max utilization."
-    service.rank_branch_loading("run_a", limit=1)
+    service.rank("run_a", magnitude=1)
     ranked_only = verified_group_mean_answer("The mean is 120%", question, session_sources(agent_context.directory), ("run_a",))
     assert "1 of 3 facilities" in ranked_only
     assert "120%" not in ranked_only
-    service.summarize_loading("run_a", group_by="voltage")
+    service.rank_groups("run_a", group="voltage_class")
     complete = verified_group_mean_answer("The mean is 120%", question, session_sources(agent_context.directory), ("run_a",))
     assert "across all 3 matching facilities" in complete
     assert "230-344 kV: 103.3%" in complete
@@ -213,14 +213,14 @@ def test_controller_repairs_wrong_facility_scope_for_group_means(agent_context, 
 
     def model_answer(process, emit, buffers):
         # Simulate a model using the right summary tool with the wrong facility filter.
-        ToolService(context).summarize_loading("run_a", group_by="voltage", facility="all")
+        ToolService(context).rank_groups("run_a", group="voltage_class", object="both")
         process.wait(timeout=2)
         return "The mean is 95%", 0
 
     monkeypatch.setattr(controller, "_consume_output", model_answer)
     answer = controller.run_turn("Rank all voltage groups by mean maximum observed line utilization.", lambda event: None)
-    summaries = [row for row in session_sources(context.directory) if row["tool"] == "summarize_loading"]
-    assert [row["arguments"]["facility"] for row in summaries] == ["all", "line"]
+    summaries = [row for row in session_sources(context.directory) if row["tool"] == "rank_groups"]
+    assert [row["arguments"]["object"] for row in summaries] == ["both", "branches"]
     assert "across all 3 matching facilities" in answer
     assert "230-344 kV: 103.3%" in answer
     assert "95%" not in answer
@@ -230,27 +230,27 @@ def test_controller_repairs_wrong_facility_scope_for_group_means(agent_context, 
 def test_row_scope_questions_use_audited_counts_and_refusals(agent_context):
     """Read real fixture tool audits to correct model claims about rows, caps, and group populations."""
     service = ToolService(agent_context)
-    service.rank_branch_loading("run_a", limit=1)
+    service.rank("run_a", magnitude=1)
     first = audited_row_scope_answer("All rows were returned", "How many rows were displayed?", session_sources(agent_context.directory))
-    assert "[T1] returned 1 of 3 matching facility rows; truncated: True" in first
+    assert "[T1] returned 1 of 3 matching object rows; truncated: True" in first
     assert "All rows were returned" not in first
-    assert "More matching rows are available from offset 1." in first
-    service.rank_branch_loading("run_a", limit=7000)
+    assert "More matching rows are available with a larger magnitude, or magnitude=0 for all." in first
+    service.rank("run_a", magnitude=7000)
     second = audited_row_scope_answer("All rows were returned", "Did T2 return 7,000 rows?", session_sources(agent_context.directory))
-    assert "[T2] returned 3 of 3 matching facility rows; truncated: False" in second
-    assert "Requested row limit: 7,000; offset: 0." in second
+    assert "[T2] returned 3 of 3 matching object rows; truncated: False" in second
+    assert "Requested magnitude: 7,000." in second
     assert "no maximum row count" in second
-    service.summarize_loading("run_a", group_by="voltage")
+    service.rank_groups("run_a", group="voltage_class")
     third = audited_row_scope_answer("The average used one row", "How many rows were used for T3?", session_sources(agent_context.directory))
-    assert "[T3] returned 1 of 1 matching category rows" in third
-    assert "all 3 matching facilities" in third
+    assert "[T3] returned 1 of 1 matching group rows" in third
+    assert "all 3 matching objects" in third
 
 
 def test_top_line_areas_and_singular_followup_use_audited_endpoint_labels(agent_context):
     """Check top-line area answers against the ranked rows instead of model-generated names."""
     assert top_line_area_request("List the areas for the top 5 most congested lines.") == 5
     assert top_line_area_request("List the areas for the top 5 most congested lines in East.") is None
-    ToolService(agent_context).rank_branch_loading("run_a", limit=3)
+    ToolService(agent_context).rank("run_a", magnitude=3, fields=["control_area", "bus_name"])
     sources = session_sources(agent_context.directory)
     answer = verified_top_line_areas("East, East", "List the areas for the top 2 most congested lines.", sources, ("run_a",))
     assert "North, South (120.0%)" in answer
@@ -306,7 +306,7 @@ def test_controller_fetches_top_line_areas_when_model_omits_ranking(agent_contex
     assert answer.count("North, South") == 3
     assert "East" not in answer
     assert "Only 3 eligible lines" in answer
-    assert session_sources(context.directory)[0]["tool"] == "rank_branch_loading"
+    assert session_sources(context.directory)[0]["tool"] == "rank"
 
 
 @pytest.mark.parametrize("cancel", [False, True])

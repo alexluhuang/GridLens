@@ -75,12 +75,12 @@ def test_streamed_answer_replaced_by_cited_final_and_sources_show_errors(agent_c
     tab.on_event(RuntimeEvent("text", "par"))
     tab.on_event(RuntimeEvent("text", "tial"))
     assert refreshes == []
-    tab.on_event(RuntimeEvent("tool_result", "rank_branch_loading"))
+    tab.on_event(RuntimeEvent("tool_result", "rank"))
     assert refreshes == [True]
     tab.update_sources = update_sources
     assert tab.conversation.messages()[-1] == ("assistant", "partial")
     records = [
-        {"call_id": "T1", "phase": "completed", "tool": "rank_branch_loading", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 3, "truncated": True, "offset": 0, "limit": 2, "inline_rows": 1, "result_file": "/s/results/T1.json", "rows_file": "/s/results/T1.csv", "analyzed_facility_count": 3, "filters": {"facility": "line"}}, "warnings": ["failed cases included"], "provenance": {"sources": [{"path": "runs/run_a/reports/table.csv"}]}}},
+        {"call_id": "T1", "phase": "completed", "tool": "rank", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 3, "truncated": True, "offset": 0, "limit": 2, "inline_rows": 1, "result_file": "/s/results/T1.json", "rows_file": "/s/results/T1.csv", "analyzed_facility_count": 3, "filters": {"facility": "line"}}, "warnings": ["failed cases included"], "provenance": {"sources": [{"path": "runs/run_a/reports/table.csv"}]}}},
         {"call_id": "T2", "phase": "completed", "tool": "get_run_method", "outcome": "error", "result": {"error": {"code": "INVALID_ARTIFACT", "remedy": "Rebuild the cache."}}},
     ]
     (agent_context.directory / "tool_calls.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n")
@@ -157,11 +157,11 @@ def test_saved_conversation_replays_messages_and_tool_steps_in_order(agent_conte
         {"timestamp": "2026-09-23T00:00:00.004+00:00", "role": "assistant", "text": "ALPHA to BETA: 120% [T1]."},
     ]
     events = [
-        {"timestamp": "2026-09-23T00:00:00.001+00:00", "kind": "tool_start", "text": "mcp__gridlens__rank_branch_loading", "data": {"input": '{"limit": 1}'}},
-        {"timestamp": "2026-09-23T00:00:00.003+00:00", "kind": "tool_result", "text": "mcp__gridlens__rank_branch_loading", "data": {}},
+        {"timestamp": "2026-09-23T00:00:00.001+00:00", "kind": "tool_start", "text": "mcp__gridlens__rank", "data": {"input": '{"limit": 1}'}},
+        {"timestamp": "2026-09-23T00:00:00.003+00:00", "kind": "tool_result", "text": "mcp__gridlens__rank", "data": {}},
         {"timestamp": "2026-09-23T00:00:00.005+00:00", "kind": "completed", "text": "", "data": {"session_id": "hermes-123"}},
     ]
-    records = [{"call_id": "T1", "phase": "completed", "tool": "rank_branch_loading", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 3, "truncated": True}}}]
+    records = [{"call_id": "T1", "phase": "completed", "tool": "rank", "outcome": "ok", "result": {"data": {"returned": 1, "total_matching": 3, "truncated": True}}}]
     for name, rows in (("transcript.jsonl", messages), ("runtime_events.jsonl", events), ("tool_calls.jsonl", records)):
         (agent_context.directory / name).write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     tab.refresh_history()
@@ -265,7 +265,7 @@ def test_live_tool_results_keep_their_own_audited_source_when_events_queue(agent
     ]
     (agent_context.directory / "tool_calls.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n")
     for _ in records:
-        tab.on_event(RuntimeEvent("tool_result", "mcp__gridlens__rank_branch_loading"))
+        tab.on_event(RuntimeEvent("tool_result", "mcp__gridlens__rank"))
     detail = tab._process_card.plain_text()
     assert "[T1] 1 of 3 rows returned" in detail
     assert "[T2] 2 of 4 rows returned" in detail

@@ -147,7 +147,7 @@ def test_codex_events_normalize_and_reject_builtin_activity():
     assert adapter.parse_event(json.dumps({"type": "thread.started", "thread_id": "t1"})).data["session_id"] == "t1"
     message = json.dumps({"type": "item.completed", "item": {"item_type": "agent_message", "text": "120% [T1]"}})
     assert adapter.parse_event(message).text == "120% [T1]"
-    tool = json.dumps({"type": "item.completed", "item": {"item_type": "mcp_tool_call", "tool": "gridlens__rank_branch_loading", "status": "completed"}})
+    tool = json.dumps({"type": "item.completed", "item": {"item_type": "mcp_tool_call", "tool": "gridlens__rank", "status": "completed"}})
     assert adapter.parse_event(tool).kind == "tool_result"
     for item_type in ("command_execution", "file_change", "web_search"):
         with pytest.raises(AgentError, match="unsupported"):
