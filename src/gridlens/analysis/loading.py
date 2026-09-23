@@ -84,6 +84,33 @@ def max_line_utilization_rows(
     return rows
 
 
+def facility_attributes(tables: Mapping[str, ParsedTable]) -> dict[tuple[object, object, str, str], dict[str, object]]:
+    """Describe every monitored facility, whatever its voltage or type, by the attributes grouping uses.
+
+    Keyed by `branch_key`, each entry gives the facility's label, its control areas (one per end, as
+    the area charts count them) and the area of each end, its voltage class, higher end voltage, RAW
+    branch type, and end bus names. The agent's contingency and case objects use it to qualify and
+    group the rows of the drill-down index, which record only bus numbers and circuits.
+    """
+    duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
+    summaries = _table_index(tables.get("pflow_mm"))
+    attributes: dict[tuple[object, object, str, str], dict[str, object]] = {}
+    for row in _table_rows(tables, "branch_metadata"):
+        key = branch_key(row)
+        context = _merge_rows(summaries.get(key, {}), row)
+        voltages = [value for value in (_finite_float(context.get(name)) for name in ("from_base_kv", "to_base_kv")) if value]
+        attributes[key] = {
+            "object": _line_label(context),
+            "control_area": _endpoint_control_area_labels(context, duplicate_area_names),
+            "end_areas": tuple(_endpoint_control_area_label(context, end, duplicate_area_names) or "unknown" for end in ("from", "to")),
+            "voltage_class": _utilization_voltage_group(context),
+            "nominal_kv": max(voltages) if voltages else None,
+            "branch_type": str(context.get("raw_branch_type") or "nontransformer_branch"),
+            "bus_name": [str(context.get("from_bus_name") or ""), str(context.get("to_bus_name") or "")],
+        }
+    return attributes
+
+
 def _line_utilization_row(
     context: Mapping[str, object],
     utilization: float,
@@ -338,6 +365,7 @@ def numeric_value(value: object, default: float = 0.0) -> float:
 
 __all__ = [
     "branch_key",
+    "facility_attributes",
     "UtilizationBranchOptions",
     "max_line_utilization_rows",
     "numeric_value",

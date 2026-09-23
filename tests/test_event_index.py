@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from gridlens.analysis.event_index import build_event_index, query_event_index
+from gridlens.analysis.event_index import IndexColumnsMissing, IndexStale, build_event_index, case_key, group_cases, scan_cases
 from gridlens.analysis.parsers import parse_all_output_tables
 
 
@@ -29,15 +29,16 @@ def test_index_event_and_full_branch_key(indexed_run, layout):
     pytest.importorskip("pyarrow")
     manifest = build_event_index(indexed_run, layout=layout)
     assert manifest["rows"] == 5
-    rows, total, paths = query_event_index(indexed_run, event_idx=1, limit=1)
+    rows, total, paths = scan_cases(indexed_run, metric="loading_percent", events={1}, limit=1)
     assert total == 2 and len(rows) == 1
-    assert rows[0]["loading_percent"] == 125
+    assert (rows[0]["loading_percent"], rows[0]["value"]) == (125, 125)
     assert paths[0].name == "manifest.json"
-    rows, total, _ = query_event_index(indexed_run, branch=(1, 2, "1", ""))
+    rows, total, _ = scan_cases(indexed_run, metric="loading_percent", keys={case_key(1, 2, "1", "")}, limit=0)
     assert total == 3
     assert [row["event_idx"] for row in rows] == [1, 65, 0]
-    rows, total, _ = query_event_index(indexed_run, branch=(1, 2, "1", "2"))
-    assert total == 1 and rows[0]["loading_percent"] == -140
+    # Cases rank by absolute loading, and each keeps the loading GridPACK reported.
+    rows, total, _ = scan_cases(indexed_run, metric="loading_percent", keys={case_key(1, 2, "1", "2")})
+    assert total == 1 and (rows[0]["loading_percent"], rows[0]["value"]) == (-140, 140)
 
 
 def test_index_rejects_stale_source_and_escaping_manifest(indexed_run):
@@ -47,12 +48,15 @@ def test_index_rejects_stale_source_and_escaping_manifest(indexed_run):
     manifest = json.loads(path.read_text())
     path.write_text(json.dumps({**manifest, "generation": "../outside"}))
     with pytest.raises(ValueError):
-        query_event_index(indexed_run, event_idx=1)
+        scan_cases(indexed_run, metric="loading_percent", events={1})
+    path.write_text(json.dumps({**manifest, "version": "2026.09.22"}))
+    with pytest.raises(IndexStale):
+        scan_cases(indexed_run, metric="loading_percent", events={1})
     path.write_text(json.dumps(manifest))
     source = indexed_run / manifest["source"]
     source.write_text(source.read_text() + "1,outage,1,2,3,,100,40,0\n")
-    with pytest.raises(ValueError, match="stale"):
-        query_event_index(indexed_run, event_idx=1)
+    with pytest.raises(IndexStale, match="stale"):
+        scan_cases(indexed_run, metric="loading_percent", events={1})
 
 
 def test_compact_contingency_summary_preserves_convergence_and_sections(indexed_run, monkeypatch):
@@ -74,7 +78,7 @@ def test_index_preserves_numeric_looking_circuits(indexed_run):
         handle.write("1,outage,1,2,1.0,,100,50,0\n1,outage,1,2,01,,100,60,0\n")
     build_event_index(indexed_run)
     for circuit in ("1.0", "01"):
-        rows, total, _ = query_event_index(indexed_run, branch=(1, 2, circuit, ""))
+        rows, total, _ = scan_cases(indexed_run, metric="loading_percent", keys={case_key(1, 2, circuit, "")})
         assert total == 1 and rows[0]["line_id"] == circuit
 
 
@@ -105,9 +109,44 @@ def test_row_frame_and_index_agree_on_literal_branch_keys(indexed_run, monkeypat
     assert frame_values == row_values == {("1", "1"): 10, ("01", "01"): 20, ("1.0", "1.0"): 30, ("2", "2"): 40, ("A", ""): 50}
     build_event_index(indexed_run)
     for (circuit, section), maximum in row_values.items():
-        rows, total, _ = query_event_index(indexed_run, branch=(1, 2, circuit, section))
+        rows, total, _ = scan_cases(indexed_run, metric="loading_percent", keys={case_key(1, 2, circuit, section)})
         assert total == 1
         assert abs(rows[0]["loading_percent"]) == maximum
+
+
+def test_index_stores_flows_voltages_and_angles_as_numbers(tmp_path):
+    """Flows, voltages, and angles are numbers in the index, blanks are missing, and derived metrics follow them."""
+    pytest.importorskip("pyarrow")
+    run = tmp_path / "run"
+    (run / "work").mkdir(parents=True)
+    (run / "work/case_flat.csv").write_text(
+        "event_idx,contingency,from_bus,to_bus,circuit_id,p_from_mw,q_from_mvar,mva_from,rate_mva,loading_percent,viol,v_from_pu,v_to_pu,ang_from_deg,ang_to_deg\n"
+        "0,base_case,1,2,1,50.0,10.0,51.0,100,51,0,1.02,1.01,-4.0,-6.0\n"
+        "1,BR_1_2_1,1,3,1,-120.5,-30.25,124.2,100,124.2,1,0.94,0.97,-10.0,-2.5\n"
+        "1,BR_1_2_1,2,3,1,40.0,,40.0,100,40,0,,0.99,,-3.0\n"
+        "2,BR_2_3_1,1,2,1,90.0,20.0,92.2,100,92.2,0,0.99,0.96,-5.0,-17.0\n"
+    )
+    build_event_index(run)
+    flows, total, _ = scan_cases(run, metric="mva_from", limit=0)
+    assert total == 4 and [row["value"] for row in flows] == [124.2, 92.2, 51.0, 40.0]
+    assert "p_from_mw" not in flows[0]  # a scan reads only the columns it needs
+    extra, _, _ = scan_cases(run, metric="mva_from", limit=1, extra=("p_from_mw", "q_from_mvar"))
+    assert (extra[0]["p_from_mw"], extra[0]["q_from_mvar"]) == (-120.5, -30.25)
+    low, total, _ = scan_cases(run, metric="min_voltage_pu", descending=False, conditions=[("min_voltage_pu", "<", 0.97)])
+    assert total == 2 and [row["value"] for row in low] == [0.94, 0.96]
+    # A missing end angle leaves the difference unknown rather than zero.
+    angles, total, _ = scan_cases(run, metric="angle_difference_deg", limit=0)
+    assert total == 3 and [row["value"] for row in angles] == [12.0, 7.5, 2.0]
+    overloads, total, _ = scan_cases(run, metric="loading_percent", conditions=[("loading_percent", ">=", 100), ("viol", "==", 1)])
+    assert total == 1 and overloads[0]["event_idx"] == 1
+    groups, used, _ = group_cases(run, metric="loading_percent", statistic="count", by="event", labels={0: ["base"], 1: ["BR_1_2_1"], 2: ["BR_2_3_1"]}, conditions=[("loading_percent", ">", 45)])
+    assert used == 3 and {label: group.result() for label, group in groups.items()} == {"base": 1, "BR_1_2_1": 1, "BR_2_3_1": 1}
+    peaks, _, _ = group_cases(run, metric="mva_from", statistic="max", by="facility", labels={case_key(1, 2, "1", ""): ["north"], case_key(1, 3, "1", ""): ["north", "south"]})
+    assert {label: group.result() for label, group in peaks.items()} == {"north": 124.2, "south": 124.2, "unknown": 40.0}
+    medians, _, _ = group_cases(run, metric="loading_percent", statistic="median", by="event", labels={1: ["one"]}, events={1})
+    assert medians["one"].result() == pytest.approx(82.1)
+    with pytest.raises(IndexColumnsMissing):
+        scan_cases(run, metric="loading_percent", conditions=[("nonexistent", ">", 1)])
 
 
 def test_contingency_summary_matches_gpu_reduction(indexed_run, monkeypatch):
