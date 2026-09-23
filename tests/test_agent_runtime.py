@@ -162,6 +162,40 @@ def test_group_mean_answer_requires_complete_audited_summary(agent_context):
     assert "[T2]" in complete
 
 
+def test_group_mean_answer_accepts_an_equivalent_rank_groups_result(agent_context):
+    """A whole-population rank_groups mean verifies a group-mean answer; a qualified or other statistic does not."""
+    service = ToolService(agent_context)
+    question = "Rank all voltage categories by mean max utilization."
+    service.rank_groups("run_a", statistic="median")
+    service.rank_groups("run_a", filters=[{"column": "max_utilization_pct", "op": ">", "value": 100}])
+    partial = verified_group_mean_answer("The mean is 120%", question, session_sources(agent_context.directory), ("run_a",))
+    assert "I cannot verify whole-run voltage-group means without a complete rank_groups(group='voltage_class', object='branches')" in partial
+    service.rank_groups("run_a")
+    complete = verified_group_mean_answer("The mean is 120%", question, session_sources(agent_context.directory), ("run_a",))
+    assert "across all 3 matching facilities" in complete
+    assert "230-344 kV: 103.3% (3 facilities)" in complete
+    assert "[T3]" in complete and "120%" not in complete
+    scope = audited_row_scope_answer("One row was used", "How many rows were used for T3?", session_sources(agent_context.directory))
+    assert "[T3] returned 1 of 1 matching group rows" in scope
+    assert "all 3 matching objects" in scope
+
+
+def test_controller_keeps_a_model_rank_groups_mean_without_adding_a_summary(agent_context, monkeypatch):
+    """A model that answers a group-mean question with rank_groups is verified from that call alone."""
+    context = SessionContext.create(agent_context.project_root, ("run_a",), "fixture:model", agent_context.endpoint)
+    controller = AgentController(context, StubAdapter('print(\'{"type":"result","exit_code":0,"text":"unused"}\')'))
+
+    def model_answer(process, emit, buffers):
+        ToolService(context).rank_groups("run_a", group="voltage_class")
+        process.wait(timeout=2)
+        return "230-344 kV: 103.3% [T1]", 0
+
+    monkeypatch.setattr(controller, "_consume_output", model_answer)
+    answer = controller.run_turn("Rank all voltage groups by mean maximum observed line utilization.", lambda event: None)
+    assert [row["tool"] for row in session_sources(context.directory)] == ["rank_groups"]
+    assert "230-344 kV: 103.3%" in answer and "[T1]" in answer
+
+
 def test_group_mean_scope_does_not_substitute_all_areas_for_filters():
     """Leave area- and cutoff-filtered means to explicit tool calls instead of an all-area fallback."""
     assert group_mean_request("Mean line utilization by voltage group in run_a") == ("voltage", "line")

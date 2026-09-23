@@ -164,9 +164,16 @@ read. The answer lists consulted tool-call IDs when a model omits inline citatio
 There is no limit on how many rows a result can have. The agent can ask for every matching row, or page
 through them. A result too large to send to the model whole is saved complete in the session's `results/`
 folder, as JSON and as CSV, and the agent reads that file with the file tools. Sources shows the path of the
-saved result and how many of its rows were shown inline. For mean loading by voltage group or control area,
-GridLens uses `summarize_loading`, which computes each mean from all matching facilities. The answer states
-the facility and area filters, number of facilities used, and per-group counts.
+saved result and how many of its rows were shown inline.
+
+Two general tools answer most loading questions. `rank` sorts branches, transformers, or both by one metric,
+such as maximum, base-case, or mean loading, thermal margin, overload count, or rating, and returns each
+facility with the value it was sorted by. `rank_groups` sorts control areas, voltage classes, nominal
+voltages, branch types, or binding contingencies by one statistic of a metric: the mean, median, minimum,
+maximum, standard deviation, variance, interquartile range, or count. It computes each statistic from every
+facility in the group and reports how many facilities it used. Both take qualifiers that remove facilities
+first, such as a control area or loading above 100%. For mean loading by voltage group or control area, the
+answer states the facility scope, the number of facilities used, and per-group counts.
 For top-line control-area questions, GridLens reads the endpoint area labels in the ranked result and
 lists both areas when a line crosses a boundary.
 

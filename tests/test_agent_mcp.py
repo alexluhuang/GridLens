@@ -53,6 +53,14 @@ def test_official_sdk_client_tools_and_scope(agent_context):
             assert result["data"]["rows"][0]["max_utilization_pct"] == 120
             # Compact JSON: pretty-printing would cost tokens and push results past runtime spill limits.
             assert "\n" not in response.content[0].text and response.structuredContent is None
+            grouping = next(tool for tool in listing.tools if tool.name == "rank_groups")
+            assert {"group", "object", "order", "metric", "statistic", "magnitude", "filters"} <= set(grouping.inputSchema["properties"])
+            qualified = {"run_id": "run_a", "group": "control_area", "statistic": "count", "filters": [{"column": "max_utilization_pct", "op": ">", "value": 100}]}
+            counted = json.loads((await client.call_tool("rank_groups", qualified)).content[0].text)
+            assert [(row["group"], row["value"]) for row in counted["data"]["rows"]] == [("North", 2), ("South", 2)]
+            # The schema names the qualifier columns, so an unknown one is refused before the tool runs.
+            unknown_column = await client.call_tool("rank", {"run_id": "run_a", "filters": [{"column": "zone", "op": "==", "value": 1}]})
+            assert unknown_column.isError
             rejected = await client.call_tool("get_run_method", {"run_id": "../outside"})
             assert json.loads(rejected.content[0].text)["error"]["code"] == "INVALID_RUN_ID"
     asyncio.run(exercise())

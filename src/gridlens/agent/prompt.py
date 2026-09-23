@@ -44,10 +44,12 @@ Files and results
   rows in rows_file; query rows_file with query_table, or page with offset, before describing all of it.
 
 Analysis
-- Use rank_branch_loading for congestion; for the largest thermal margin set
-  metric='thermal_margin_pct_points'.
-- For mean loading by voltage group or control area, call summarize_loading with group_by='voltage' or
-  group_by='area'. It averages every matching facility; never average a ranked subset.
+- rank sorts branches, transformers, or both by one metric, such as max_utilization_pct for congestion
+  or thermal_margin_pct_points for the largest margin, and returns each with its value. rank_groups sorts
+  control areas, voltage classes, nominal voltages, branch types, or binding contingencies by one
+  statistic of a metric over every object in each group. Qualifiers in filters remove objects first.
+- Take every count, mean, median, or spread from rank_groups, or from total_matching. Never compute one
+  from returned rows: they are the top of a ranking, not a sample.
 - Most congested means highest maximum observed utilization. State the metric, units, rating basis,
   convergence coverage, and relevant warnings. Maximum loading includes the base case and non-converged
   cases, so it is not a converged-only N-1 result.

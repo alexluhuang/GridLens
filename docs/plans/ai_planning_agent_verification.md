@@ -122,3 +122,40 @@ not measure legibility on every display scale or demonstrate a live model turn i
 The unrestricted suite was interrupted after 153 passes and 5 skips while a CSV acceleration test imported
 RMM; other local model evaluations were using the same GPU. The 15 deselected CSV tests therefore remain
 unverified in this run. The GUI change does not alter CSV parsing or acceleration code.
+
+## Generalized rank tools (2026-09-23)
+
+**Rationale.** The fixed-purpose loading tools answered only the question shapes they were written for, so
+a model asked anything else averaged the rows it could see. `rank` and `rank_groups` let the model name the
+objects, metric, group statistic, order, count, and qualifiers, while GridLens does the sorting and
+arithmetic over every facility in scope.
+
+**Method.** Six new deterministic tests cover sorting and `magnitude`, qualifiers on either-end fields,
+unknown values, every statistic against hand-computed values, grouping, validation errors, the controller
+accepting an equivalent `rank_groups` mean, and the typed qualifier schema through the official MCP client.
+A read-only check of the sample project wrote its audit outside the project. Local models answered through
+Hermes: the synthetic voltage-group regression, the synthetic congestion questions, and three questions
+against a scratch copy of the sample run's compact caches.
+
+**Outcome.** The full suite, including `tests/test_csv_flat.py`, passed with 267 tests and 5 opt-in skips.
+On the sample run's 6,823 lines, the mean of `max_utilization_pct` by
+voltage class was 50.762963% (351), 49.485785% (2,517), and 39.173937% (3,955), the Branch Analysis figures.
+Lines above 100% by control area were Coast 45, North Centra 34, East 22, South Centra 13, Far West 10,
+North 5, and West 3. Standard deviation, median, and interquartile range for three areas matched Python's
+`statistics` module, and each call took about 0.37 s.
+
+nemotron3:33b called `rank` with the right metric for the congestion and thermal margin questions, and
+`rank_groups` with a qualifier above 100% for the area count. In one of two voltage-group runs it chose the
+correct `rank_groups` arguments; in the other the controller repaired the scope. Hermes rejected malformed
+nemotron calls to `rank` (the Coast question below) and `compare_runs` (the synthetic cross-run question),
+which ended the congestion evaluation before gemma4:31b answered it. gemma4:31b first grouped "voltage
+groups" by `nominal_kv`; after the `rank_groups` description named `voltage_class` as the Branch Analysis
+voltage groups, it chose `voltage_class`. It answered the area count and the three most loaded lines at 345 kV
+or above in Coast (104.35%, 98.9%, and 97.05%, of 59 matching lines), which an independent filter of the
+cached rows reproduced. For the original transcript question, both models used `rank_groups` with
+`object='both'`; the controller's line-only check then reported 50.8%, 49.5%, and 39.2%.
+
+**Interpretation.** The tools compute whole-population statistics correctly, and both models filled in
+groups, statistics, and qualifiers. Each question was asked once, and nemotron3:33b sometimes produced
+malformed calls, so the controller checks remain necessary. Complex power and bus voltage are not metrics
+yet: the compact caches hold loading percentages, not MVA flows or bus voltages.

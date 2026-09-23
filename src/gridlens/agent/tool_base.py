@@ -100,12 +100,12 @@ def _bind_arguments(method, service, args: tuple, kwargs: dict) -> dict:
 
 
 def _check_arguments(arguments: dict) -> None:
-    """Refuse malformed arguments, an oversized argument set, or a negative offset or limit."""
+    """Refuse malformed arguments, an oversized argument set, or a negative offset, limit, or magnitude."""
     if arguments.get("invalid_arguments"):
         raise ValueError("The arguments do not match the tool.")
     if _size(arguments) > MAX_ARGUMENT_BYTES:
         raise ValueError("The arguments are too large.")
-    for name in ("offset", "limit"):
+    for name in ("offset", "limit", "magnitude"):
         value = arguments.get(name, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"{name} must be a whole number of at least 0.")

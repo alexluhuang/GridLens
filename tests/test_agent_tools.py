@@ -138,6 +138,91 @@ def test_source_path_in_manifest_cannot_escape(agent_context):
     assert ToolService(agent_context).rank_branch_loading("run_a")["error"]["code"] == "PATH_OUTSIDE_SESSION"
 
 
+def test_rank_returns_each_object_with_the_value_it_was_sorted_by(agent_context):
+    """rank sorts every object in scope by one metric and returns the first magnitude, each with its sort value."""
+    service = ToolService(agent_context)
+    ranked = service.rank("run_a", magnitude=2)
+    data = ranked["data"]
+    assert ranked["error"] is None
+    assert [(row["rank"], row["line_id"], row["section"], row["value"]) for row in data["rows"]] == [(1, "1", "", 120), (2, "1", "2", 110)]
+    assert data["rows"][0] == {"rank": 1, "object": "ALPHA to BETA (1)", "from_bus": 1, "to_bus": 2, "line_id": "1", "section": "", "value": 120}
+    assert (data["returned"], data["total_matching"], data["truncated"], data["units"], data["objects_in_scope"]) == (2, 3, True, "%", 3)
+    assert any("object='branches'; use object='both'" in warning for warning in ranked["warnings"])
+    assert [row["value"] for row in service.rank("run_a", magnitude=0)["data"]["rows"]] == [120, 110, 80]
+    assert [row["value"] for row in service.rank("run_a", order="ascending", metric="base_utilization_pct")["data"]["rows"]] == [20, 60, 70]
+    assert [row["value"] for row in service.rank("run_a", object="both")["data"]["rows"]] == [120, 110, 95, 80]
+    assert [row["line_id"] for row in service.rank("run_a", object="transformers")["data"]["rows"]] == ["T"]
+    assert [row["value"] for row in service.rank("run_a", metric="thermal_margin_pct_points")["data"]["rows"]] == [20, -10, -20]
+    # Ties keep the order of the full branch key, so circuits and sections stay distinct and stable.
+    assert [(row["line_id"], row["section"], row["value"]) for row in service.rank("run_a", metric="nominal_kv")["data"]["rows"]] == [("1", "", 230), ("1", "2", 230), ("2", "", 230)]
+
+
+def test_rank_filters_remove_objects_and_unknown_values_are_left_out(agent_context):
+    """Qualifiers remove objects before sorting, and an unknown value is never ranked as a low one."""
+    service = ToolService(agent_context)
+    over = service.rank("run_a", filters=[{"column": "max_utilization_pct", "op": ">", "value": 100}])["data"]
+    assert [row["value"] for row in over["rows"]] == [120, 110]
+    assert (over["total_matching"], over["objects_in_scope"], over["excluded_by_filters"]) == (2, 3, 1)
+    # A two-ended field matches either end; != must hold at both ends; text compares without case.
+    assert service.rank("run_a", filters=[{"column": "control_area", "op": "==", "value": "south"}])["data"]["total_matching"] == 3
+    assert service.rank("run_a", filters=[{"column": "control_area", "op": "!=", "value": "North"}])["data"]["total_matching"] == 0
+    assert service.rank("run_a", filters=[{"column": "bus", "op": "in", "value": [2, 3]}])["data"]["total_matching"] == 3
+    # The fixture cache records no minimum loading, so every minimum is unknown rather than 0%.
+    unknown = service.rank("run_a", metric="min_utilization_pct")["data"]
+    assert (unknown["total_matching"], unknown["excluded_unknown_value"]) == (0, 3)
+    run = agent_context.run("run_a")
+    rows = _cached_rows(run, "branch_metadata")
+    for row in rows:
+        row["rate_mva"] = "0" if row["line_id"] == "2" else row["rate_mva"]
+    _rewrite_cached_table(run, "branch_metadata", rows)
+    unrated = service.rank("run_a", order="ascending")["data"]
+    assert [row["value"] for row in unrated["rows"]] == [110, 120]
+    assert unrated["excluded_unknown_value"] == 1
+    assert [row["value"] for row in service.rank("run_a", metric="contingency_count")["data"]["rows"]] == [3, 3, 3]
+    for bad in ([{"column": "zone", "op": "==", "value": 1}], [{"column": "control_area", "op": "~", "value": "x"}], [{"column": "bus", "op": "in", "value": 2}], [{"column": "bus", "op": "=="}], {"column": "bus"}):
+        assert service.rank("run_a", filters=bad)["error"]["code"] == "INVALID_FILTER"
+    assert service.rank("run_a", metric="voltage")["error"]["code"] == "INVALID_METRIC"
+    assert service.rank("run_a", object="lines")["error"]["code"] == "INVALID_OBJECT"
+    assert service.rank("run_a", order="up")["error"]["code"] == "INVALID_ORDER"
+    assert service.rank("run_a", magnitude=-1)["error"]["code"] == "INVALID_DATA_OR_ARGUMENT"
+
+
+def test_rank_groups_computes_each_statistic_over_every_object(agent_context):
+    """rank_groups returns each group's statistic over all of its objects, and the count of objects it used."""
+    service = ToolService(agent_context)
+    grouped = service.rank_groups("run_a")
+    data = grouped["data"]
+    assert grouped["error"] is None
+    assert data["rows"] == [{"rank": 1, "group": "230-344 kV", "value": pytest.approx(103.333333), "count": 3}]
+    assert data["rows"][0]["value"] == pytest.approx(service.summarize_loading("run_a", group_by="voltage")["data"]["rows"][0]["average_utilization_pct"])
+    assert (data["objects_used"], data["units"], data["statistic"]) == (3, "%", "mean")
+    # The group holds 120, 80, and 110; percentiles interpolate linearly and std and var divide by n.
+    expected = {"mean": 103.333333, "median": 110, "min": 80, "max": 120, "std": 16.996732, "var": 288.888889, "iqr": 20, "count": 3}
+    for statistic, value in expected.items():
+        assert service.rank_groups("run_a", statistic=statistic)["data"]["rows"][0]["value"] == pytest.approx(value), statistic
+    assert service.rank_groups("run_a", statistic="var")["data"]["units"] == "%²"
+    assert service.rank_groups("run_a", statistic="count")["data"]["units"] == "objects"
+    assert service.rank_groups("run_a", group="zone")["error"]["code"] == "INVALID_GROUP"
+    assert service.rank_groups("run_a", statistic="mode")["error"]["code"] == "INVALID_STATISTIC"
+
+
+def test_rank_groups_groups_filters_orders_and_limits(agent_context):
+    """Groups follow the GUI's area and voltage rules, filters remove objects first, and magnitude limits groups."""
+    service = ToolService(agent_context)
+    areas = service.rank_groups("run_a", group="control_area", statistic="count", filters=[{"column": "max_utilization_pct", "op": ">", "value": 100}])["data"]
+    # Every fixture facility joins North to South, so it counts in both areas.
+    assert [(row["group"], row["value"], row["count"]) for row in areas["rows"]] == [("North", 2, 2), ("South", 2, 2)]
+    assert (areas["objects_used"], areas["excluded_by_filters"]) == (2, 1)
+    types = service.rank_groups("run_a", group="branch_type", object="both", order="ascending")["data"]["rows"]
+    assert [(row["group"], row["value"], row["count"]) for row in types] == [("two_winding_transformer_branch", 95, 1), ("nontransformer_branch", pytest.approx(103.333333), 3)]
+    classes = service.rank_groups("run_a", group="voltage_class", object="both")["data"]["rows"]
+    assert [row["group"] for row in classes] == ["230-344 kV", "Same-voltage transformer"]
+    kv = service.rank_groups("run_a", group="nominal_kv", object="both", magnitude=1)["data"]
+    assert [row["group"] for row in kv["rows"]] == ["230 kV"]
+    assert (kv["returned"], kv["total_matching"], kv["truncated"]) == (1, 2, True)
+    assert service.rank_groups("run_a", group="binding_contingency", statistic="max")["data"]["rows"] == [{"rank": 1, "group": "line outage", "value": 120, "count": 3}]
+
+
 def test_paging_has_no_row_cap_and_is_audited(agent_context):
     """Any limit is accepted, limit=0 returns every row, offset pages, and every call is audited."""
     service = ToolService(agent_context)
@@ -446,7 +531,8 @@ def test_all_tool_names_have_a_direct_result_contract(agent_context):
     service = ToolService(agent_context)
     arguments = {
         "get_run_inventory": (), "locate_run_artifacts": ("run_a", "raw_input"), "get_run_method": ("run_a",),
-        "summarize_convergence": ("run_a",), "rank_branch_loading": ("run_a",), "summarize_loading": ("run_a",),
+        "summarize_convergence": ("run_a",), "rank": ("run_a",), "rank_groups": ("run_a",),
+        "rank_branch_loading": ("run_a",), "summarize_loading": ("run_a",),
         "list_thermal_violations": ("run_a",), "get_branch_loading": ("run_a", 1, 2, "1"),
         "search_buses": ("run_a", "AL"), "compare_runs": ("run_a", "run_b"), "rank_contingencies": ("run_a",),
         "get_contingency_flows": ("run_a", 1), "get_branch_contingencies": ("run_a", 1, 2, "1"),

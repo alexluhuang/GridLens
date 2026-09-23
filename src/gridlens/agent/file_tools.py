@@ -23,7 +23,7 @@ from itertools import islice
 import json
 import os
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Literal, get_args
 import xml.etree.ElementTree as ET
 
 from gridlens.agent.policy import AgentError
@@ -38,7 +38,8 @@ FILE_TOOL_NAMES = ("list_files", "describe_file", "query_table", "read_text_file
 MAX_ROWS_IN_MEMORY = 1_000_000
 MAX_DOCUMENT_BYTES = 256 * 1024 * 1024
 SAMPLE_ROWS = 5
-FILTER_OPERATORS = ("==", "!=", "<", "<=", ">", ">=", "contains", "startswith", "in")
+FilterOperator = Literal["==", "!=", "<", "<=", ">", ">=", "contains", "startswith", "in"]
+FILTER_OPERATORS = get_args(FilterOperator)
 GRIDPACK_TABLE_FILES = {schema["file"]: name for name, schema in TABLE_SCHEMAS.items()}
 TEXT_SUFFIXES = {".txt", ".log", ".out", ".con", ".mon", ".sub", ".dyr", ".m", ".md", ".py", ".yaml", ".yml", ".jsonl"}
 
@@ -109,10 +110,10 @@ def _check_filters(filters: list[dict], columns: list[str]) -> list[tuple[str, s
     return checked
 
 
-def _passes(cell: object, operator: str, value: object) -> bool:
+def cell_passes(cell: object, operator: str, value: object) -> bool:
     """Apply one filter to one cell: numeric when both sides are numbers, otherwise case-insensitive text."""
     if operator == "in":
-        return any(_passes(cell, "==", item) for item in value)
+        return any(cell_passes(cell, "==", item) for item in value)
     left, right = _number(cell), _number(value)
     if left is not None and right is not None and operator not in ("contains", "startswith"):
         return {"==": left == right, "!=": left != right, "<": left < right, "<=": left <= right, ">": left > right, ">=": left >= right}[operator]
@@ -126,7 +127,7 @@ def _passes(cell: object, operator: str, value: object) -> bool:
 
 def _matches(row: dict, filters: list[tuple[str, str, object]]) -> bool:
     """Return whether a row passes every filter."""
-    return all(_passes(row.get(column), operator, value) for column, operator, value in filters)
+    return all(cell_passes(row.get(column), operator, value) for column, operator, value in filters)
 
 
 class _Counted:

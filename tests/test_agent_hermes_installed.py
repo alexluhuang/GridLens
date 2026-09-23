@@ -13,13 +13,18 @@ import tracemalloc
 
 import pytest
 
-from gridlens.agent.controller import AgentController, session_sources
+from gridlens.agent.controller import AgentController, group_mean_source, session_sources
 from gridlens.agent.hermes import HermesAdapter, SYSTEM_PROMPT
 from gridlens.agent.session import SessionContext
 from gridlens.agent.tools import TOOL_NAMES, ToolService
 
 
 PLAN_TARGET_MODELS = ("nemotron3:33b", "gemma4:31b")
+
+
+def line_ranking(row: dict, metric: str) -> bool:
+    """Return whether an audited call ranked facilities by metric with rank or rank_branch_loading."""
+    return row["outcome"] == "ok" and row["tool"] in ("rank", "rank_branch_loading") and row.get("arguments", {}).get("metric") == metric
 
 
 @pytest.mark.skipif(os.environ.get("GRIDLENS_TEST_HERMES") != "1", reason="Set GRIDLENS_TEST_HERMES=1 to exercise the installed Hermes CLI against a synthetic loopback API.")
@@ -115,10 +120,10 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
         started = time.monotonic()
         answer = controller.run_turn("In run_a, which non-transformer line is most congested, and how confident should I be in that number?", lambda event: None)
         sources = session_sources(context.directory)
-        ranked = [row for row in sources if row["tool"] == "rank_branch_loading" and row["outcome"] == "ok"]
+        ranked = [row for row in sources if line_ranking(row, "max_utilization_pct")]
         first = {
             "tool_selection": bool(ranked),
-            "arguments": any(row.get("arguments", {}).get("run_id") == "run_a" and row.get("arguments", {}).get("facility") == "line" for row in ranked),
+            "arguments": any(row["arguments"].get("run_id") == "run_a" and (row["arguments"].get("facility") == "line" or row["arguments"].get("object") == "branches") for row in ranked),
             "numeric_fidelity": bool(re.search(r"\b120(?:\.0+)?\s*%", answer)),
             "units": "%" in answer or "percent" in answer.casefold(),
             "metric_wording": bool(re.search(r"(maximum|highest|worst).{0,35}(observed|loading|utilization)", answer, re.I)),
@@ -130,7 +135,7 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
         margin_answer = AgentController(margin_context, HermesAdapter(status.endpoint)).run_turn("In run_a, where is the largest thermal loading margin among non-transformer lines? State what the margin can and cannot establish.", lambda event: None)
         margin_sources = session_sources(margin_context.directory)
         margin = {
-            "tool_selection": any(row["tool"] == "rank_branch_loading" and row["outcome"] == "ok" and row.get("arguments", {}).get("metric") == "thermal_margin_pct_points" for row in margin_sources),
+            "tool_selection": any(line_ranking(row, "thermal_margin_pct_points") for row in margin_sources),
             "numeric_fidelity": bool(re.search(r"\b20(?:\.0+)?\s*(?:percentage points?|%)", margin_answer, re.I)),
             "thermal_margin_wording": "margin" in margin_answer.lower() and ("percentage point" in margin_answer.lower() or "%" in margin_answer),
         }
@@ -206,9 +211,10 @@ def test_installed_local_models_use_complete_voltage_groups(agent_project):
         context = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
         events = []
         answer = AgentController(context, HermesAdapter(status.endpoint)).run_turn("In run_a, rank all voltage groups by mean maximum observed line utilization across all monitored lines. Include the percentage for each group.", events.append)
-        summaries = [row for row in session_sources(context.directory) if row["tool"] == "summarize_loading" and row["outcome"] == "ok" and row["arguments"].get("group_by") == "voltage"]
+        summaries = [row for row in session_sources(context.directory) if group_mean_source(row, "voltage", "line")]
         repaired = any(event.kind == "tool_start" and event.text == "summarize_loading (verified scope)" for event in events)
-        correct = bool(summaries and summaries[-1]["result"]["data"].get("analyzed_facility_count") == 11 and not summaries[-1]["result"]["data"].get("truncated"))
+        final = summaries[-1]["result"]["data"] if summaries else {}
+        correct = bool(summaries and final.get("analyzed_facility_count", final.get("objects_used")) == 11 and not final.get("truncated"))
         record = {"model": model, "summary_tool": bool(summaries), "model_selected_correct_scope": bool(correct and not repaired), "controller_repaired_scope": repaired, "full_population": correct, "answer": answer}
         records.append(record)
         print(json.dumps(record))

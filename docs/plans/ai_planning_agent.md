@@ -260,6 +260,8 @@ Keep the first catalog small. Tool descriptions should encode when a tool is not
 | `locate_run_artifacts` | Resolve a controlled enum such as `raw_input`, `flat_results`, `configuration`, `run_log`, `interactive_tables`, or `exports`. |
 | `get_run_method` | Manifest and section-scoped parsed XML values: image, executable, MPI count, exact recorded command, contingency rating, voltage limits, control settings, input hashes, and analysis backend. |
 | `summarize_convergence` | Counts and bounded examples from the 719 KB convergence file. |
+| `rank` | Added 2026-09-23. Sort branches, transformers, or both by one per-facility metric over every facility in scope, after the qualifiers in `filters` remove facilities, and return the first `magnitude`, each with the value it was sorted by. |
+| `rank_groups` | Added 2026-09-23. Group the same facilities by control area, voltage class, nominal kV, branch type, or binding contingency, compute one statistic (mean, median, min, max, std, var, iqr, count) of one metric over all of each group's facilities, and return the first `magnitude` groups with that statistic and the facility count it used. Mean of `max_utilization_pct` reproduces the Branch Analysis voltage and area means. |
 | `rank_branch_loading` | Rank selected facility types by base or maximum N-1 utilization, with binding contingency and filters. |
 | `summarize_loading` | Area or voltage-class summary using the same facility and voltage filters as the GUI. |
 | `list_thermal_violations` | Facilities exceeding a specified loading threshold, bounded and sorted. |
