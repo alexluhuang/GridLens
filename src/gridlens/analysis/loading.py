@@ -111,6 +111,27 @@ def facility_attributes(tables: Mapping[str, ParsedTable]) -> dict[tuple[object,
     return attributes
 
 
+def bus_area_labels(rows: Iterable[Mapping[str, object]]) -> dict[int, str]:
+    """Return the control-area label of each bus in bus_metadata rows, named as facility ends are named.
+
+    A generator's terminal bus is often at the end of no monitored facility, so its area comes from here.
+    """
+    rows = list(rows)
+    numbers: dict[str, set[str]] = {}
+    for row in rows:
+        name = _clean_label(row.get("area_name"))
+        if name:
+            numbers.setdefault(name, set()).add(_clean_label(row.get("area")))
+    duplicates = {name for name, areas in numbers.items() if len(areas) > 1}
+    labels = {}
+    for row in rows:
+        bus = _finite_float(row.get("bus_id"))
+        label = _endpoint_control_area_label({"bus_area": row.get("area"), "bus_area_name": row.get("area_name")}, "bus", duplicates)
+        if bus is not None and label:
+            labels[int(bus)] = label
+    return labels
+
+
 def _line_utilization_row(
     context: Mapping[str, object],
     utilization: float,

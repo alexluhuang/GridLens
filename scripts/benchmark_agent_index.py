@@ -11,7 +11,7 @@ from pathlib import Path
 import resource
 import time
 
-from gridlens.analysis.event_index import build_event_index, query_event_index
+from gridlens.analysis.event_index import build_event_index, case_key, scan_cases
 
 
 def main() -> None:
@@ -34,13 +34,13 @@ def main() -> None:
     query_times = []
     for _ in range(2):
         started = time.monotonic()
-        rows, total, _ = query_event_index(args.run, event_idx=args.event, index_dir=args.output)
+        rows, total, _ = scan_cases(args.run, metric="loading_percent", limit=50, events={args.event}, index_dir=args.output)
         query_times.append(round(time.monotonic() - started, 4))
     record.update(event_query_seconds=query_times, event_matching_rows=total)
     if rows:
         key = tuple(rows[0][name] for name in ("from_bus", "to_bus", "line_id", "section"))
         started = time.monotonic()
-        _, total, _ = query_event_index(args.run, branch=key, index_dir=args.output)
+        _, total, _ = scan_cases(args.run, metric="loading_percent", limit=50, keys={case_key(*key)}, index_dir=args.output)
         record.update(branch_query_seconds=round(time.monotonic() - started, 4), branch_matching_rows=total)
     record["peak_host_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
     record["cache_note"] = "First/warm reads; OS cache was not forcibly flushed. Zero GPU memory because this conversion uses CPU PyArrow."

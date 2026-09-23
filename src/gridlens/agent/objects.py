@@ -114,8 +114,8 @@ FAMILIES = {
 # Case qualifiers the index filters numerically; the others select events or facilities first.
 CASE_INDEX_COLUMNS = (*CASE_METRICS, "viol")
 NUMERIC_OPERATORS = ("==", "!=", "<", "<=", ">", ">=", "in")
-# GridPACK names an outage after its element: BR_<from>_<to>_<circuit> for a branch, GEN_<bus>_<id> for a generator.
-OUTAGE_BUSES = re.compile(r"^(?:BR|BRANCH|LINE|XF|TR)_(\d+)_(\d+)(?:_|$)|^(?:GEN|G|LOAD|LD)_(\d+)(?:_|$)", re.IGNORECASE)
+# GridPACK names an outage after its element: BR_<from>_<to>_<circuit> for a branch, GN_<bus>_<id> for a generator.
+OUTAGE_BUSES = re.compile(r"^(?:BR|BRANCH|LINE|XF|TR)_(\d+)_(\d+)(?:_|$)|^(?:GN|GEN|G|LOAD|LD)_(\d+)(?:_|$)", re.IGNORECASE)
 assert set(get_args(ObjectMetric)) == {name for family in FAMILIES.values() for name in family["metrics"]}
 assert set(get_args(ObjectGroup)) == {name for family in FAMILIES.values() for name in family["groups"]}
 assert set(get_args(ObjectField)) == {name for family in FAMILIES.values() for name in family["fields"]} | set(COMPARE_FIELDS)

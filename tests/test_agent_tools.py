@@ -371,7 +371,7 @@ RICH_CONVERGENCE = (
     "event_idx,contingency,type,converged,iterations,final_tolerance,max_p_bus,max_p_mismatch,max_q_bus,max_q_mismatch,status_code\n"
     "1,BR_1_2_2,branch,true,3,1e-6,2,0.002,2,0.001,OK\n"
     "2,BR_1_2_1,branch,true,5,1e-6,2,0.004,2,0.003,OK\n"
-    "3,GEN_2_1,generator,false,20,1.0,2,0.5,2,0.4,DIVERGED\n"
+    "3,GN_3_1,generator,false,20,1.0,3,0.5,3,0.4,DIVERGED\n"
 )
 
 
@@ -383,6 +383,9 @@ def _rich_run(agent_context):
     for name in ("pflow_mm", "branch_metadata"):
         _rewrite_cached_table(run, name, _cached_rows(run, name))
     _rewrite_cached_table(run, "area_metadata", _cached_rows(run, "area_metadata"), "case.raw")
+    # Bus 3 is a generator terminal at the end of no monitored facility, so only the bus table knows its area.
+    buses = [{"bus_id": bus, "bus_name": name, "base_kv": kv, "area": area, "area_name": area_name} for bus, name, kv, area, area_name in ((1, "ALPHA", 230, 1, "North"), (2, "BETA", 230, 2, "South"), (3, "GAMMA", 13.8, 3, "East"))]
+    _rewrite_cached_table(run, "bus_metadata", buses, "case.raw")
     build_event_index(run)
     return run
 
@@ -427,7 +430,7 @@ def test_contingencies_by_outage_area_status_and_solution(agent_context):
     statuses = service.rank_groups("run_a", object="contingencies", group="status_code", metric="iterations", statistic="count")["data"]["rows"]
     assert [(row["group"], row["value"]) for row in statuses] == [("OK", 2), ("DIVERGED", 1)]
     failed = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "status_code", "op": "!=", "value": "OK"}], fields=["type", "outage_area"])["data"]["rows"]
-    assert [(row["contingency"], row["type"], row["outage_area"]) for row in failed] == [("GEN_2_1", "generator", ["South"])]
+    assert [(row["contingency"], row["type"], row["outage_area"]) for row in failed] == [("GN_3_1", "generator", ["East"])]
     south = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "outage_area", "op": "==", "value": "South"}])["data"]
     assert south["total_matching"] == 2
     by_area = service.rank_groups("run_a", object="contingencies", group="outage_area", metric="iterations", statistic="max")["data"]["rows"]

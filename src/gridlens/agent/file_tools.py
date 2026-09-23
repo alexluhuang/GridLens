@@ -249,7 +249,7 @@ def open_table(path: Path, kind: str, table: str = "") -> Iterator[tuple[list[st
         source = parquet.ParquetFile(path)
         yield list(source.schema_arrow.names), (row for batch in source.iter_batches(batch_size=65536) for row in batch.to_pylist())
     else:
-        raise AgentError("NOT_A_TABLE", "This file is not a table. Use read_text_file or read_document for it.")
+        raise AgentError("NOT_A_TABLE", "This file is not a table, a RAW case, a JSON or XML document, or text. Set as_text=True to read its lines anyway.")
 
 
 def _json_fields(value: object, path: str = "$") -> Iterator[dict]:
@@ -285,14 +285,14 @@ def _xml_fields(element: ET.Element, path: str) -> Iterator[dict]:
 def document_fields(path: Path, kind: str) -> Iterator[dict]:
     """Yield the fields of a JSON or XML document as rows of path and value."""
     if path.stat().st_size > MAX_DOCUMENT_BYTES:
-        raise AgentError("DOCUMENT_TOO_LARGE", "This document is too large to parse whole. Use read_text_file to page through it, or your own code.")
+        raise AgentError("DOCUMENT_TOO_LARGE", "This document is too large to parse whole. Set as_text=True to page through its lines, or use your own code.")
     if kind == "json":
         yield from _json_fields(json.loads(path.read_text(encoding="utf-8", errors="replace")))
     elif kind == "xml":
         root = ET.parse(path).getroot()
         yield from _xml_fields(root, root.tag)
     else:
-        raise AgentError("NOT_A_DOCUMENT", "read_document reads JSON and XML files. Use query_table or read_text_file for this one.")
+        raise AgentError("NOT_A_DOCUMENT", "Only JSON and XML files have fields. Read this one as a table, or with as_text=True.")
 
 
 def _field_values(path: Path, kind: str) -> dict[str, object]:

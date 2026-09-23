@@ -42,7 +42,7 @@ from gridlens.agent.tool_base import MAX_TABLE_ROWS, ToolBase, page_result, tool
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.distribution_stats import GROUP_STATISTICS, STATISTIC_DEFINITIONS, GroupStatistic, group_statistic
 from gridlens.analysis.event_index import case_key
-from gridlens.analysis.loading import facility_attributes, max_line_utilization_rows, branch_key
+from gridlens.analysis.loading import bus_area_labels, facility_attributes, max_line_utilization_rows, branch_key
 from gridlens.analysis.parser_models import PARSER_VERSION, ParsedTable
 from gridlens.analysis.utilization import (
     TRANSFORMER_UTILIZATION_BRANCH_OPTIONS,
@@ -365,6 +365,9 @@ class AnalysisTools(ToolBase):
             for bus, area in zip(key[:2], attributes["end_areas"]):
                 if area != "unknown":
                     bus_areas.setdefault(bus, area)
+        # A generator's terminal bus is often at the end of no monitored facility; the bus table names every bus's area.
+        for bus, area in bus_area_labels(self._optional_table(run, "bus_metadata") or []).items():
+            bus_areas.setdefault(bus, area)
         summaries = {int(event): row for row in summary or [] if (event := _number(row.get("event_idx"))) is not None}
         solutions = {int(event): row for row in convergence if (event := _number(row.get("event_idx"))) is not None}
         if summary is None:
