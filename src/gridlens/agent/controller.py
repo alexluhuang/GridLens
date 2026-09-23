@@ -38,6 +38,8 @@ STDERR_TAIL_BYTES = 8192
 MAX_EVENT_BYTES = 128 * 1024
 POLL_SECONDS = 0.1
 EXIT_WAIT_SECONDS = 2
+# Questions whose answer could be mistaken for spare capacity: margins, headroom, extra MW, or transfer limits.
+CAPACITY_QUESTION = re.compile(r"\b(?:margin|capacity|headroom|carry|ttc|fcitc|atc)\b|\bmore\s+mw\b|\btransfer\s+(?:capability|limit)", re.IGNORECASE)
 
 
 class AgentController:
@@ -496,7 +498,7 @@ def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) ->
 
 
 def qualify_capacity_answer(answer: str, question: str) -> str:
-    """Return an answer that qualifies thermal margin for capacity questions in run_turn."""
-    if not any(term in question.casefold() for term in ("margin", "capacity")):
+    """Return an answer that qualifies thermal margin for capacity, headroom, and transfer questions in run_turn."""
+    if not CAPACITY_QUESTION.search(question):
         return answer
     return answer.rstrip() + "\n\nGridLens note: Observed thermal margin alone cannot establish how much more load, generation, or transfer a system can accommodate; that requires a separate power-flow study."

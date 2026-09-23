@@ -149,7 +149,7 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
         cross_answer = AgentController(focused, HermesAdapter(status.endpoint)).run_turn("Compare maximum line loading between run_a and run_b.", lambda event: None)
         cross_calls = session_sources(focused.directory)
         cross_run = {
-            "compared": any(row["tool"] == "compare_runs" and row["outcome"] == "ok" for row in cross_calls),
+            "compared": any(row["tool"] in ("rank", "rank_groups") and row["outcome"] == "ok" and row["arguments"].get("compare_run_id") for row in cross_calls),
             "numeric_fidelity": bool(re.search(r"\b10(?:\.0+)?\s*(?:percentage points?|%)", cross_answer, re.I)),
         }
         manifest = agent_project / "runs/run_a/reports/interactive_analysis_manifest.json"

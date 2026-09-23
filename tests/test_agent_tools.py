@@ -91,9 +91,9 @@ def test_branch_search_method_and_comparison(agent_context):
     assert endpoints["data"]["rows"][0] == {"from_bus": "1", "from_bus_name": "ALPHA", "match_kind": "prefix"}
     settings = {row["path"]: row["value"] for row in service.read_file("runs/run_a/work/input.xml", limit=0)["data"]["rows"]}
     assert settings["Configuration/Contingency_analysis/FullBranchN1"] == "true"
-    comparison = service.compare_runs("run_a", "run_b")
-    assert all(row["delta_pct_points"] == 10 for row in comparison["data"]["rows"])
-    assert comparison["data"]["first_only"] == comparison["data"]["second_only"] == 0
+    comparison = service.rank("run_a", compare_run_id="run_b", magnitude=0)
+    assert all(row["value"] == 10 for row in comparison["data"]["rows"])
+    assert comparison["data"]["only_in_run"] == comparison["data"]["only_in_compare_run"] == 0
     assert len(service.get_project()["data"]["rows"]) == 2
 
 
@@ -107,7 +107,7 @@ def test_any_run_and_any_project_is_reachable(agent_project, tmp_path):
     """The selected run is a starting point only: other runs and other projects resolve by name or path."""
     context = SessionContext.create(agent_project, ("run_a",), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path)
     service = ToolService(context)
-    assert service.compare_runs("run_a", "run_b")["error"] is None
+    assert service.rank("run_a", compare_run_id="run_b")["error"] is None
     assert service.rank("run_b", project=agent_project.name)["error"] is None
     assert service.rank("run_b", project=str(agent_project))["error"] is None
     assert service.rank("run_b", project="Synthetic Project")["error"] is None
@@ -336,22 +336,125 @@ def test_compact_contingencies_and_indexed_drilldown(agent_context):
     ]
     _rewrite_cached_table(run, "contingency_summary", summary)
     service = ToolService(agent_context)
-    ranked = service.rank_contingencies("run_a")
-    assert ranked["data"]["rows"][0]["event_idx"] == 1
-    assert ranked["data"]["recorded_contingencies"] == 2
-    assert ranked["data"]["excluded_failed_or_unknown"] == 1
-    included = service.rank_contingencies("run_a", converged_only=False)
-    assert [row["event_idx"] for row in included["data"]["rows"]] == [1, 2]
-    assert any("failed or unknown" in warning for warning in included["warnings"])
-    assert service.rank_contingencies("run_a", metric="violation_count")["data"]["units"] == "monitored rows"
+    ranked = service.rank("run_a", object="contingencies", metric="max_loading_pct")
+    assert [row["event_idx"] for row in ranked["data"]["rows"]] == [1]
+    assert (ranked["data"]["recorded_contingencies"], ranked["data"]["excluded_not_converged"]) == (2, 1)
+    assert any("Only converged contingencies" in warning for warning in ranked["warnings"])
+    both = [{"column": "converged", "op": "in", "value": ["true", "false"]}]
+    included = service.rank("run_a", object="contingencies", metric="max_loading_pct", filters=both, fields=["status_code", "worst_facility"])
+    assert [(row["event_idx"], row["status_code"]) for row in included["data"]["rows"]] == [(1, "OK"), (2, "ISLANDED")]
+    assert included["data"]["rows"][1]["worst_facility"] == "ALPHA to BETA (1) section 2"
+    assert service.rank("run_a", object="contingencies", metric="violation_count")["data"]["units"] == "facilities"
+    statuses = service.rank_groups("run_a", object="contingencies", group="status_code", metric="max_loading_pct", statistic="count")["data"]["rows"]
+    assert [(row["group"], row["value"]) for row in statuses] == [("ISLANDED", 1), ("OK", 1)]
+    assert service.rank("run_a", object="cases")["error"]["code"] == "INDEX_NOT_BUILT"
     build_event_index(run)
-    event = service.get_contingency_flows("run_a", 2)
+    event = service.rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": 2}], fields=["converged", "status_code"])
     assert event["error"] is None
-    assert event["data"]["rows"][0]["convergence"] == "failed"
-    branch = service.get_branch_contingencies("run_a", 1, 2, "1", "2")
+    assert (event["data"]["rows"][0]["event_idx"], event["data"]["rows"][0]["converged"], event["data"]["rows"][0]["status_code"]) == (2, "false", "ISLANDED")
+    assert any("failed or did not converge" in warning for warning in event["warnings"])
+    key = [{"column": "from_bus", "op": "==", "value": 1}, {"column": "to_bus", "op": "==", "value": 2}, {"column": "line_id", "op": "==", "value": "1"}, {"column": "section", "op": "==", "value": "2"}]
+    branch = service.rank("run_a", object="cases", filters=key)
     assert branch["data"]["total_matching"] == 1
     assert branch["data"]["rows"][0]["event_idx"] == 2
-    assert service.get_branch_contingencies("run_a", 1, 2, "2")["error"]["code"] == "KEY_NOT_INDEXED"
+    assert service.rank("run_a", object="cases", filters=[{"column": "line_id", "op": "==", "value": "2"}])["error"]["code"] == "KEY_NOT_INDEXED"
+
+
+RICH_FLAT = (
+    "event_idx,contingency,from_bus,to_bus,circuit_id,section,p_from_mw,q_from_mvar,mva_from,rate_mva,loading_percent,viol,v_from_pu,v_to_pu,ang_from_deg,ang_to_deg\n"
+    "0,base_case,1,2,1,,68.0,17.0,70.0,100,70,0,1.02,1.01,-4.0,-6.0\n"
+    "0,base_case,1,2,2,,19.0,6.0,20.0,100,20,0,1.02,1.00,-4.0,-5.0\n"
+    "1,BR_1_2_2,1,2,1,,115.0,35.0,120.0,100,120,1,0.94,0.97,-10.0,-2.5\n"
+    "2,BR_1_2_1,1,2,2,,78.0,20.0,80.0,100,80,0,0.99,0.93,-5.0,-17.0\n"
+)
+RICH_CONVERGENCE = (
+    "event_idx,contingency,type,converged,iterations,final_tolerance,max_p_bus,max_p_mismatch,max_q_bus,max_q_mismatch,status_code\n"
+    "1,BR_1_2_2,branch,true,3,1e-6,2,0.002,2,0.001,OK\n"
+    "2,BR_1_2_1,branch,true,5,1e-6,2,0.004,2,0.003,OK\n"
+    "3,GEN_2_1,generator,false,20,1.0,2,0.5,2,0.4,DIVERGED\n"
+)
+
+
+def _rich_run(agent_context):
+    """Give run_a a flat result with flows, voltages, and angles, a matching convergence file, fresh caches, and an index."""
+    run = agent_context.run("run_a")
+    (run / "work/case_flat.csv").write_text(RICH_FLAT)
+    (run / "work/case_convergence.csv").write_text(RICH_CONVERGENCE)
+    for name in ("pflow_mm", "branch_metadata"):
+        _rewrite_cached_table(run, name, _cached_rows(run, name))
+    _rewrite_cached_table(run, "area_metadata", _cached_rows(run, "area_metadata"), "case.raw")
+    build_event_index(run)
+    return run
+
+
+def test_cases_rank_flows_voltages_and_angles_by_any_qualifier(agent_context):
+    """Cases carry their facility's and contingency's fields, so one rank answers flow, voltage, and angle questions."""
+    pytest.importorskip("pyarrow")
+    _rich_run(agent_context)
+    service = ToolService(agent_context)
+    flows = service.rank("run_a", object="cases", metric="mva_from", fields=["p_from_mw", "q_from_mvar", "control_area", "outage_area"])["data"]
+    first = flows["rows"][0]
+    assert (first["event_idx"], first["contingency"], first["line_id"], first["value"], first["p_from_mw"], first["q_from_mvar"]) == (1, "BR_1_2_2", "1", 120, 115, 35)
+    assert (first["control_area"], first["outage_area"], flows["units"], flows["recorded_cases"]) == (["North", "South"], ["North", "South"], "MVA", 4)
+    low = service.rank("run_a", object="cases", metric="min_voltage_pu", order="ascending", filters=[{"column": "min_voltage_pu", "op": "<", "value": 0.95}])["data"]["rows"]
+    assert [(row["event_idx"], row["value"]) for row in low] == [(2, 0.93), (1, 0.94)]
+    assert service.rank("run_a", object="cases", metric="angle_difference_deg", magnitude=1)["data"]["rows"][0]["value"] == 12
+    north_overloads = [{"column": "control_area", "op": "==", "value": "North"}, {"column": "loading_percent", "op": ">=", "value": 100}]
+    assert [row["event_idx"] for row in service.rank("run_a", object="cases", filters=north_overloads)["data"]["rows"]] == [1]
+    assert service.rank("run_a", object="cases", filters=[{"column": "outage_area", "op": "==", "value": "South"}])["data"]["total_matching"] == 2
+    per_outage = service.rank_groups("run_a", object="cases", group="contingency", statistic="count", metric="loading_percent", filters=[{"column": "loading_percent", "op": ">=", "value": 100}])["data"]["rows"]
+    assert [(row["group"], row["value"]) for row in per_outage] == [("BR_1_2_2", 1)]
+    peaks = service.rank_groups("run_a", object="cases", group="facility", metric="mva_from", statistic="max")["data"]["rows"]
+    assert [(row["group"], row["value"], row["count"]) for row in peaks] == [("ALPHA to BETA (1)", 120, 2), ("ALPHA to BETA (2)", 80, 2)]
+    areas = service.rank_groups("run_a", object="cases", group="control_area", metric="loading_percent", statistic="max")["data"]["rows"]
+    assert [(row["group"], row["value"]) for row in areas] == [("North", 120), ("South", 120)]
+    fallback = service.rank("run_a", object="cases")
+    assert fallback["data"]["metric"] == "loading_percent" and any("facility metric" in warning for warning in fallback["warnings"])
+    assert service.rank("run_a", object="cases", metric="violation_count")["error"]["code"] == "INVALID_METRIC"
+    assert service.rank("run_a", object="cases", filters=[{"column": "loading_percent", "op": "contains", "value": "1"}])["error"]["code"] == "INVALID_FILTER"
+    assert service.rank("run_a", object="cases", compare_run_id="run_b")["error"]["code"] == "COMPARE_FACILITIES_ONLY"
+    assert service.rank_groups("run_a", object="cases", group="binding_contingency")["error"]["code"] == "INVALID_GROUP"
+
+
+def test_contingencies_by_outage_area_status_and_solution(agent_context):
+    """Contingencies take convergence fields from the convergence file and outage areas from their names."""
+    pytest.importorskip("pyarrow")
+    _rich_run(agent_context)
+    service = ToolService(agent_context)
+    iterations = service.rank("run_a", object="contingencies", metric="iterations", fields=["type", "outage_area"])["data"]
+    assert [(row["event_idx"], row["value"], row["outage_area"]) for row in iterations["rows"]] == [(2, 5, ["North", "South"]), (1, 3, ["North", "South"])]
+    assert iterations["excluded_not_converged"] == 1
+    statuses = service.rank_groups("run_a", object="contingencies", group="status_code", metric="iterations", statistic="count")["data"]["rows"]
+    assert [(row["group"], row["value"]) for row in statuses] == [("OK", 2), ("DIVERGED", 1)]
+    failed = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "status_code", "op": "!=", "value": "OK"}], fields=["type", "outage_area"])["data"]["rows"]
+    assert [(row["contingency"], row["type"], row["outage_area"]) for row in failed] == [("GEN_2_1", "generator", ["South"])]
+    south = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "outage_area", "op": "==", "value": "South"}])["data"]
+    assert south["total_matching"] == 2
+    by_area = service.rank_groups("run_a", object="contingencies", group="outage_area", metric="iterations", statistic="max")["data"]["rows"]
+    assert [(row["group"], row["value"]) for row in by_area] == [("North", 5), ("South", 5)]
+    assert service.rank_groups("run_a", object="contingencies", group="voltage_class")["error"]["code"] == "INVALID_GROUP"
+
+
+def test_compare_mode_ranks_changes_and_finds_new_and_resolved_overloads(agent_context):
+    """compare_run_id ranks the change per facility and qualifies on both runs' values."""
+    second = agent_context.run("run_b")
+    rows = _cached_rows(second, "pflow_mm")
+    for row in rows:
+        row["max_utilization_pct"] = {"2": 105, "1": 95 if row["section"] == "2" else 130}.get(row["line_id"], row["max_utilization_pct"])
+    _rewrite_cached_table(second, "pflow_mm", rows)
+    _rewrite_cached_table(second, "branch_metadata", _cached_rows(second, "branch_metadata"))
+    service = ToolService(agent_context)
+    changes = service.rank("run_a", compare_run_id="run_b", fields=["max_utilization_pct", "compare_value"], magnitude=0)["data"]["rows"]
+    assert [(row["line_id"], row["section"], row["value"], row["max_utilization_pct"], row["compare_value"]) for row in changes] == [("2", "", 25, 80, 105), ("1", "", 10, 120, 130), ("1", "2", -15, 110, 95)]
+    new = [{"column": "max_utilization_pct", "op": "<=", "value": 100}, {"column": "compare_value", "op": ">", "value": 100}]
+    resolved = [{"column": "max_utilization_pct", "op": ">", "value": 100}, {"column": "compare_value", "op": "<=", "value": 100}]
+    assert [row["line_id"] for row in service.rank("run_a", compare_run_id="run_b", filters=new)["data"]["rows"]] == ["2"]
+    assert [(row["line_id"], row["section"]) for row in service.rank("run_a", compare_run_id="run_b", filters=resolved)["data"]["rows"]] == [("1", "2")]
+    grouped = service.rank_groups("run_a", compare_run_id="run_b", group="control_area")["data"]
+    assert [(row["group"], row["value"]) for row in grouped["rows"]] == [("North", pytest.approx(6.666667)), ("South", pytest.approx(6.666667))]
+    assert grouped["units"] == "percentage points"
+    assert service.rank("run_a", filters=new)["error"]["code"] == "INVALID_FILTER"
+    assert service.rank("run_a", compare_run_id="run_a")["error"]["code"] == "INVALID_COMPARISON"
 
 
 def test_optional_tables_fall_back_when_source_is_missing(agent_context):
@@ -359,7 +462,10 @@ def test_optional_tables_fall_back_when_source_is_missing(agent_context):
     run = agent_context.run("run_a")
     _rewrite_cached_table(run, "contingency_summary", [dict(zip(SUMMARY_COLUMNS, [1, "line outage", 1, 1, 120, "[]", True, "OK"]))])
     (run / "work/case_flat.csv").unlink()
-    assert ToolService(agent_context).rank_contingencies("run_a")["error"]["code"] == "ANALYSIS_NOT_BUILT"
+    # With no current summary the convergence file still names the contingencies, but their loading is unknown.
+    result = ToolService(agent_context).rank("run_a", object="contingencies", metric="max_loading_pct")
+    assert (result["error"], result["data"]["total_matching"], result["data"]["excluded_unknown_value"]) == (None, 0, 1)
+    assert any("no current contingency summary" in warning for warning in result["warnings"])
 
 
 def test_method_settings_rating_basis_and_filter_scope(agent_context):
@@ -417,12 +523,13 @@ def test_comparison_reports_unmatched_facilities_and_rating_change(agent_context
     metadata[1]["line_id"] = "second-only"
     metadata[0]["rate_mva"] = 200
     _rewrite_cached_table(second, "branch_metadata", metadata)
-    compared = ToolService(agent_context).compare_runs("run_a", "run_b")
+    compared = ToolService(agent_context).rank("run_a", compare_run_id="run_b", fields=["rating_changed", "compare_value"], magnitude=0)
     assert compared["error"] is None
-    assert compared["data"]["first_only"] == compared["data"]["second_only"] == 1
-    assert all(row["delta_pct_points"] == 10 for row in compared["data"]["rows"])
-    assert any(row["rating_changed"] for row in compared["data"]["rows"])
+    assert compared["data"]["only_in_run"] == compared["data"]["only_in_compare_run"] == 1
+    assert all(row["value"] == 10 for row in compared["data"]["rows"])
+    assert any(row["rating_changed"] for row in compared["data"]["rows"]) and compared["data"]["rating_changed_count"] == 1
     assert all(row["line_id"] not in ("first-only", "second-only") for row in compared["data"]["rows"])
+    assert compared["data"]["units"] == "percentage points"
 
 
 def test_rank_qualifiers_match_truncated_psse_names(agent_context):
@@ -460,16 +567,16 @@ def test_index_rejections_keep_their_codes(agent_context):
     original = json.loads(path.read_text())
     for change, expected in (({"source": "work/../../../../etc/passwd"}, "PATH_OUTSIDE_SESSION"), ({"generation": "../outside"}, "PATH_OUTSIDE_SESSION")):
         path.write_text(json.dumps({**original, **change}))
-        assert ToolService(agent_context).get_contingency_flows("run_a", 1)["error"]["code"] == expected
+        assert ToolService(agent_context).rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": 1}])["error"]["code"] == expected
     (path.parent / "linked-generation").symlink_to(path.parent / original["generation"], target_is_directory=True)
     path.write_text(json.dumps({**original, "generation": "linked-generation"}))
-    assert ToolService(agent_context).get_contingency_flows("run_a", 1)["error"]["code"] == "PATH_OUTSIDE_SESSION"
+    assert ToolService(agent_context).rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": 1}])["error"]["code"] == "PATH_OUTSIDE_SESSION"
     path.write_text("{not json")
-    assert ToolService(agent_context).get_contingency_flows("run_a", 1)["error"]["code"] == "INVALID_ARTIFACT"
+    assert ToolService(agent_context).rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": 1}])["error"]["code"] == "INVALID_ARTIFACT"
     path.write_text(json.dumps(original))
     with (run / "work/case_flat.csv").open("a") as handle:
         handle.write("3,other,1,2,1,,100,80,0\n")
-    assert ToolService(agent_context).get_contingency_flows("run_a", 1)["error"]["code"] == "INDEX_STALE"
+    assert ToolService(agent_context).rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": 1}])["error"]["code"] == "INDEX_STALE"
     records = [json.loads(line) for line in (agent_context.directory / "tool_calls.jsonl").read_text().splitlines() if '"phase": "completed"' in line]
     assert records[0]["result"]["error"]["code"] == "PATH_OUTSIDE_SESSION"
 
@@ -537,8 +644,6 @@ def test_all_tool_names_have_a_direct_result_contract(agent_context):
     service = ToolService(agent_context)
     arguments = {
         "rank": ("run_a",), "rank_groups": ("run_a",),
-        "compare_runs": ("run_a", "run_b"), "rank_contingencies": ("run_a",),
-        "get_contingency_flows": ("run_a", 1), "get_branch_contingencies": ("run_a", 1, 2, "1"),
         "propose_analysis_script": ("run_a", "Count rows", "print(1)"),
         "list_files": (), "read_file": ("runs/run_a/work/case_flat.csv",),
         "list_projects": (), "get_project": (), "create_project": ("Other", []), "add_project_inputs": ([],),

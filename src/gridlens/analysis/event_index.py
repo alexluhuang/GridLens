@@ -298,20 +298,3 @@ def group_cases(run_dir: Path, *, metric: str, statistic: str, by: str, labels: 
                     groups[label] = GroupAccumulator(statistic)
                 groups[label].merge(part["value_count"], part["value_sum"], part["square_sum"], part["value_min"], part["value_max"], part.get("value_list") or ())
     return groups, used, paths
-
-
-def query_event_index(run_dir: Path, *, event_idx: int | None = None, branch: tuple | None = None, limit: int = 50, index_dir: Path | None = None) -> tuple[list[dict], int, list[Path]]:
-    """Return the highest-loading index rows for one event or one branch key, their total count, and the files read.
-
-    A thin form of scan_cases for the event and branch drill-down tools; limit=0 keeps every matching row.
-    """
-    if (event_idx is None) == (branch is None):
-        raise ValueError("Select one event or one canonical branch key.")
-    dataset, _, _ = open_event_index(run_dir, index_dir=index_dir)
-    extra = tuple(name for name in NUMERIC_COLUMNS if dataset is not None and name in dataset.schema.names)
-    events = {event_idx} if event_idx is not None else None
-    keys = {case_key(*branch)} if branch is not None else None
-    rows, total, paths = scan_cases(run_dir, metric="loading_percent", limit=limit, events=events, keys=keys, extra=extra, index_dir=index_dir)
-    for row in rows:
-        row.pop("value", None)
-    return rows, total, paths
