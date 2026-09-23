@@ -134,13 +134,13 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
             "numeric_fidelity": bool(re.search(r"\b20(?:\.0+)?\s*(?:percentage points?|%)", margin_answer, re.I)),
             "thermal_margin_wording": "margin" in margin_answer.lower() and ("percentage point" in margin_answer.lower() or "%" in margin_answer),
         }
-        restricted = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
-        restricted_controller = AgentController(restricted, HermesAdapter(status.endpoint))
-        cross_answer = restricted_controller.run_turn("Compare run_a and run_b. If run_b is outside my selected runs, say so.", lambda event: None)
-        cross_calls = session_sources(restricted.directory)
+        # A session names only a starting run; the agent may still compare it with any other run of the project.
+        focused = SessionContext.create(agent_project, ("run_a",), model, status.endpoint)
+        cross_answer = AgentController(focused, HermesAdapter(status.endpoint)).run_turn("Compare maximum line loading between run_a and run_b.", lambda event: None)
+        cross_calls = session_sources(focused.directory)
         cross_run = {
-            "no_cross_run_access": all(row["outcome"] == "error" and row["result"]["error"]["code"] == "RUN_NOT_SELECTED" for row in cross_calls if "run_b" in json.dumps(row.get("arguments", {}))),
-            "access_disclosed": bool(re.search(r"(not selected|not among the selected|no access|cannot access|outside.*selected)", cross_answer, re.I)),
+            "compared": any(row["tool"] == "compare_runs" and row["outcome"] == "ok" for row in cross_calls),
+            "numeric_fidelity": bool(re.search(r"\b10(?:\.0+)?\s*(?:percentage points?|%)", cross_answer, re.I)),
         }
         manifest = agent_project / "runs/run_a/reports/interactive_analysis_manifest.json"
         saved_manifest = manifest.read_text()
@@ -170,7 +170,7 @@ def test_installed_local_models_share_tools_and_prompt(agent_project):
     output.write_text(json.dumps(records, indent=2))
     assert all(
         record["congestion"]["tool_selection"] and record["congestion"]["numeric_fidelity"] and record["congestion"]["citation"]
-        and record["cross_run"]["no_cross_run_access"] and record["missing_cache"]["no_invented_loading"]
+        and record["cross_run"]["compared"] and record["missing_cache"]["no_invented_loading"]
         and record["missing_cache"]["rebuild_instruction"]
         for record in records
     ), records

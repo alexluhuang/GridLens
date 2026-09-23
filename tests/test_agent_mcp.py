@@ -51,7 +51,7 @@ def test_official_sdk_client_tools_and_scope(agent_context):
             result = json.loads(response.content[0].text)
             assert result["data"]["rows"][0]["max_utilization_pct"] == 120
             rejected = await client.call_tool("get_run_method", {"run_id": "../outside"})
-            assert json.loads(rejected.content[0].text)["error"]["code"] == "RUN_NOT_SELECTED"
+            assert json.loads(rejected.content[0].text)["error"]["code"] == "INVALID_RUN_ID"
     asyncio.run(exercise())
 
 
@@ -75,7 +75,7 @@ def test_agent_tool_cli_contract(agent_context):
     assert json.loads(completed.stdout)["error"] is None
     completed = run(str(context), "get_run_method", "--arguments", json.dumps({"run_id": "../x"}))
     assert completed.returncode == 1
-    assert json.loads(completed.stdout)["error"]["code"] == "RUN_NOT_SELECTED"
+    assert json.loads(completed.stdout)["error"]["code"] == "INVALID_RUN_ID"
     # An unexpected argument is a tool-envelope error (exit 1), not a usage error (exit 2).
     completed = run(str(context), "get_run_inventory", "--arguments", json.dumps({"bogus": 1}))
     assert completed.returncode == 1

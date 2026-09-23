@@ -1,10 +1,14 @@
-"""The session capability, its on-disk record, and the audit files.
+"""The session record, project and run lookup, and the audit files.
 
-A session is the unit of authority in the agent feature. `SessionContext` is written once, at creation,
-and names the project root, the runs the user selected, the model, and the route. Every later read is
-resolved against it through `scoped_path`, which is the single place that rejects traversal, symlink
-escape, and any run the session did not select. Tools receive run IDs rather than paths precisely so that
-this module is the only one that turns a name into a location on disk.
+A session is one conversation. `SessionContext` is written once, at creation, and names the project that
+was open in GridLens (if any), the runs the user selected there, the GridLens projects folder, the model,
+and the route. The route is the security decision made here: it is fixed before any project text can
+reach a runtime.
+
+A session does not limit which projects or runs the tools may use. The agent can create projects, start
+runs, and read every file of a GridLens project, so tools name a project and a run, and `find_project`
+and `resolve_run` turn those names into folders. `scoped_path` guarantees that a resolved path stays
+inside the folder it was resolved against and never follows a symlink out of it.
 """
 from __future__ import annotations
 
@@ -24,6 +28,12 @@ from gridlens.agent.providers import DEFAULT_PROVIDER, PROVIDER_IDS, route_for
 
 
 MAX_JSON_BYTES = 2 * 1024 * 1024
+PROJECT_FILE = "project.json"
+# Sessions live inside the open project. With no project open they live in a hidden folder of the
+# projects folder, which is never mistaken for a project because it has no project.json.
+PROJECT_SESSIONS = Path("agent/sessions")
+WORKSPACE_SESSIONS = Path(".gridlens-agent/sessions")
+RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def safe_utf8(value: object) -> object:
@@ -111,16 +121,79 @@ def export_session(directory: Path, destination: Path) -> None:
         os.replace(archive_path, destination)
 
 
+def default_projects_dir() -> Path:
+    """Return the projects folder named in the user's GridLens settings."""
+    from gridlens.core.app_settings import AppSettings
+
+    return AppSettings.load().default_projects_dir.expanduser()
+
+
+def project_folders(projects_dir: Path) -> list[Path]:
+    """Return the GridLens project folders directly inside projects_dir, sorted by folder name."""
+    if not projects_dir.is_dir():
+        return []
+    return sorted(
+        path for path in projects_dir.iterdir()
+        if path.is_dir() and not path.is_symlink() and (path / PROJECT_FILE).is_file()
+    )
+
+
+def find_project(name: str, projects_dir: Path) -> Path:
+    """Resolve a project folder path, a folder name, or the name recorded in project.json to its folder.
+
+    A relative name is looked up inside projects_dir first as a folder name, then by the project name
+    each project.json records, so both "GridPACK_Test_Project" and "GridPACK Test Project" work.
+    """
+    candidate = Path(name).expanduser()
+    if not candidate.is_absolute():
+        candidate = projects_dir / name
+    if (candidate / PROJECT_FILE).is_file():
+        return candidate.resolve()
+    for folder in project_folders(projects_dir):
+        try:
+            if read_json(folder / PROJECT_FILE).get("name") == name:
+                return folder.resolve()
+        except AgentError:
+            continue
+    raise AgentError("PROJECT_NOT_FOUND", f"No GridLens project matches '{name[:200]}'. Use list_projects, or pass the project folder path.")
+
+
+def resolve_run(project_root: Path, run_id: str, *, completed: bool = True) -> Path:
+    """Return the folder of one run of a project.
+
+    Refuses an ID that is not a plain folder name, a run that does not exist, and, when completed is
+    True, a run whose status.json does not say it completed.
+    """
+    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id) or run_id in (".", ".."):
+        raise AgentError("INVALID_RUN_ID", "Use a run ID from get_project or get_run_inventory, such as 2026-07-28_14-46-26.")
+    path = scoped_path(project_root, Path("runs") / run_id, directory=True)
+    if not path.is_dir():
+        raise AgentError("RUN_NOT_FOUND", f"The project has no run named {run_id}. Use get_run_inventory to list its runs.")
+    if completed:
+        status_path = scoped_path(path, "status.json")
+        if not status_path.is_file() or read_json(status_path).get("status") != "completed":
+            raise AgentError("RUN_NOT_COMPLETED", "This run has not completed. Check it with get_run_status, or choose a completed run.")
+    return path
+
+
+def sessions_location(project_root: Path | None, projects_dir: Path) -> tuple[Path, Path]:
+    """Return the folder a session folder is scoped to, and the sessions path relative to it."""
+    if project_root is not None:
+        return project_root, PROJECT_SESSIONS
+    return projects_dir, WORKSPACE_SESSIONS
+
+
 @dataclass(frozen=True)
 class SessionContext:
-    """The authority for one conversation, written once and never amended.
+    """The record of one conversation, written once and never amended.
 
     Creating a context is the moment the route is decided, before any project text can reach a runtime.
-    Everything the tools may read is reachable from these fields, so a session cannot widen its own scope:
-    changing the project, the runs, the model, or the runtime means starting a new one.
+    project_root is the project that was open in GridLens, or None, and run_ids are the runs selected
+    there. Both only tell the agent where to start: tools may name any project and any run. Changing the
+    model or the runtime means starting a new session.
     """
 
-    project_root: Path
+    project_root: Path | None
     run_ids: tuple[str, ...]
     model: str
     endpoint: str
@@ -130,27 +203,41 @@ class SessionContext:
     route: str = "loopback_only"
     # True only when the user confirmed, for this session, that a hosted runtime may receive project data.
     remote_acknowledged: bool = False
+    # The folder GridLens lists and creates projects in. None only for contexts built directly in code.
+    projects_dir: Path | None = None
 
-    def run(self, run_id: str) -> Path:
-        """Resolve a selected, completed run to its directory, or refuse the request."""
-        if run_id not in self.run_ids or not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id) or run_id in (".", ".."):
-            raise AgentError("RUN_NOT_SELECTED", "Select this run in the Agent tab and start a new session.")
-        path = scoped_path(self.project_root, Path("runs") / run_id, directory=True)
-        status = read_json(scoped_path(path, "status.json"))
-        if status.get("status") != "completed":
-            raise AgentError("RUN_NOT_COMPLETED", "Select a completed GridPACK run.")
-        return path
+    @property
+    def projects_folder(self) -> Path:
+        """Return the folder GridLens lists and creates projects in."""
+        if self.projects_dir is not None:
+            return self.projects_dir
+        if self.project_root is not None:
+            return self.project_root.parent
+        raise AgentError("NO_PROJECTS_FOLDER", "Start a new session; this one records no projects folder.")
+
+    def run(self, run_id: str, *, completed: bool = True) -> Path:
+        """Resolve a run of the session's project to its folder, or refuse the request."""
+        if self.project_root is None:
+            raise AgentError("NO_PROJECT", "Name a project (list_projects shows them) or create one with create_project.")
+        return resolve_run(self.project_root, run_id, completed=completed)
 
     @classmethod
     def create(
-        cls, project_root: Path, run_ids: tuple[str, ...], model: str, endpoint: str,
-        *, runtime: str = DEFAULT_PROVIDER, remote_acknowledged: bool = False,
+        cls, project_root: Path | None, run_ids: tuple[str, ...], model: str, endpoint: str,
+        *, runtime: str = DEFAULT_PROVIDER, remote_acknowledged: bool = False, projects_dir: Path | None = None,
     ) -> "SessionContext":
-        """Create the session folder and write its immutable context."""
-        root = project_root.expanduser().resolve(strict=True)
-        read_json(scoped_path(root, "project.json"))
-        if not run_ids or len(run_ids) > 2 or len(set(run_ids)) != len(run_ids):
-            raise AgentError("INVALID_SELECTION", "Select one completed run, or two runs for comparison.")
+        """Create the session folder and write its immutable record.
+
+        project_root may be None, for a conversation started before any project is open. The session
+        folder then lives in the projects folder, and the selected runs must be empty.
+        """
+        projects = (projects_dir or default_projects_dir()).expanduser().resolve()
+        root = None
+        if project_root is not None:
+            root = project_root.expanduser().resolve(strict=True)
+            read_json(scoped_path(root, PROJECT_FILE))
+        if len(run_ids) > 2 or len(set(run_ids)) != len(run_ids) or (run_ids and root is None):
+            raise AgentError("INVALID_SELECTION", "Select at most two different completed runs of the open project.")
         if not model or len(model) > 256:
             raise AgentError("INVALID_MODEL", "Select a model for the chosen runtime.")
         # The route is decided here, before any user text or project name reaches a runtime process.
@@ -163,29 +250,36 @@ class SessionContext:
             endpoint = local_endpoint(endpoint)
             remote_acknowledged = False
         identifier = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ_") + uuid4().hex[:12]
-        directory = scoped_path(root, Path("agent/sessions") / identifier, directory=True)
-        context = cls(root, run_ids, model, endpoint, directory, identifier, runtime, route, remote_acknowledged)
+        base, sessions = sessions_location(root, projects)
+        base.mkdir(parents=True, exist_ok=True)
+        directory = scoped_path(base, sessions / identifier, directory=True)
+        context = cls(root, tuple(run_ids), model, endpoint, directory, identifier, runtime, route, remote_acknowledged, projects)
         for run_id in run_ids:
             context.run(run_id)
         directory.mkdir(parents=True, mode=0o700)
         os.chmod(directory, 0o700)
         value = asdict(context)
-        value.update(project_root=str(root), directory=str(directory))
+        value.update(project_root=str(root) if root else None, directory=str(directory), projects_dir=str(projects))
         write_json(directory / "context.json", value, exclusive=True)
         context.set_status("ready")
         return context
 
     @classmethod
     def load(cls, path: Path) -> "SessionContext":
-        """Load a context file, re-validating every field before trusting it."""
+        """Load a context file, re-validating every field before trusting it.
+
+        A record written before sessions named their projects folder uses the project's parent folder.
+        """
         if path.is_symlink() or not path.is_file():
             raise AgentError("INVALID_SESSION", "Start a new session from the Agent tab.")
         data = read_json(path)
         try:
+            root = Path(data["project_root"]) if data.get("project_root") else None
+            projects = Path(data["projects_dir"]) if data.get("projects_dir") else (root.parent if root else None)
             context = cls(
-                Path(data["project_root"]), tuple(data["run_ids"]), data["model"], data["endpoint"],
+                root, tuple(data["run_ids"]), data["model"], data["endpoint"],
                 Path(data["directory"]), data["session_id"], data["runtime"],
-                str(data.get("route", "loopback_only")), bool(data.get("remote_acknowledged", False)),
+                str(data.get("route", "loopback_only")), bool(data.get("remote_acknowledged", False)), projects,
             )
             remote = context.route == "remote"
             if (
@@ -193,15 +287,18 @@ class SessionContext:
                 or context.route != route_for(context.runtime)
                 or (remote and (not context.remote_acknowledged or context.endpoint))
                 or (not remote and (context.remote_acknowledged or context.endpoint != local_endpoint(context.endpoint)))
-                or not context.project_root.is_absolute()
-                or context.project_root != context.project_root.resolve()
+                or projects is None or not projects.is_absolute()
+                or (root is not None and (not root.is_absolute() or root != root.resolve()))
                 or not re.fullmatch(r"[A-Za-z0-9_]+", context.session_id)
-                or context.directory != scoped_path(context.project_root, Path("agent/sessions") / context.session_id, directory=True)
                 or path.absolute() != context.directory / "context.json"
-                or not 1 <= len(context.run_ids) <= 2
+                or len(context.run_ids) > 2 or (context.run_ids and root is None)
             ):
                 raise ValueError
-            read_json(scoped_path(context.project_root, "project.json"))
+            base, sessions = sessions_location(root, projects)
+            if context.directory != scoped_path(base, sessions / context.session_id, directory=True):
+                raise ValueError
+            if root is not None:
+                read_json(scoped_path(root, PROJECT_FILE))
             for run_id in context.run_ids:
                 context.run(run_id)
             return context

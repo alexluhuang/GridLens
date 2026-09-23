@@ -53,7 +53,7 @@ def test_ranking_matches_gui_and_keeps_circuits_sections(agent_context):
     assert result["data"]["convergence"] == {"known": True, "total": 3, "converged": 2, "failed": 1}
     assert any("not a converged N-1-only" in warning for warning in result["warnings"])
     assert result["provenance"]["sources"]
-    assert all(not source["path"].startswith("/") for source in result["provenance"]["sources"])
+    assert all(source["path"].startswith(str(agent_context.project_root) + "/") for source in result["provenance"]["sources"])
 
 
 def test_margin_base_transformers_groups_and_threshold(agent_context):
@@ -81,15 +81,37 @@ def test_branch_search_method_and_comparison(agent_context):
     assert len(service.get_run_inventory()["data"]["rows"]) == 2
 
 
-@pytest.mark.parametrize("run_id", ["../run_b", "/tmp", "unselected", "run_a/../../run_b"])
-def test_run_scope_rejects_paths(agent_context, run_id):
+@pytest.mark.parametrize("run_id,code", [("../run_b", "INVALID_RUN_ID"), ("/tmp", "INVALID_RUN_ID"), ("missing", "RUN_NOT_FOUND"), ("run_a/../../run_b", "INVALID_RUN_ID")])
+def test_run_ids_must_name_a_run_folder(agent_context, run_id, code):
     result = ToolService(agent_context).rank_branch_loading(run_id)
-    assert result["error"]["code"] == "RUN_NOT_SELECTED"
+    assert result["error"]["code"] == code
 
 
-def test_unselected_completed_run_is_inaccessible(agent_project):
-    context = SessionContext.create(agent_project, ("run_a",), "fixture:model", "http://127.0.0.1:11434")
-    assert ToolService(context).compare_runs("run_a", "run_b")["error"]["code"] == "RUN_NOT_SELECTED"
+def test_any_run_and_any_project_is_reachable(agent_project, tmp_path):
+    """The selected run is a starting point only: other runs and other projects resolve by name or path."""
+    context = SessionContext.create(agent_project, ("run_a",), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path)
+    service = ToolService(context)
+    assert service.compare_runs("run_a", "run_b")["error"] is None
+    assert service.rank_branch_loading("run_b", project=agent_project.name)["error"] is None
+    assert service.rank_branch_loading("run_b", project=str(agent_project))["error"] is None
+    assert service.rank_branch_loading("run_b", project="Synthetic Project")["error"] is None
+    assert service.rank_branch_loading("run_b", project="No Such Project")["error"]["code"] == "PROJECT_NOT_FOUND"
+    (agent_project / "runs/run_b/status.json").write_text('{"status": "running"}')
+    assert service.rank_branch_loading("run_b")["error"]["code"] == "RUN_NOT_COMPLETED"
+    assert service.locate_run_artifacts("run_b", "raw_input")["error"] is None
+    inventory = service.get_run_inventory()["data"]["rows"]
+    assert [(row["run_id"], row["status"], row["selected_in_gui"]) for row in inventory] == [("run_b", "running", False), ("run_a", "completed", True)]
+    assert inventory[1]["cached_tables"] == ["area_metadata", "branch_metadata", "pflow_mm"]
+
+
+def test_session_without_a_project_lives_in_the_projects_folder(tmp_path):
+    """A conversation can start before any project exists; tools then need an explicit project."""
+    context = SessionContext.create(None, (), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path / "projects")
+    assert context.directory.parent == (tmp_path / "projects/.gridlens-agent/sessions").resolve()
+    assert SessionContext.load(context.directory / "context.json") == context
+    assert ToolService(context).get_run_inventory()["error"]["code"] == "NO_PROJECT"
+    with pytest.raises(ValueError, match="at most two"):
+        SessionContext.create(None, ("run_a",), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path)
 
 
 def test_stale_cache_never_reads_flat_data(agent_context, monkeypatch):
@@ -176,7 +198,7 @@ def test_convergence_and_artifact_inventory_are_bounded(agent_context, tmp_path)
     assert result["data"]["failed"] == 1
     assert result["data"]["rows"] == [{"event_idx": "2", "contingency": "island", "converged": "false", "status_code": "ISLANDED"}]
     raw = service.locate_run_artifacts("run_a", "raw_input")
-    assert raw["data"]["rows"][0]["path"] == "runs/run_a/work/case.raw"
+    assert raw["data"]["rows"][0]["path"] == str(agent_context.project_root / "runs/run_a/work/case.raw")
     assert "original_inputs" in raw["data"]["raw_input_note"]
     assert service.locate_run_artifacts("run_a", "run_log")["data"]["rows"] == []
     assert service.locate_run_artifacts("run_a", "exports")["data"]["rows"] == []
@@ -392,7 +414,7 @@ def test_model_visible_strings_and_audits_are_bounded_utf8(agent_context):
         assert result["error"] is None
         check(result)
         assert len(json.dumps(result, ensure_ascii=False).encode()) <= MAX_RESULT_BYTES
-        assert all(not source["path"].startswith("/") for source in result["provenance"]["sources"])
+        assert all(source["path"].startswith(str(agent_context.project_root) + "/") for source in result["provenance"]["sources"])
     records = [json.loads(line) for line in (agent_context.directory / "tool_calls.jsonl").read_text().splitlines()]
     for record in records:
         check(record)

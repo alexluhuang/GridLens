@@ -57,4 +57,4 @@ def agent_project(tmp_path):
 
 @pytest.fixture
 def agent_context(agent_project):
-    return SessionContext.create(agent_project, ("run_a", "run_b"), "fixture:model", "http://127.0.0.1:11434")
+    return SessionContext.create(agent_project, ("run_a", "run_b"), "fixture:model", "http://127.0.0.1:11434", projects_dir=agent_project.parent)
