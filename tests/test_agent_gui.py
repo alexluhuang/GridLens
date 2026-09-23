@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from PySide6.QtWidgets import QApplication
 
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
+from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project
 from gridlens.gui.agent_tab import AgentTab, cited_answer
 
@@ -18,7 +19,8 @@ def test_agent_tab_scope_plain_text_and_provider_guidance(agent_project):
     app = QApplication.instance() or QApplication([])
     tab = AgentTab()
     tab.set_project(Project("Synthetic Project", agent_project))
-    assert tab.run_combo.count() == 2
+    assert [tab.run_combo.itemData(index) for index in range(tab.run_combo.count())] == ["", "run_b", "run_a"]
+    assert tab.run_combo.currentData() == "run_b"
     assert [tab.runtime_combo.itemData(index) for index in range(tab.runtime_combo.count())] == ["hermes", "claude", "codex"]
     assert "CEII" in tab.runtime_policy.text()
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", "http://127.0.0.1:11434", ("test:model",)))
@@ -105,6 +107,30 @@ def test_refresh_runs_does_not_retarget_active_turn(agent_context):
     tab.select_run(agent_context.project_root / "runs" / "run_b")
     assert tab.run_combo.currentData() == selected
     tab.worker = None
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()
+
+
+def test_conversation_can_start_without_a_project_and_shows_tool_arguments(tmp_path):
+    """With no project open the agent can still be asked to create one; tool calls show their arguments."""
+    app = QApplication.instance() or QApplication([])
+    tab = AgentTab(AppSettings(default_projects_dir=tmp_path / "projects"))
+    assert "No project is open" in tab.project_label.text()
+    tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", "http://127.0.0.1:11434", ("test:model",)))
+    tab.input.setPlainText("Create a project from /data/case.raw and run it.")
+    assert tab.send_button.isEnabled()
+    assert not tab.build_button.isEnabled()
+    controller = object()
+    tab.controller = controller
+    tab.worker = SimpleNamespace(controller=controller)
+    tab.on_event(RuntimeEvent("tool_start", "mcp__gridlens__create_project", {"input": '{"name": "Study"}'}))
+    assert 'tool_start: mcp__gridlens__create_project {"name": "Study"}' in tab.activity.toPlainText()
+    finished = []
+    tab.turn_finished.connect(lambda: finished.append(True))
+    tab.worker = None
+    tab.finish_turn()
+    assert finished == [True]
     assert tab.shutdown()
     tab.deleteLater()
     app.processEvents()

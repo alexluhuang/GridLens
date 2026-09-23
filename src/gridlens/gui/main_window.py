@@ -80,7 +80,7 @@ class MainWindow(QMainWindow):
         self.transformer_analysis_tab = AnalysisTab(transformer_analysis=True)
         self.analysis_tab = self.branch_analysis_tab
         self.notes_tab = NotesTab()
-        self.agent_tab = AgentTab()
+        self.agent_tab = AgentTab(self.settings)
 
         self.tabs.addTab(self.project_tab, "Project")
         self.tabs.addTab(self.configuration_tab, "Configuration")
@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(4, "Analyze non-transformer branch utilization.")
         self.tabs.setTabToolTip(5, "Analyze transformer utilization.")
         self.tabs.setTabToolTip(6, "Read analysis assumptions and data notes.")
-        self.tabs.setTabToolTip(7, "Ask a planning agent about selected completed runs.")
+        self.tabs.setTabToolTip(7, "Ask the planning agent to set up, run, and analyze studies, or about any project file.")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.configuration_tab.project_changed.connect(self.on_project_changed)
@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self.results_tab.run_selected.connect(self.branch_analysis_tab.select_run)
         self.results_tab.run_selected.connect(self.transformer_analysis_tab.select_run)
         self.results_tab.run_selected.connect(self.agent_tab.select_run)
+        self.agent_tab.turn_finished.connect(self.on_agent_turn_finished)
 
         self.statusBar().showMessage("Create or open a project to begin.")
 
@@ -131,6 +132,14 @@ class MainWindow(QMainWindow):
         project_name = self.project_data.name if self.project_data else "Project"
         self.context_label.setText(f"{project_name} · latest run {path.name}")
         self.statusBar().showMessage(f"Run finished: {path.name}")
+
+    def on_agent_turn_finished(self) -> None:
+        """Refresh the run lists, because an agent turn may have started runs or built analyses."""
+        if self.project is None:
+            return
+        self.results_tab.refresh_runs()
+        self.branch_analysis_tab.refresh_runs()
+        self.transformer_analysis_tab.refresh_runs()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         stopped = [tab.shutdown() for tab in (self.agent_tab, self.branch_analysis_tab, self.transformer_analysis_tab)]

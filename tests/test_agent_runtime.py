@@ -116,6 +116,8 @@ def test_structured_events_and_unexpected_tool():
     result = adapter.parse_event('{"type":"result","exit_code":0,"text":"Done [T1]","tokens":{"total":10},"session_id":"abc"}')
     assert result.kind == "completed"
     assert result.data["usage"] == {"total": 10}
+    call = adapter.parse_event('{"type":"tool_use","name":"mcp__gridlens__rank_branch_loading","input":{"run_id":"run_a","limit":0}}')
+    assert (call.kind, call.data["input"]) == ("tool_start", '{"run_id": "run_a", "limit": 0}')
     with pytest.raises(AgentError, match="non-GridLens"):
         adapter.parse_event('{"type":"tool_use","name":"terminal"}')
     with pytest.raises(AgentError):

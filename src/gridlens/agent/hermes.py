@@ -171,7 +171,11 @@ class HermesAdapter:
             name = event.get("name", "")
             if name not in {f"mcp__gridlens__{tool}" for tool in TOOL_NAMES}:
                 raise AgentError("UNEXPECTED_TOOL", "The runtime exposed a non-GridLens tool. Stop and validate the Hermes installation.")
-            return RuntimeEvent("tool_start" if kind == "tool_use" else "tool_result", name, {"name": name, "is_error": bool(event.get("is_error", False))})
+            data = {"name": name, "is_error": bool(event.get("is_error", False))}
+            if kind == "tool_use" and isinstance(event.get("input"), dict):
+                # The arguments go into the audit and the Activity pane, so the user sees what each call asked for.
+                data["input"] = json.dumps(event["input"], ensure_ascii=False, default=str)[:2000]
+            return RuntimeEvent("tool_start" if kind == "tool_use" else "tool_result", name, data)
         if kind == "result":
             return RuntimeEvent("error" if event.get("exit_code") or event.get("error") else "completed", str(event.get("text") or event.get("error") or ""), {"session_id": event.get("session_id", ""), "usage": event.get("tokens", {}), "exit_code": event.get("exit_code", 0)})
         raise AgentError("RUNTIME_PROTOCOL_ERROR", "The installed Hermes event format differs from the tested version.")

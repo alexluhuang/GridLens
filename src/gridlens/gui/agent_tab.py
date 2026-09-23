@@ -1,3 +1,10 @@
+"""The Agent tab: a conversation with the planning agent about GridLens projects, runs, and files.
+
+A conversation can start with or without a project open. The open project and the runs selected here are
+where the agent starts; its tools can reach any project in the projects folder, create new ones, and start
+runs and analyses. After each turn the tab emits `turn_finished`, so the main window can refresh the run
+lists the agent may have changed.
+"""
 from __future__ import annotations
 
 import json
@@ -16,8 +23,9 @@ from gridlens.agent.hermes import DEFAULT_ENDPOINT
 from gridlens.agent.policy import AgentError
 from gridlens.agent.providers import DESCRIPTORS, create_adapter, descriptor
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
-from gridlens.agent.session import SessionContext, export_session, scoped_path
+from gridlens.agent.session import SessionContext, export_session, scoped_path, sessions_location
 from gridlens.agent.tools import TOOL_NAMES
+from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project
 from gridlens.analysis.csv_flat import CSV_FLAT_ALLOW_CPU_DASK_ENV, cpu_dask_fallback_warning
 from gridlens.gui.agent_jobs import AgentAnalysisWorker
@@ -63,8 +71,12 @@ def cited_answer(text: str, sources: list[dict]) -> str:
 
 
 class AgentTab(QWidget):
-    def __init__(self) -> None:
+    turn_finished = Signal()
+
+    def __init__(self, settings: AppSettings | None = None) -> None:
+        """Build the tab. settings supplies the projects folder used when no project is open."""
         super().__init__()
+        self.settings = settings or AppSettings.load()
         self.project: Project | None = None
         self.controller: AgentController | None = None
         self.worker: AgentWorker | None = None
@@ -81,7 +93,7 @@ class AgentTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
-        self.project_label = QLabel("Open a project and select a completed run.")
+        self.project_label = QLabel("No project is open. The agent can list, create, and run projects in the projects folder.")
         self.project_label.setTextFormat(Qt.PlainText)
         set_context_label(self.project_label)
         layout.addWidget(self.project_label)
@@ -112,7 +124,7 @@ class AgentTab(QWidget):
         self.run_combo = QComboBox()
         self.compare_combo = QComboBox()
         self.compare_combo.addItem("No comparison", "")
-        form.addRow("Completed run", self.run_combo)
+        form.addRow("Start from run", self.run_combo)
         form.addRow("Compare with", self.compare_combo)
         layout.addLayout(form)
         self.runtime_policy = QLabel(
@@ -125,7 +137,7 @@ class AgentTab(QWidget):
         layout.addWidget(self.runtime_policy)
         self.remote_acknowledgement = QCheckBox("I understand this provider sends my questions and project-derived tool results off this machine.")
         layout.addWidget(self.remote_acknowledgement)
-        self.tool_scope = QLabel(f"GridLens tools: {len(TOOL_NAMES)}. Runtime isolation is checked before a session starts.")
+        self.tool_scope = QLabel(f"GridLens tools: {len(TOOL_NAMES)}. The agent can set up projects, configure and start runs, build analyses, and read every field of every project file.")
         self.tool_scope.setTextFormat(Qt.PlainText)
         layout.addWidget(self.tool_scope)
         build_row = QHBoxLayout()
@@ -180,7 +192,7 @@ class AgentTab(QWidget):
         split = QSplitter(Qt.Horizontal)
         self.transcript = QPlainTextEdit()
         self.transcript.setReadOnly(True)
-        self.transcript.setPlaceholderText("Ask about congestion, thermal margin, convergence, study settings, or run files.")
+        self.transcript.setPlaceholderText("Ask about congestion, convergence, settings, or files, or ask the agent to create a project, configure and start a run, and analyze it.")
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -219,6 +231,8 @@ class AgentTab(QWidget):
         self.runtime_combo.currentIndexChanged.connect(self.provider_changed)
         self.remote_acknowledgement.toggled.connect(self.update_controls)
         self.endpoint.textEdited.connect(self.endpoint_changed)
+        # Fill the run list now, so the refresh after the first turn does not look like a new selection.
+        self.refresh_runs()
         self.provider_changed(probe=False)
         self.update_controls()
 
@@ -237,6 +251,10 @@ class AgentTab(QWidget):
             return
         self.project = project
         self.project_label.setText(f"Project: {project.name} ({project.root_dir})")
+        # Forget the previous project's runs, so this project's list starts from its newest run.
+        self.run_combo.blockSignals(True)
+        self.run_combo.clear()
+        self.run_combo.blockSignals(False)
         self.refresh_runs()
         self.new_session()
         self.refresh_history()
@@ -251,11 +269,15 @@ class AgentTab(QWidget):
             combo.blockSignals(True)
             combo.clear()
         self.compare_combo.addItem("No comparison", "")
+        self.run_combo.addItem("No run", "")
         if self.project:
             for path in self.project.list_runs():
                 if not path.is_symlink() and read_run_status(path) == "completed":
                     self.run_combo.addItem(path.name, path.name)
                     self.compare_combo.addItem(path.name, path.name)
+        # A freshly filled list starts from the newest run; a later refresh keeps the user's choice, even "No run".
+        if self.run_combo.count() > 1 and previous is None and select_run is None:
+            self.run_combo.setCurrentIndex(1)
         desired = select_run.name if select_run else previous
         index = self.run_combo.findData(desired)
         if index >= 0:
@@ -381,19 +403,17 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def send(self) -> None:
-        """Create a scoped session and launch one model turn for the user's prompt."""
-        if not self.send_button.isEnabled() or not self.project:
+        """Create a session, with or without a project open, and launch one model turn for the user's prompt."""
+        if not self.send_button.isEnabled():
             return
         prompt = self.input.toPlainText().strip()
         try:
             if self.controller is None or self.controller.cancelled.is_set():
-                run_ids = (self.run_combo.currentData(),)
-                comparison = self.compare_combo.currentData()
-                if comparison and comparison != run_ids[0]:
-                    run_ids += (comparison,)
+                run_ids = tuple(dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value))
                 context = SessionContext.create(
-                    self.project.root_dir, run_ids, self.model_combo.currentText(), self.runtime_status.endpoint,
+                    self.project.root_dir if self.project else None, run_ids, self.model_combo.currentText(), self.runtime_status.endpoint,
                     runtime=self.runtime_combo.currentData(), remote_acknowledged=self.remote_acknowledgement.isChecked(),
+                    projects_dir=self.settings.default_projects_dir,
                 )
                 self.controller = AgentController(context, create_adapter(context.runtime, context.endpoint))
                 self.session_directory = context.directory
@@ -406,7 +426,7 @@ class AgentTab(QWidget):
             self.worker = AgentWorker(self.controller, prompt, self)
             self.worker.event_received.connect(self.on_event)
             self.worker.answered.connect(self.on_answer)
-            self.worker.finished.connect(self.turn_finished)
+            self.worker.finished.connect(self.finish_turn)
             self.worker.start()
             self.activity.appendPlainText("Starting agent turn…")
             self.update_controls()
@@ -418,7 +438,8 @@ class AgentTab(QWidget):
         if not self.worker or self.worker.controller is not self.controller:
             return
         if event.kind in ("tool_start", "tool_result", "session"):
-            self.activity.appendPlainText(f"{event.kind}: {event.text or 'Agent session started'}")
+            detail = f" {event.data['input']}" if event.data.get("input") else ""
+            self.activity.appendPlainText(f"{event.kind}: {event.text or 'Agent session started'}{detail}"[:2000])
             if event.kind == "tool_result":
                 self.update_sources()
         elif event.kind == "text":
@@ -475,13 +496,16 @@ class AgentTab(QWidget):
             blocks.append("\n".join(lines))
         self.sources.setPlainText("\n\n".join(blocks))
 
-    def turn_finished(self) -> None:
+    def finish_turn(self) -> None:
+        """Release the finished worker, refresh this tab, and tell the main window the agent may have changed runs."""
         worker = self.worker
         self.worker = None
         if worker:
             worker.deleteLater()
+        self.refresh_runs()
         self.refresh_history()
         self.update_controls()
+        self.turn_finished.emit()
 
     def stop(self) -> None:
         if self.analysis_worker:
@@ -505,7 +529,7 @@ class AgentTab(QWidget):
         prompt = self.input.toPlainText().strip()
         ready = self.runtime_status is not None and self.runtime_status.ready and self.runtime_status.provider == self.runtime_combo.currentData()
         acknowledged = not descriptor(self.runtime_combo.currentData()).route == "remote" or self.remote_acknowledgement.isChecked()
-        self.send_button.setEnabled(bool(not busy and not probing and not self._history_view and ready and acknowledged and self.model_combo.currentText().strip() and self.project and self.run_combo.currentData() and prompt and len(prompt) <= MAX_PROMPT_CHARS))
+        self.send_button.setEnabled(bool(not busy and not probing and not self._history_view and ready and acknowledged and self.model_combo.currentText().strip() and prompt and len(prompt) <= MAX_PROMPT_CHARS))
         self.folder_button.setEnabled(self.session_directory is not None)
         self.export_button.setEnabled(not busy and self.session_directory is not None)
         self.review_button.setEnabled(not busy and self.session_directory is not None)
@@ -560,12 +584,12 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def refresh_history(self) -> None:
+        """List saved conversations: the open project's, or those started with no project open."""
         self.history_combo.clear()
         self.history_combo.addItem("Current conversation", "")
-        if not self.project:
-            return
+        base, sessions = sessions_location(self.project.root_dir if self.project else None, self.settings.default_projects_dir)
         try:
-            root = scoped_path(self.project.root_dir, "agent/sessions", directory=True)
+            root = scoped_path(base, sessions, directory=True)
             for path in sorted(root.iterdir(), reverse=True)[:100] if root.exists() else []:
                 if path.is_dir() and not path.is_symlink():
                     self.history_combo.addItem(path.name, str(path))
