@@ -4,9 +4,10 @@ GridLens is a local Python desktop application for running GridPACK contingency 
 Docker container. You set up a project, run a case, and read the results as tables and graphs without leaving
 your machine.
 
-The app also has an optional Agent tab that answers questions about completed runs in plain language. It
-drives an AI command-line tool that you install yourself, and it only uses a model served on a loopback
-address. GridLens ships no model and no credentials.
+The app also has an optional Agent tab: a planning agent that answers questions about any project file in
+plain language, and can set up projects, configure and start runs, and build analyses for you. It drives an
+AI command-line tool that you install yourself, and it only uses a model served on a loopback address.
+GridLens ships no model and no credentials.
 
 The intended deployment target is NVIDIA DGX Spark on DGX OS 7, which is Ubuntu 24.04 on ARM64. On other
 architectures, the app detects the host and passes the matching Docker platform flag.
@@ -63,7 +64,7 @@ src/gridlens/
   core/       settings, projects, validation, run manifests
   runner/     Docker probing, command construction, GridPACK execution
   analysis/   local output parsing, graph data, metrics, exports
-  agent/      runtime adapters, session scoping, deterministic tools, MCP server
+  agent/      runtime adapters, sessions, deterministic tools, background jobs, MCP server
   resources/  application icon
 
 tests/        core unit tests

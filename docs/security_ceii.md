@@ -27,8 +27,18 @@ The Agent tab is optional. These controls apply when someone uses it.
   neutralized through `NO_PROXY` and `no_proxy`, and an Ollama model that reports a remote host, a remote
   model, or a cloud tag is rejected. GridLens re-verifies the model at the start of every turn, so a model
   swapped to a cloud variant mid-session fails closed.
-- The model receives only bounded, capped tool results and run-relative paths. GridLens treats log lines,
-  filenames, RAW labels, contingency names, and generated-script output as data, never as instructions.
+- GridLens tools return absolute paths and every matching row the model asks for. The copy sent to the
+  model is bounded at 36,000 bytes: a larger result is saved whole in the session's `results/` folder, and
+  the model reads it through the GridLens file tools. GridLens treats log lines, filenames, RAW labels,
+  contingency names, and generated-script output as data, never as instructions.
+- The GridLens file tools read files only inside GridLens project folders and the session folder, and
+  never follow a symlink out of them. They can read every field of those files, including RAW cases and
+  the full flat results.
+- The agent can change projects. It can create a project and copy input files into it from any path the
+  user can read, write the project's GridPACK XML, start and stop GridPACK runs, and build analyses. A run
+  it starts uses the same Docker command builder and the Run tab's saved settings, so the saved network
+  mode (`none` by default) and pull policy apply to it unchanged. If the saved pull policy is `missing` or
+  `always`, an agent-started run can pull an image, just as a Run tab run can.
 - The CLI runs from a per-session profile inside the project, with a minimal environment: no bundled skills
   or plugins, no memory, no telemetry, no update checks, no lazy installs, no adoption of external logins,
   and only the GridLens MCP toolset exposed. The project root is never the CLI working directory, and no
@@ -38,15 +48,18 @@ The Agent tab is optional. These controls apply when someone uses it.
 
 ### Session folders
 
-Sessions live in `<project>/agent/sessions/<UTC timestamp>_<suffix>/`. They hold CEII-derived material, so
-treat them as CEII. Each session folder holds:
+Sessions live in `<project>/agent/sessions/<UTC timestamp>_<suffix>/`, or, for a conversation started with
+no project open, in `<projects folder>/.gridlens-agent/sessions/`. They hold CEII-derived material, so treat
+them as CEII. Each session folder holds:
 
-- `context.json`, with the project root, the selected run IDs, the model, the endpoint, the runtime, and the
-  route.
+- `context.json`, with the project root (or none), the selected run IDs, the projects folder, the model,
+  the endpoint, the runtime, and the route.
 - `prompts/<nanoseconds>.txt`, the exact prompt text handed to the CLI.
 - `transcript.jsonl`, with the user's questions verbatim and the model's answers.
 - `runtime_events.jsonl`, the normalized runtime event stream and captured diagnostics.
 - `tool_calls.jsonl`, the append-only tool audit, which contains grid loading values and facility keys.
+- `results/<call id>.json` and `results/<call id>.csv`, the complete copies of tool results too large to
+  send inline.
 - `usage.json` and `status.json`.
 - `generated/*.py` and `generated/*.json`, proposed scripts and their review records.
 - `generated/executions/*/script.py`, `result.json`, and `output.txt`, the approved bytes and the sandbox
@@ -60,13 +73,22 @@ the same handling as any other CEII material. Sessions persist until an operator
 the same approved deletion procedure as run folders. Project-level `exports/` sits outside the session and
 outside the mounted run folder.
 
+### Agent jobs
+
+A GridPACK run or an analysis build that the agent starts runs as a separate GridLens process, which keeps
+running after the turn ends and after GridLens closes. Each job has a folder,
+`<project>/agent/jobs/<job id>/`, holding `job.json` (the request and the worker's process ID),
+`status.json`, and `output.log`. Treat job folders as CEII, like session folders. To stop a job, ask the
+agent to cancel it, or stop a run's container with `docker stop gridlens-<run id>`.
+
 ### Egress audit scope
 
 The audit answers what GridLens handed to the runtime and what the runtime handed back. It does not answer
 what bytes crossed the socket. It records the logical prompts, the tool schemas GridLens exposes, every tool
-call with its arguments and its bounded result, the runtime's event stream, and the generated scripts and
-sandbox output. It cannot record fields the provider CLI adds on its own, transport headers, retries or
-internal re-prompts inside the CLI, tokenization, or the exact network bytes. Treat the audit as
+call with its arguments and its bounded result, the complete copy of any larger result, the runtime's event
+stream, and the generated scripts and sandbox output. It cannot record fields the provider CLI adds on its
+own, transport headers, retries or internal re-prompts inside the CLI, tokenization, or the exact network
+bytes. Treat the audit as
 authoritative for GridLens-controlled content and as incomplete for the wire. If you need byte-level egress
 evidence, capture it at the host or network layer.
 

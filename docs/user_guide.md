@@ -91,13 +91,20 @@ no separate GUI view yet.
 
 ## Ask the planning agent
 
-The **Agent** tab answers questions about completed runs in plain language. Typical questions are "where are
-the most congested lines", "how did you run the contingency analysis", and "where are my files".
+The **Agent** tab is a planning agent you talk to in plain language. It can:
 
-The agent is not the source of numerical truth. Every number in an answer comes from a GridLens function that
-read your analysis cache, and the answer cites the call that produced it, such as `[T1]`. The Sources pane
-lists those calls with the files each one read. A citation that does not match a recorded call is marked
-invalid, so you can tell a real number from an invented one.
+- answer questions about runs, such as "where are the most congested lines" or "how did you run the
+  contingency analysis";
+- read every field of every project file: RAW cases, the XML configuration, GridPACK CSV and text outputs,
+  GridLens caches, logs, and manifests;
+- set up and run studies, such as "create a project from /data/case.raw, run a full branch N-1, and list
+  the lines above 100%". It creates the project, writes the XML, starts the GridPACK run, waits for it,
+  and builds the branch and transformer analysis, using the same functions as the other tabs.
+
+The agent is not the source of numerical truth. Every number in an answer comes from a GridLens function, and
+the answer cites the call that produced it, such as `[T1]`. The Sources pane lists those calls with the files
+each one read. A citation that does not match a recorded call is marked invalid, so you can tell a real number
+from an invented one.
 
 ### Before you start
 
@@ -119,36 +126,48 @@ prove that its built-in file and shell tools are isolated from project data.
 2. GridLens checks the selected runtime when the tab opens. **Check runtime** repeats the probe. The status
    shows the CLI version, route, installed models, and sign-in state when sign-in applies. Local Ollama needs
    no sign-in. Use the setup command and documentation shown below the status if something is missing.
-3. Choose a **Local model** and a **Completed run**. To compare two runs, also choose one under
-   **Compare with**.
-4. If the run has no current analysis cache, click **Build / refresh analysis**. To also enable
-   per-contingency drill-down, select **Include contingency drill-down index** first. Indexing reads the
-   whole flat result once and takes a few minutes on a multi-gigabyte run.
+3. Choose a **Local model**. If a project is open, you can also choose a run under **Start from run**, and
+   a second one under **Compare with**. Both are optional. They tell the agent where to start, and it can
+   still reach any run of any project. With no project open, the agent can list and create projects in the
+   projects folder named in your settings.
+4. If a run has no current analysis cache, click **Build / refresh analysis**, or ask the agent to build it.
+   To also enable per-contingency drill-down, select **Include contingency drill-down index** first. Indexing
+   reads the whole flat result once and takes a few minutes on a multi-gigabyte run.
 5. Type your question and click **Send**. **Stop** ends the turn and stops the model process.
 
-Changing the runtime, model, project, or run selection starts a new conversation, because a session is bound
-to the runs it was created with.
+Changing the runtime, model, project, or run selection starts a new conversation.
+
+### Let the agent run a study
+
+The agent runs GridPACK the way the **Run** tab does: through Docker, with the settings the Run tab saved
+last, such as the image, the MPI process count, and the pull policy, unless you ask for others. A run and an
+analysis build take minutes, so the agent starts each one as a background job and waits for it. A job keeps
+going after the turn ends, and even after GridLens closes; ask the agent about it in a later turn. When a turn
+ends, the Results and Analysis tabs refresh their run lists, so a run the agent started appears there too.
+
+Before it stops a run or replaces inputs or settings you set up, the agent says what it would change and asks
+you to confirm, unless you asked for it.
 
 ### Read the answer
 
-The **Activity** pane shows which tools ran. The **Sources** pane shows each call, its filters, error or
-warnings, how many rows it returned, whether the result was truncated, and the files it read. The answer
-lists consulted tool-call IDs when a model omits inline citations.
+The **Activity** pane shows which tools ran and what each call asked for. The **Sources** pane shows each
+call, its filters, error or warnings, how many rows it returned, whether more rows remain, and the files it
+read. The answer lists consulted tool-call IDs when a model omits inline citations.
 
-Ranked facility results are bounded to 50 rows per call and may be shorter when the result reaches the
-size limit. Sources shows the requested limit, the actual returned and matching counts, and the reason for
-truncation. A request above 50 rows is rejected explicitly. A runtime spillover file contains only rows
-GridLens returned; it cannot recover omitted rows. For mean loading by voltage group or control area,
-GridLens uses `summarize_loading`, which computes each mean from all matching facilities before bounding
-the category rows shown to the model. The answer states the facility and area filters, number of
-facilities used, and per-group counts.
+There is no limit on how many rows a result can have. The agent can ask for every matching row, or page
+through them. A result too large to send to the model whole is saved complete in the session's `results/`
+folder, as JSON and as CSV, and the agent reads that file with the file tools. Sources shows the path of the
+saved result and how many of its rows were shown inline. For mean loading by voltage group or control area,
+GridLens uses `summarize_loading`, which computes each mean from all matching facilities. The answer states
+the facility and area filters, number of facilities used, and per-group counts.
 For top-line control-area questions, GridLens reads the endpoint area labels in the ranked result and
 lists both areas when a line crosses a boundary.
 
-Watch for two limits the agent reports rather than hides. Maximum loading covers every recorded case in the
+Watch for three limits the agent reports rather than hides. Maximum loading covers every recorded case in the
 cache, including the base case, so it is not a converged N-1-only number. Thermal margin is 100 minus maximum
 utilization, in percentage points of line rating. It is not available transfer capability, spare generation,
-or load-serving capacity, and calculating any of those needs a separate study.
+or load-serving capacity, and calculating any of those needs a separate study. A facility with no positive
+rating in the case has unknown loading, even though GridPACK reports it as 0%.
 
 ### Review a generated script
 
@@ -165,8 +184,11 @@ GridLens records the output as untrusted, because no GridLens function has check
 
 ### Session files
 
-Each conversation writes a folder under `<project>/agent/sessions/`. Click **Open session folder** to see the
-transcript, the runtime events, the tool audit, and any proposed script. Click **Export session audit** for a
-ZIP of the same record.
+Each conversation writes a folder under `<project>/agent/sessions/`, or under
+`<projects folder>/.gridlens-agent/sessions/` when no project was open. Click **Open session folder** to see
+the transcript, the runtime events, the tool audit, the saved results, and any proposed script. Click
+**Export session audit** for a ZIP of the same record. Each background job has a folder under
+`<project>/agent/jobs/` with its request, its status, and its output.
 
-Treat both as sensitive. They contain your questions, the model's answers, and grid data drawn from the run.
+Treat all of these as sensitive. They contain your questions, the model's answers, and grid data drawn from
+the run.

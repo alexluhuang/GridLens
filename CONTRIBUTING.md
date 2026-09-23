@@ -76,8 +76,10 @@ local dependency is available:
 - `core/` owns settings, projects, validation, and manifests.
 - `runner/` owns Docker probing, command construction, and process execution.
 - `analysis/` owns parsing, enrichment, metrics, graph caches, master exports, and distribution exports.
-- `agent/` owns the runtime adapter contract, the provider registry, session scoping, the deterministic tool
-  service, and the MCP server. Nothing above the adapter layer may contain provider-specific code.
+- `agent/` owns the runtime adapter contract, the provider registry, sessions, the deterministic tools, the
+  background jobs, and the MCP server. Nothing above the adapter layer may contain provider-specific code.
+  Tools that operate GridLens call the same `core/`, `runner/`, and view-model functions as the tabs, so an
+  agent-started run is built by the same Docker command builder as a Run tab run.
 - `gui/` owns PySide6 widgets and view-specific adapters. Keep business rules in pure helper modules where you
   can.
 

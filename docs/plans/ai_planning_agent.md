@@ -4,6 +4,16 @@ Status: delivered for the Hermes and Ollama local runtime, and validated end to 
 Hosted runtimes stay disabled behind the §7 governance gate. The Agent tab GUI is partly built; see
 `handoff.md` for what is open and `agent_findings.md` for the verified defect list.
 
+Scope change, 2026-09-22: the agent is no longer read-only or limited to the selected runs. Sessions name a
+project or none, and tools resolve any project and run by name. Tool results have no row cap: they page by
+offset and limit, and a result too large to send inline is saved whole in the session's `results/` folder.
+File tools read every field of every project file, including RAW sections and the full flat results.
+Operation tools create projects, import inputs, write the GridPACK XML, start and stop runs, and build
+analyses, with runs and builds executed as background jobs. The non-goals in §2 about modifying inputs,
+runs, and configurations no longer hold. Hermes still exposes only the GridLens tools: enabling its
+built-in terminal, file, code, and web tools was requested and is pending a decision, because it removes the
+tool isolation that §4.3 and §7.4 rely on. See `docs/security_ceii.md` for the controls as delivered.
+
 Initial validation target: DGX Spark, DGX OS 7 / Ubuntu 24.04.5 LTS, aarch64
 
 Initial runtime: Hermes Agent with local Ollama models

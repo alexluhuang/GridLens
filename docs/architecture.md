@@ -15,7 +15,7 @@ PySide6 GUI
   -> optional master CSV and distribution exports
 ```
 
-The Agent tab is a second path over the same local artifacts:
+The Agent tab is a second path over the same projects and runs:
 
 ```text
 PySide6 Agent tab
@@ -23,7 +23,9 @@ PySide6 Agent tab
   -> runtime adapter -> user-installed AI CLI subprocess
   -> GridLens MCP server (gridlens --mcp-server)
   -> deterministic tool service
-  -> the same run artifacts and analysis caches
+       -> the same run artifacts, analysis caches, and project files
+       -> the same project, configuration, and run functions as the other tabs
+       -> background jobs (gridlens --agent-job) for GridPACK runs and analysis builds
   -> append-only session audit
 ```
 
@@ -138,8 +140,10 @@ For a plain-language walkthrough of the `pnnl/gridpack:ca-scalability-v2` CSV fl
 
 ## Agent layer
 
-The Agent tab answers questions about completed runs. The model never reads the large result files. It calls
-deterministic GridLens functions, and those functions read the compact analysis caches.
+The Agent tab is a planning agent. It answers questions about runs, reads every field of every project
+file, and sets up and runs studies. The model never computes a number itself: it calls deterministic
+GridLens functions, and the operation tools call the same functions as the Project, Configuration, Run, and
+Analysis tabs.
 
 GridLens supplies no inference. It detects a CLI that you installed, starts it as a subprocess, and hands it
 one tool server.
@@ -154,20 +158,33 @@ one tool server.
   described in [CEII security notes](security_ceii.md).
 - `agent/policy.py`: route classification. It resolves the inference endpoint and fails closed unless every
   resolved address is loopback.
-- `agent/session.py`: the immutable session capability. `SessionContext` records the project root, the
-  selected run IDs, the model, and the route, and `scoped_path` rejects traversal, symlink escape, and any
-  run the session did not select.
+- `agent/session.py`: the immutable session record. `SessionContext` records the open project (or none),
+  the runs selected in the tab, the projects folder, the model, and the route. `find_project` and
+  `resolve_run` turn project and run names into folders, and `scoped_path` rejects traversal and symlink
+  escape.
 - `agent/controller.py`: owns the conversation, runs one turn at a time under a deadline and byte caps,
   normalizes runtime events, and kills the whole process group on stop.
-- `agent/tools.py`: the deterministic tool service. Fifteen tools share one result envelope with row and
-  byte caps the model cannot raise, explicit units, stable error codes, and provenance.
-- `agent/mcp_server.py`: serves those tools over stdio using the official MCP Python SDK. `main.py`
-  dispatches `--mcp-server` before it imports Qt, so the server starts without a GUI.
+- `agent/tool_base.py`: what every tool shares. The result envelope, paging by offset and limit with no
+  maximum row count, the saved complete copy of any result larger than the inline budget, stable error
+  codes, provenance, and the paired audit records.
+- `agent/tools.py`: the analysis tools over the compact caches, and `ToolService`, which combines every
+  tool module. `TOOL_NAMES` lists the tools exposed over MCP.
+- `agent/file_tools.py`: tools that list, describe, and read project files as tables, lines, or documents,
+  including each section of a RAW case (read by `analysis/raw_sections.py`) and the full flat results.
+- `agent/gridlens_tools.py`: tools that create projects, import inputs, write the GridPACK XML, start and
+  stop runs, build analyses, and report background jobs.
+- `agent/jobs.py`: background jobs. A GridPACK run or an analysis build runs as `gridlens --agent-job`, a
+  separate process that outlives the turn and records its state under `<project>/agent/jobs/`.
+- `agent/mcp_server.py`: serves those tools over stdio using the official MCP Python SDK, marking the tools
+  that write. `main.py` dispatches `--mcp-server` and `--agent-job` before it imports Qt, so neither needs a
+  GUI.
 - `agent/scripts.py`: saves a model-proposed Python script for review, and runs an approved one in the
   pinned sandbox described in `packaging/agent/README.md`.
 
 Each session writes an append-only record under `<project>/agent/sessions/<UTC timestamp>_<suffix>/`:
-`context.json` for the capability, `manifest.json` for the runtime and command template, `transcript.jsonl`,
-`runtime_events.jsonl`, `tool_calls.jsonl` for the tool audit and provenance, `usage.json`, `status.json`,
-and `generated/` for any proposed script. Every answer cites the call IDs from `tool_calls.jsonl`, and the
-GUI marks a citation that does not appear there as invalid.
+`context.json` for the session record, `manifest.json` for the runtime and command template,
+`transcript.jsonl`, `runtime_events.jsonl`, `tool_calls.jsonl` for the tool audit and provenance, `results/`
+for the complete copies of large results, `usage.json`, `status.json`, and `generated/` for any proposed
+script. A session started with no project open lives in `<projects folder>/.gridlens-agent/sessions/`.
+Every answer cites the call IDs from `tool_calls.jsonl`, and the GUI marks a citation that does not appear
+there as invalid.

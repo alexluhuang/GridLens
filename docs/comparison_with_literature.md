@@ -9,6 +9,12 @@ This document compares the GridLens Agent tab with the architecture in one publi
 The comparison was made on 2026-09-22 against the working tree at that date, including uncommitted changes to
 the agent package. File and function references are to `src/gridlens/agent/` unless stated otherwise.
 
+Later the same day the Agent tab changed in ways this comparison predates. Like GridMind's agents, it now
+drives the solver: it creates projects, writes the GridPACK XML, starts runs, and builds analyses, through
+background jobs rather than an in-process solver. Tool results have no row cap, and new file tools read
+every field of every project file. Sections below that describe GridLens as read-only, as limited to the
+selected runs, or as having fifteen tools describe the earlier state.
+
 ## GridMind in brief
 
 GridMind is an Argonne National Laboratory prototype that answers power system questions in natural language.
