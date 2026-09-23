@@ -134,13 +134,12 @@ def test_uncited_model_answer_reports_only_current_successful_sources():
     assert cite_uncited_turn("120% [T2]", sources) == "120% [T2]"
     assert cite_uncited_turn("No data", []) == "No data"
     assert cite_uncited_turn("No data", [{"call_id": "T2", "outcome": "error"}]) == "No data"
-    note = disclose_truncated_results("120%", [{"call_id": "T2", "result": {"data": {"truncated": True, "returned": 10, "total_matching": 6823}}}])
-    assert "[T2] returned 10 of 6,823 matching rows" in note
-    assert "Omitted rows were not supplied to the model" in note
+    note = disclose_truncated_results("120%", [{"call_id": "T2", "result": {"data": {"truncated": True, "returned": 10, "total_matching": 6823, "next_offset": 10}}}])
+    assert "[T2] returned 10 of 6,823 matching rows; more are available from offset 10" in note
+    saved = {"returned": 6823, "total_matching": 6823, "inline_rows": 40, "result_file": "/s/results/T3.json", "rows_file": "/s/results/T3.csv"}
+    assert "[T3] showed 40 rows inline; its complete result is in /s/results/T3.csv" in disclose_truncated_results("120%", [{"call_id": "T3", "result": {"data": saved}}])
     assert disclose_truncated_results("No data", []) == "No data"
     assert "Build / refresh analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
-    capped = [{"call_id": "T2", "outcome": "error", "result": {"error": {"code": "LIMIT_EXCEEDS_CAP"}, "data": {"max_rows_per_call": 50}}}]
-    assert disclose_tool_failures("All 6,823 rows returned", capped) == "GridLens rejected [T2]: the requested limit exceeds 50 rows per call. No rows were returned. Use summarize_loading for full-run averages."
     assert qualify_capacity_answer("20 percentage points", "How much extra capacity?").endswith("requires a separate power-flow study.")
 
 
@@ -198,10 +197,12 @@ def test_row_scope_questions_use_audited_counts_and_refusals(agent_context):
     first = audited_row_scope_answer("All rows were returned", "How many rows were displayed?", session_sources(agent_context.directory))
     assert "[T1] returned 1 of 3 matching facility rows; truncated: True" in first
     assert "All rows were returned" not in first
+    assert "More matching rows are available from offset 1." in first
     service.rank_branch_loading("run_a", limit=7000)
     second = audited_row_scope_answer("All rows were returned", "Did T2 return 7,000 rows?", session_sources(agent_context.directory))
-    assert "[T2] returned no rows because the call failed with LIMIT_EXCEEDS_CAP" in second
-    assert "Requested row limit: 7,000; maximum permitted per call: 50" in second
+    assert "[T2] returned 3 of 3 matching facility rows; truncated: False" in second
+    assert "Requested row limit: 7,000; offset: 0." in second
+    assert "no maximum row count" in second
     service.summarize_loading("run_a", group_by="voltage")
     third = audited_row_scope_answer("The average used one row", "How many rows were used for T3?", session_sources(agent_context.directory))
     assert "[T3] returned 1 of 1 matching category rows" in third

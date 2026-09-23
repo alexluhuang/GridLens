@@ -28,6 +28,8 @@ from gridlens.agent.providers import DEFAULT_PROVIDER, PROVIDER_IDS, route_for
 
 
 MAX_JSON_BYTES = 2 * 1024 * 1024
+EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
+EXPORT_MAX_FILES = 10_000
 PROJECT_FILE = "project.json"
 # Sessions live inside the open project. With no project open they live in a hidden folder of the
 # projects folder, which is never mistaken for a project because it has no project.json.
@@ -102,15 +104,20 @@ def append_event(directory: Path, name: str, value: dict) -> None:
 
 
 def export_session(directory: Path, destination: Path) -> None:
-    """Explicit audit export, excluding the CLI profile and internal runtime history."""
+    """Explicit audit export, excluding the CLI profile and internal runtime history.
+
+    The export holds the session record, the audit, generated scripts, and the complete tool results in
+    results/. A session larger than the export limit has to be reviewed in its folder.
+    """
     names = ("context.json", "manifest.json", "transcript.jsonl", "runtime_events.jsonl", "tool_calls.jsonl", "usage.json", "status.json", "script_executions.jsonl")
     paths = [scoped_path(directory, name) for name in names]
-    generated = scoped_path(directory, "generated", directory=True)
-    if generated.exists():
-        paths.extend(scoped_path(directory, path.relative_to(directory)) for path in generated.rglob("*") if path.is_file() or path.is_symlink())
+    for folder in ("generated", "results"):
+        tree = scoped_path(directory, folder, directory=True)
+        if tree.exists():
+            paths.extend(scoped_path(directory, path.relative_to(directory)) for path in tree.rglob("*") if path.is_file() or path.is_symlink())
     paths = [path for path in paths if path.exists()]
-    if len(paths) > 1000 or sum(path.stat().st_size for path in paths) > 64 * 1024 * 1024:
-        raise AgentError("EXPORT_LIMIT", "This session exceeds the 64 MiB / 1,000-file export limit. Review its folder directly.")
+    if len(paths) > EXPORT_MAX_FILES or sum(path.stat().st_size for path in paths) > EXPORT_MAX_BYTES:
+        raise AgentError("EXPORT_LIMIT", "This session exceeds the 2 GiB / 10,000-file export limit. Review its folder directly.")
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".gridlens-audit-") as temporary:
         archive_path = Path(temporary) / "audit.zip"
         with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:

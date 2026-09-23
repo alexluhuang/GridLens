@@ -462,10 +462,10 @@ class AgentTab(QWidget):
                 lines.append(f"error {str(error.get('code', 'UNKNOWN'))[:64]}: {str(error.get('remedy', ''))[:300]}")
             else:
                 lines.append(f"{data.get('returned', 0)} of {data.get('total_matching', 0)} rows; truncated: {data.get('truncated', False)}")
-            if data.get("requested_limit") is not None:
-                lines.append(f"requested limit: {data['requested_limit']}; maximum per call: {data.get('max_rows_per_call', '?')}")
-            if data.get("truncation_reasons"):
-                lines.append("truncation reason: " + ", ".join(data["truncation_reasons"]))
+            if data.get("limit") is not None:
+                lines.append(f"offset: {data.get('offset') or 0}; limit: {'all rows' if data['limit'] == 0 else data['limit']}")
+            if data.get("result_file"):
+                lines.append(f"complete result: {data.get('rows_file') or data['result_file']} ({data.get('inline_rows', 0)} rows shown inline)")
             if data.get("analyzed_facility_count") is not None:
                 lines.append(f"matching facilities used: {data['analyzed_facility_count']}")
             if data.get("filters"):

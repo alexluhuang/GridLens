@@ -25,7 +25,7 @@ from gridlens.agent.policy import AgentError
 from gridlens.agent.prompt import turn_prompt
 from gridlens.agent.runtime import RuntimeAdapter, RuntimeEvent
 from gridlens.agent.session import SessionContext, append_event, scoped_path, write_json
-from gridlens.agent.tools import MAX_ROWS, ToolService
+from gridlens.agent.tools import ToolService
 
 
 MAX_PROMPT_CHARS = 12_000
@@ -177,11 +177,11 @@ class AgentController:
                 )
                 if not complete:
                     emit(RuntimeEvent("tool_start", "summarize_loading (verified scope)"))
-                    summary = ToolService(self.context).summarize_loading(self.context.run_ids[0], group_by=group_by, facility=facility, limit=MAX_ROWS)
+                    summary = ToolService(self.context).summarize_loading(self.context.run_ids[0], group_by=group_by, facility=facility, limit=0)
                     emit(RuntimeEvent("tool_result", "summarize_loading (verified scope)", {"is_error": bool(summary["error"])}))
                     sources = session_sources(self.context.directory)
             top_count = top_line_area_request(prompt)
-            if top_count and top_count <= MAX_ROWS and len(self.context.run_ids) == 1:
+            if top_count and len(self.context.run_ids) == 1:
                 if ranked_line_source(sources[prior_calls:], self.context.run_ids[0], top_count) is None:
                     emit(RuntimeEvent("tool_start", "rank_branch_loading (verified areas)"))
                     ranking = ToolService(self.context).rank_branch_loading(self.context.run_ids[0], limit=top_count)
@@ -260,15 +260,21 @@ def cite_uncited_turn(answer: str, turn_sources: list[dict]) -> str:
 
 
 def disclose_truncated_results(answer: str, turn_sources: list[dict]) -> str:
-    """Return answer with exact truncated turn_sources counts for run_turn."""
+    """Return answer with a note for each call this turn that returned only part of its matching rows.
+
+    A call is partial when its page stopped before the last matching row, or when its rows were too
+    large to show inline and were saved to a file instead.
+    """
     notes = []
     for row in turn_sources:
         data = ((row.get("result") or {}).get("data") or {})
         if data.get("truncated"):
-            notes.append(f"[{row['call_id']}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching rows")
+            notes.append(f"[{row['call_id']}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching rows; more are available from offset {data.get('next_offset') or 0:,}")
+        if data.get("result_file"):
+            notes.append(f"[{row['call_id']}] showed {data.get('inline_rows', 0):,} rows inline; its complete result is in {data.get('rows_file') or data['result_file']}")
     if not notes:
         return answer
-    return answer.rstrip() + "\n\nGridLens audit: " + "; ".join(notes[:10]) + ". Omitted rows were not supplied to the model; use a full-population summary for group means."
+    return answer.rstrip() + "\n\nGridLens audit: " + "; ".join(notes[:10]) + "."
 
 
 def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
@@ -276,11 +282,6 @@ def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
     ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT"]
     if ids:
         return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " reported ANALYSIS_NOT_BUILT. The current cache is unavailable; no returned rows do not establish that congestion is absent. Use Build / refresh analysis and ask again."
-    capped = [row for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "LIMIT_EXCEEDS_CAP"]
-    if capped and not any(row.get("outcome") == "ok" for row in turn_sources):
-        calls = ", ".join(f"[{row['call_id']}]" for row in capped[:10])
-        maximum = capped[0]["result"]["data"]["max_rows_per_call"]
-        return f"GridLens rejected {calls}: the requested limit exceeds {maximum} rows per call. No rows were returned. Use summarize_loading for full-run averages."
     return answer
 
 
@@ -387,8 +388,6 @@ def verified_top_line_areas(answer: str, question: str, turn_sources: list[dict]
     count = top_line_area_request(question)
     if count is None or len(run_ids) != 1:
         return answer
-    if count > MAX_ROWS:
-        return f"I can list at most {MAX_ROWS} top lines per call. Ask for a smaller number."
     source = ranked_line_source(turn_sources, run_ids[0], count)
     if source is None:
         return "I cannot verify the requested top-line areas from a complete ranked result. Ask again after refreshing the analysis."
@@ -440,8 +439,7 @@ def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) ->
         data = result.get("data") or {}
         error = result.get("error") or {}
         call_id = row["call_id"]
-        requested = data.get("requested_limit", (row.get("arguments") or {}).get("limit"))
-        maximum = data.get("max_rows_per_call", MAX_ROWS)
+        requested = data.get("limit", (row.get("arguments") or {}).get("limit"))
         if error:
             lines.append(f"[{call_id}] returned no rows because the call failed with {error.get('code', 'UNKNOWN')}.")
         else:
@@ -450,11 +448,13 @@ def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) ->
             if row.get("tool") == "summarize_loading":
                 lines.append(f"Its group means were computed from all {data.get('analyzed_facility_count', 0):,} matching facilities before limiting category rows.")
         if requested is not None:
-            requested_text = f"{requested:,}" if isinstance(requested, int) else str(requested)
-            lines.append(f"Requested row limit: {requested_text}; maximum permitted per call: {maximum:,}.")
-        if data.get("truncation_reasons"):
-            lines.append("Truncation reason: " + ", ".join(data["truncation_reasons"]) + ".")
-    lines.append("Rows omitted by GridLens were not sent to the model. A runtime spillover file does not contain those omitted rows; use summarize_loading for full-population group means.")
+            requested_text = "all rows" if requested == 0 else f"{requested:,}" if isinstance(requested, int) else str(requested)
+            lines.append(f"Requested row limit: {requested_text}; offset: {data.get('offset') or 0:,}.")
+        if data.get("next_offset") is not None:
+            lines.append(f"More matching rows are available from offset {data['next_offset']:,}.")
+        if data.get("result_file"):
+            lines.append(f"{data.get('inline_rows', 0):,} rows were shown inline; the complete result is in {data.get('rows_file') or data['result_file']}.")
+    lines.append("GridLens applies no maximum row count: any call can page with offset and limit, and limit=0 returns every matching row.")
     return "\n".join(lines)
 
 

@@ -97,6 +97,10 @@ def build_event_index(run_dir: Path, *, progress=None, output_dir: Path | None =
 
 
 def query_event_index(run_dir: Path, *, event_idx: int | None = None, branch: tuple | None = None, limit: int = 50, index_dir: Path | None = None) -> tuple[list[dict], int, list[Path]]:
+    """Return the highest-loading index rows for one event or one branch key, their total count, and the files read.
+
+    limit=0 keeps every matching row.
+    """
     import pyarrow.dataset as ds
     from gridlens.agent.session import read_json, scoped_path
 
@@ -127,5 +131,6 @@ def query_event_index(run_dir: Path, *, event_idx: int | None = None, branch: tu
         total += len(rows)
         best.extend(rows)
         best.sort(key=lambda row: (-abs(float(row["loading_percent"])), row["event_idx"], row["from_bus"], row["to_bus"], row["line_id"], row["section"]))
-        del best[limit:]
+        if limit:
+            del best[limit:]
     return best, total, [manifest_path, source, *paths]

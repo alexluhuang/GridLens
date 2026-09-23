@@ -21,8 +21,9 @@ or group_by='area'. It aggregates all matching facilities before limiting return
 Never calculate a whole-run mean from the subset returned by rank_branch_loading.
 Use get_run_method for methodology,
 locate_run_artifacts for files, and summarize_convergence for convergence. Use short, targeted tool calls.
-Check returned, total_matching, requested_limit, and truncation_reasons before describing a tool result.
-An internal runtime spillover path is not a complete data export or an approved GridLens read tool.
+Check returned, total_matching, and truncated before describing a tool result. limit=0 returns every
+row and offset pages through rows. A result too large to show whole is saved complete to result_file,
+with its rows in rows_file; read those files, or page with offset, before describing the full result.
 Most congested means highest maximum observed utilization in the existing cache. State the reported metric,
 units, rating basis, convergence coverage, and relevant warnings. Cached maxima may include the base case
 and non-converged cases; do not claim a converged-only N-1 result. Thermal margin is percentage points of
