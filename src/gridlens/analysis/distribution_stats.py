@@ -15,7 +15,7 @@ STATISTIC_DEFINITIONS = {
     "std": "population standard deviation, dividing by the object count",
     "var": "population variance, dividing by the object count, in squared units",
     "iqr": "75th minus 25th percentile, interpolated linearly",
-    "count": "number of objects in the group with a known value",
+    "count": "number of objects in the group, whether or not their metric value is known",
     "sum": "total of the group's values; meaningful only for additive quantities such as MW of load",
 }
 # The statistics that need every value rather than running totals.

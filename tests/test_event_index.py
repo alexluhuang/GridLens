@@ -141,6 +141,10 @@ def test_index_stores_flows_voltages_and_angles_as_numbers(tmp_path):
     assert total == 1 and overloads[0]["event_idx"] == 1
     groups, used, _ = group_cases(run, metric="loading_percent", statistic="count", by="event", labels={0: ["base"], 1: ["BR_1_2_1"], 2: ["BR_2_3_1"]}, conditions=[("loading_percent", ">", 45)])
     assert used == 3 and {label: group.result() for label, group in groups.items()} == {"base": 1, "BR_1_2_1": 1, "BR_2_3_1": 1}
+    # A count takes the case whose from-end voltage is blank; a mean of that voltage does not.
+    voltages, _, _ = group_cases(run, metric="v_from_pu", statistic="count", by="event", labels={1: ["one"]}, events={1})
+    means, _, _ = group_cases(run, metric="v_from_pu", statistic="mean", by="event", labels={1: ["one"]}, events={1})
+    assert (voltages["one"].result(), means["one"].count, means["one"].result()) == (2, 1, 0.94)
     peaks, _, _ = group_cases(run, metric="mva_from", statistic="max", by="facility", labels={case_key(1, 2, "1", ""): ["north"], case_key(1, 3, "1", ""): ["north", "south"]})
     assert {label: group.result() for label, group in peaks.items()} == {"north": 124.2, "south": 124.2, "unknown": 40.0}
     medians, _, _ = group_cases(run, metric="loading_percent", statistic="median", by="event", labels={1: ["one"]}, events={1})

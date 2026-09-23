@@ -376,8 +376,11 @@ class AnalysisTools(ToolBase):
             self.warnings.append("This run has no convergence file, so no contingency is known to have converged.")
         return [contingency_record(event, summaries.get(event, {}), solutions.get(event, {}), bus_areas, facilities) for event in sorted(set(summaries) | set(solutions)) if event != 0]
 
-    def _population(self, run: Path, kind: str, family: str, metric: str, conditions: list, *, group: str = "", compare_run_id: str = "", compare_project: str = "") -> tuple[list[dict], dict, str]:
-        """Return the facilities or contingencies that meet the qualifiers and have a known value, the counts behind them, and that value's key."""
+    def _population(self, run: Path, kind: str, family: str, metric: str, conditions: list, *, group: str = "", compare_run_id: str = "", compare_project: str = "", known_only: bool = True) -> tuple[list[dict], dict, str]:
+        """Return the facilities or contingencies that meet the qualifiers, the counts behind them, and their value's key.
+
+        known_only keeps only objects with a known value; a count needs none, so it keeps them all.
+        """
         value_key = metric
         if family == "facility":
             records, counts = self._facilities(run, kind)
@@ -396,11 +399,11 @@ class AnalysisTools(ToolBase):
                 counts["excluded_not_converged"] = len(records) - len(converged)
                 records = converged
         kept = [record for record in records if qualifies(record, conditions)]
-        known = [record for record in kept if record["values"][value_key] is not None]
+        known = [record for record in kept if record["values"][value_key] is not None] if known_only else kept
         if len(known) < len(kept):
             reason = ", because they have no positive rating or the cache does not record it," if family == "facility" else ""
             self.warnings.append(f"{len(kept) - len(known)} objects have no known {value_key}{reason} and were left out.")
-        if metric == "min_utilization_pct" and known:
+        if metric == "min_utilization_pct" and known and known_only:
             zero = sum(1 for record in known if record["values"][metric] == 0)
             self.warnings.append(f"{zero} of {len(known)} objects have a minimum loading of 0%, usually in the case where the object itself is out of service; a low minimum does not show light loading.")
         counts.update(objects_in_scope=len(records), excluded_by_filters=len(records) - len(kept), excluded_unknown_value=len(kept) - len(known))
@@ -527,7 +530,7 @@ class AnalysisTools(ToolBase):
     def rank_groups(self, run_id: str, group: ObjectGroup = "voltage_class", object: ObjectKind = "branches", order: Order = "descending", metric: ObjectMetric = "max_utilization_pct", statistic: GroupStatistic = "mean", magnitude: int = 10, filters: list[ObjectFilter] | None = None, compare_run_id: str = "", compare_project: str = "", project: str = "") -> dict:
         """Group every qualifying object, compute one statistic of one metric over each group's objects, and return the first `magnitude` groups (0 returns all), each with that statistic and the count of objects it used.
 
-        group for facilities: control_area (a facility joining two areas counts in both), voltage_class (the voltage groups or categories of the Branch Analysis tab, such as 100-229 kV; transformers group by step direction), nominal_kv (each exact base voltage, such as 138 kV), branch_type, or binding_contingency (the case that set each facility's maximum loading). For contingencies: type, status_code, converged, or outage_area. For cases: contingency, facility, or any facility or contingency group. statistic is mean, median, min, max, std, var (population), iqr, count, or sum (only for additive quantities). metric is a per-object value as in rank, so statistic='mean' of metric='max_utilization_pct' is the mean maximum loading the Branch Analysis tab shows, and of mean_utilization_pct or min_utilization_pct it is the mean mean or mean min. object, metric, filters, and compare_run_id are as in rank; filters remove objects before grouping.
+        group for facilities: control_area (a facility joining two areas counts in both), voltage_class (the voltage groups or categories of the Branch Analysis tab, such as 100-229 kV; transformers group by step direction), nominal_kv (each exact base voltage, such as 138 kV), branch_type, or binding_contingency (the case that set each facility's maximum loading). For contingencies: type, status_code, converged, or outage_area. For cases: contingency, facility, or any facility or contingency group. statistic is mean, median, min, max, std, var (population), iqr, count (every qualifying object, whatever its metric value), or sum (only for additive quantities). metric is a per-object value as in rank, so statistic='mean' of metric='max_utilization_pct' is the mean maximum loading the Branch Analysis tab shows, and of mean_utilization_pct or min_utilization_pct it is the mean mean or mean min. object, metric, filters, and compare_run_id are as in rank; filters remove objects before grouping.
         """
         descending = _descending(order)
         if statistic not in GROUP_STATISTICS:
@@ -541,7 +544,7 @@ class AnalysisTools(ToolBase):
         if family == "case":
             groups, counts = self._group_cases(run, group, metric, statistic, conditions)
         else:
-            records, counts, value_key = self._population(run, object, family, metric, conditions, group=group, compare_run_id=compare_run_id, compare_project=compare_project)
+            records, counts, value_key = self._population(run, object, family, metric, conditions, group=group, compare_run_id=compare_run_id, compare_project=compare_project, known_only=statistic != "count")
             members: dict[str, list[float]] = {}
             for record in records:
                 for label in group_labels(record["fields"], group):

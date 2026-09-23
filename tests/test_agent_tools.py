@@ -429,6 +429,9 @@ def test_contingencies_by_outage_area_status_and_solution(agent_context):
     assert iterations["excluded_not_converged"] == 1
     statuses = service.rank_groups("run_a", object="contingencies", group="status_code", metric="iterations", statistic="count")["data"]["rows"]
     assert [(row["group"], row["value"]) for row in statuses] == [("OK", 2), ("DIVERGED", 1)]
+    # A count needs no metric value, so the failed contingency, which has no loading, is still counted.
+    counted = service.rank_groups("run_a", object="contingencies", group="status_code", statistic="count")["data"]
+    assert [(row["group"], row["value"]) for row in counted["rows"]] == [("OK", 2), ("DIVERGED", 1)] and counted["excluded_unknown_value"] == 0
     failed = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "status_code", "op": "!=", "value": "OK"}], fields=["type", "outage_area"])["data"]["rows"]
     assert [(row["contingency"], row["type"], row["outage_area"]) for row in failed] == [("GN_3_1", "generator", ["East"])]
     south = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "outage_area", "op": "==", "value": "South"}])["data"]

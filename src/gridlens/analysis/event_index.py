@@ -203,8 +203,11 @@ def case_columns(metric: str, conditions, extra: tuple[str, ...] = ()) -> list[s
     return needed
 
 
-def _filtered_batches(dataset, metric: str, *, events, keys, conditions, extra=()):
-    """Yield Arrow tables of the rows that pass every qualifier, each with its metric in a value column."""
+def _filtered_batches(dataset, metric: str, *, events, keys, conditions, extra=(), known_only: bool = True):
+    """Yield Arrow tables of the rows that pass every qualifier, each with its metric in a value column.
+
+    known_only drops rows whose metric is missing; a count keeps them, since it needs no value.
+    """
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.dataset as ds
@@ -226,7 +229,8 @@ def _filtered_batches(dataset, metric: str, *, events, keys, conditions, extra=(
         if not len(table):
             continue
         table = table.append_column("value", _case_values(pc, table, metric))
-        table = table.filter(pc.is_valid(table["value"]))
+        if known_only:
+            table = table.filter(pc.is_valid(table["value"]))
         if len(table):
             yield table
 
@@ -279,7 +283,8 @@ def group_cases(run_dir: Path, *, metric: str, statistic: str, by: str, labels: 
     if dataset is None or (events is not None and not events) or (keys is not None and not keys):
         return groups, 0, paths
     used = 0
-    for table in _filtered_batches(dataset, metric, events=events, keys=keys, conditions=conditions):
+    counting = statistic == "count"
+    for table in _filtered_batches(dataset, metric, events=events, keys=keys, conditions=conditions, known_only=not counting):
         used += len(table)
         if statistic in ORDER_STATISTICS and used > MAX_CASE_ROWS:
             raise TooManyCases(f"A {statistic} needs every value and more than {MAX_CASE_ROWS:,} cases match; add qualifiers, or use a statistic kept as running totals, such as mean.")
@@ -289,12 +294,16 @@ def group_cases(run_dir: Path, *, metric: str, statistic: str, by: str, labels: 
             group_column = pc.binary_join_element_wise(pc.cast(table["from_bus"], pa.string()), pc.cast(table["to_bus"], pa.string()), table["line_id"], table["section"], "|")
         values = table["value"]
         parts = pa.table({"group": group_column, "value": values, "square": pc.multiply(values, values)})
-        aggregates = [("value", "count"), ("value", "sum"), ("value", "min"), ("value", "max"), ("square", "sum")]
+        # A count takes every row, known value or not; the other statistics need the values.
+        aggregates = [("value", "count", pc.CountOptions(mode="all" if counting else "only_valid")), ("value", "sum"), ("value", "min"), ("value", "max"), ("square", "sum")]
         if statistic in ORDER_STATISTICS:
             aggregates.append(("value", "list"))
         for part in parts.group_by("group").aggregate(aggregates).to_pylist():
             for label in labels.get(part["group"], ["unknown"]):
                 if label not in groups:
                     groups[label] = GroupAccumulator(statistic)
-                groups[label].merge(part["value_count"], part["value_sum"], part["square_sum"], part["value_min"], part["value_max"], part.get("value_list") or ())
+                if counting:
+                    groups[label].merge(part["value_count"], 0.0, 0.0, 0.0, 0.0)
+                else:
+                    groups[label].merge(part["value_count"], part["value_sum"], part["square_sum"], part["value_min"], part["value_max"], part.get("value_list") or ())
     return groups, used, paths
