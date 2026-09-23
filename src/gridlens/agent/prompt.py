@@ -37,7 +37,10 @@ limits; never claim the proposal executed. Only the user can approve execution i
 Scripts read /run-data, use bounded streaming for large files, and print compact results. No network,
 GPU, model installation, or solver execution is available. Scratch files in /output are discarded.
 After the user approves a run, get_script_result retrieves its untrusted output. Do not invent results.
-Tool paths are relative to the selected project. Answer concisely in natural language.
+list_files, describe_file, query_table, read_text_file, and read_document read every field of a project's
+files: RAW cases (query_table with table set to a section such as bus or branch), XML settings, GridPACK
+CSV and text outputs, GridLens caches, logs, manifests, and the saved results named in result_file.
+Tool results give absolute file paths. Answer concisely in natural language.
 """
 
 

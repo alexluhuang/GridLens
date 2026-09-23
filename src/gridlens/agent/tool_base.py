@@ -109,18 +109,22 @@ def _check_arguments(arguments: dict) -> None:
             raise ValueError(f"{name} must be a whole number of at least 0.")
 
 
-def page_rows(rows: list, total: int, offset: int, limit: int) -> dict:
-    """Return one page of rows and the fields that describe it.
-
-    limit=0 means every row from offset on. total is the number of matching rows, which can exceed
-    len(rows) when a tool already stopped collecting rows past the end of the page.
-    """
-    page = rows[offset:] if limit == 0 else rows[offset:offset + limit]
+def page_result(page: list, total: int, offset: int, limit: int) -> dict:
+    """Return a page of rows that starts at offset among total matching rows, with the fields that describe it."""
     end = offset + len(page)
     return {
         "rows": page, "returned": len(page), "total_matching": total, "offset": offset, "limit": limit,
         "truncated": end < total, "next_offset": end if end < total else None,
     }
+
+
+def page_rows(rows: list, total: int, offset: int, limit: int) -> dict:
+    """Cut one page from a list of rows and describe it.
+
+    limit=0 means every row from offset on. total is the number of matching rows, which can exceed
+    len(rows) when a tool already stopped collecting rows past the end of the page.
+    """
+    return page_result(rows[offset:] if limit == 0 else rows[offset:offset + limit], total, offset, limit)
 
 
 def _csv_cell(value: object) -> object:
