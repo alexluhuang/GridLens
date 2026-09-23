@@ -76,8 +76,8 @@ requires the model to repeat the relevant caveats.
 ### Contingency ranking is deterministic
 
 GridMind's contingency agent ranks critical elements by LLM reasoning over solver output, which is why one
-model disagreed in the paper's Table 1. `rank_contingencies` sorts by a named metric in code, so every model
-should receive the same ranking.
+model disagreed in the paper's Table 1. `rank(object="contingencies")` sorts by a named metric in code, so
+every model should receive the same ranking.
 
 ### The evaluation scores failure behavior
 
@@ -143,12 +143,11 @@ questions the fixed tools cannot answer, a case the paper does not address.
 
 ## Gaps worth closing
 
-1. Voltage. GridMind's contingency agent considers voltage excursions as well as thermal overloads. No
-   GridLens tool reports bus voltage or voltage violations. `summarize_loading(group_by="voltage")` groups
-   facilities by kV level, and `get_run_method` only echoes the configured `minVoltage` and `maxVoltage`. The
-   flat results contain voltage fields, according to the plan. Unless voltage was left out on purpose, a
-   `list_voltage_violations` tool and a voltage column in `contingency_summary` would let the agent answer
-   which outages cause low voltage. Today it would have to propose a script.
+1. Voltage. GridMind's contingency agent considers voltage excursions as well as thermal overloads. Since
+   2026-09-24, `rank(object="cases", metric="min_voltage_pu")` ranks the end voltages recorded for each
+   contingency in the drill-down index, and qualifiers select the outage and the area. The flat result records
+   voltage only at the ends of monitored branches, so this is not a bus-by-bus voltage scan. A voltage
+   column in `contingency_summary` would let contingencies be ranked by their lowest voltage without the index.
 
 2. Typed output schemas. Section 3.3 of the paper argues that typed fields such as `min_voltage_pu` give the
    model exact names to refer to. GridLens tool inputs are typed, but every tool returns `dict`, so the MCP
@@ -165,8 +164,8 @@ questions the fixed tools cannot answer, a case the paper does not address.
    with regular expressions. GridMind ran each case five times, and a single run can hide variation between
    runs of the same model. Two additions would be cheap: repeat each question several times per model, and
    add a contingency-ranking question that checks every model reports the same top event IDs. GridMind's
-   Table 1 failed that check; GridLens should pass it by design. The evaluation does not yet cover
-   `compare_runs` or the event-index tools (`get_contingency_flows`, `get_branch_contingencies`).
+   Table 1 failed that check; GridLens should pass it by design. The 30-question evaluation of 2026-09-24
+   covers run comparison and case drill-down; see `plans/ai_planning_agent_verification.md`.
 
 ## Not recommended
 

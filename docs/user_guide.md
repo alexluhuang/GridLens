@@ -167,14 +167,19 @@ through them. A result too large to send to the model whole is saved complete in
 folder, as JSON and as CSV, and the agent reads that file with the file tools. Sources shows the path of the
 saved result and how many of its rows were shown inline.
 
-Two general tools answer most loading questions. `rank` sorts branches, transformers, or both by one metric,
-such as maximum, base-case, or mean loading, thermal margin, overload count, or rating, and returns each
-facility with the value it was sorted by. `rank_groups` sorts control areas, voltage classes, nominal
-voltages, branch types, or binding contingencies by one statistic of a metric: the mean, median, minimum,
-maximum, standard deviation, variance, interquartile range, or count. It computes each statistic from every
-facility in the group and reports how many facilities it used. Both take qualifiers that remove facilities
-first, such as a control area or loading above 100%. For mean loading by voltage group or control area, the
-answer states the facility scope, the number of facilities used, and per-group counts.
+The agent answers with a few general tools whose parameters it fills in, chaining calls as it needs to.
+`rank` sorts objects by one metric and returns each with the value it was sorted by: facilities (branches,
+transformers, or both) by maximum, base-case, or mean loading, thermal margin, overload count, or rating;
+contingencies by their maximum loading, violation count, or solution statistics; and cases, one facility in
+one contingency from the drill-down index, by loading, MW, Mvar, MVA, end voltage, or angle difference.
+`rank_groups` sorts groups such as control areas, voltage classes, or outages by one statistic of a metric:
+the mean, median, minimum, maximum, standard deviation, variance, interquartile range, count, or sum. It
+computes each statistic from every object in the group and reports how many it used. Both take qualifiers
+that select objects first, such as a control area, an outage's area, or loading above 100%, and both can
+compare one run with another. `read_file` reads, groups, or compares any project file, for example to total
+load by area from the RAW case or to list every setting that differs between two runs. For mean loading by
+voltage group or control area, the answer states the facility scope, the number of facilities used, and
+per-group counts.
 For top-line control-area questions, GridLens reads the endpoint area labels in the ranked result and
 lists both areas when a line crosses a boundary.
 

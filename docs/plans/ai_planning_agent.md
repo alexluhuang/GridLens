@@ -14,6 +14,12 @@ runs, and configurations no longer hold. Hermes still exposes only the GridLens 
 built-in terminal, file, code, and web tools was requested and is pending a decision, because it removes the
 tool isolation that §4.3 and §7.4 rely on. See `docs/security_ceii.md` for the controls as delivered.
 
+Tool consolidation, 2026-09-24: the 35 tools became 15. The model now fills in the parameters of a few
+general tools and chains them: `rank` and `rank_groups` sort and group facilities, contingencies, and indexed
+cases, and can compare two runs; `read_file` reads any file as rows, groups them, and compares documents;
+`get_status` and `stop` cover runs and jobs. The table in §5 lists the catalog as it now is, and
+`agent_tool_consolidation.md` describes every change and what each removed tool became.
+
 Initial validation target: DGX Spark, DGX OS 7 / Ubuntu 24.04.5 LTS, aarch64
 
 Initial runtime: Hermes Agent with local Ollama models
@@ -256,19 +262,21 @@ Keep the first catalog small. Tool descriptions should encode when a tool is not
 
 | Tool | Initial behavior |
 |---|---|
-| `get_run_inventory` | Selected runs, status, timestamps, available caches and outputs. |
-| `locate_run_artifacts` | Resolve a controlled enum such as `raw_input`, `flat_results`, `configuration`, `run_log`, `interactive_tables`, or `exports`. |
-| `get_run_method` | Manifest and section-scoped parsed XML values: image, executable, MPI count, exact recorded command, contingency rating, voltage limits, control settings, input hashes, and analysis backend. |
-| `summarize_convergence` | Counts and bounded examples from the 719 KB convergence file. |
-| `rank` | Added 2026-09-23. Sort branches, transformers, or both by one per-facility metric over every facility in scope, after the qualifiers in `filters` remove facilities, and return the first `magnitude`, each with the value it was sorted by. |
-| `rank_groups` | Added 2026-09-23. Group the same facilities by control area, voltage class, nominal kV, branch type, or binding contingency, compute one statistic (mean, median, min, max, std, var, iqr, count) of one metric over all of each group's facilities, and return the first `magnitude` groups with that statistic and the facility count it used. Mean of `max_utilization_pct` reproduces the Branch Analysis voltage and area means. |
-| `rank_branch_loading` | Rank selected facility types by base or maximum N-1 utilization, with binding contingency and filters. |
-| `summarize_loading` | Area or voltage-class summary using the same facility and voltage filters as the GUI. |
-| `list_thermal_violations` | Facilities exceeding a specified loading threshold, bounded and sorted. |
-| `get_branch_loading` | Base, mean, maximum, overload count, rating metadata, and binding contingency for one canonical branch key. |
-| `search_buses` | Bounded exact/prefix/fuzzy lookup against cached bus metadata. |
-| `compare_runs` | Branch-key-aligned loading deltas for two explicitly selected runs; report unmatched facilities. |
-| `rank_contingencies` | Add only after the compact contingency-summary artifact in §6 exists. |
+The catalog as of 2026-09-24. The first twenty tools this section listed were folded into these; see
+`agent_tool_consolidation.md` for what each became.
+
+| Tool | Behavior |
+|---|---|
+| `rank` | Sort facilities (branches, transformers, or both), contingencies, or indexed cases by one metric, after qualifiers remove objects, and return the first `magnitude`, each with the value it was sorted by. `compare_run_id` ranks the change between two runs. |
+| `rank_groups` | Group the same objects, compute one statistic (mean, median, min, max, std, var, iqr, count, sum) of one metric over every object of each group, and return the first `magnitude` groups with that statistic and the count it used. |
+| `read_file` | Read any project file as rows: a table, a RAW section, the fields of a JSON or XML document, or lines of text; filter, sort, page, group, or compare two documents. |
+| `list_files` | List a project's or this session's files with size, date, and kind. |
+| `list_projects`, `get_project` | List projects; describe one, with its inputs and its runs' status, caches, and index. |
+| `get_status` | Report a job or a run, waiting for it to end if asked, or list jobs. |
+| `get_run_configuration` | Every GridPACK XML setting with its value and choices, and the default run settings. |
+| `create_project`, `add_project_inputs`, `configure_run` | Create a project, import inputs, and write the GridPACK XML. |
+| `start_run`, `run_analysis`, `stop` | Start a GridPACK run or an analysis build as a background job, and stop a job or a run. |
+| `propose_analysis_script` | Save a script for review; it never runs one. |
 
 ### Metric definitions
 

@@ -114,8 +114,9 @@ Analysis responsibilities split by module:
 - `utilization.py`: defines which branch-like RAW records count toward utilization.
 - `contingencies.py`: builds the compact `contingency_summary` table during the same pass that aggregates
   the flat CSV, so ranking contingencies does not require re-reading the full result.
-- `event_index.py`: builds and queries a bucketed Parquet index of the flat result, which is what makes
-  per-contingency and per-branch drill-down affordable on a multi-gigabyte run.
+- `event_index.py`: builds a bucketed Parquet index of the flat result, with flows, voltages, and angles as
+  numbers, and queries it with `scan_cases` and `group_cases`, which rank or group the cases that pass a set
+  of qualifiers. This is what makes per-contingency drill-down affordable on a multi-gigabyte run.
 - `dataset.py`: orchestrates parsing, enrichment, metrics, table exports, and the analysis manifest.
 - `interactive.py`: builds and caches the smaller data set behind the embedded Branch Analysis and
   Transformer Analysis graphs.
@@ -167,12 +168,16 @@ one tool server.
 - `agent/tool_base.py`: what every tool shares. The result envelope, paging by offset and limit with no
   maximum row count, the saved complete copy of any result larger than the inline budget, stable error
   codes, provenance, and the paired audit records.
-- `agent/tools.py`: the analysis tools over the compact caches, and `ToolService`, which combines every
-  tool module. `TOOL_NAMES` lists the tools exposed over MCP.
-- `agent/file_tools.py`: tools that list, describe, and read project files as tables, lines, or documents,
-  including each section of a RAW case (read by `analysis/raw_sections.py`) and the full flat results.
-- `agent/gridlens_tools.py`: tools that create projects, import inputs, write the GridPACK XML, start and
-  stop runs, build analyses, and report background jobs.
+- `agent/tools.py`: `rank` and `rank_groups`, which sort or group facilities, contingencies, and indexed
+  cases, the script proposal tool, and `ToolService`, which combines every tool module. `TOOL_NAMES` lists
+  the fifteen tools exposed over MCP.
+- `agent/objects.py`: the vocabulary `rank` and `rank_groups` take. For each object family it defines the
+  valid metrics, fields, and groups, checks the model's choices, and builds the records qualifiers test.
+- `agent/file_tools.py`: `list_files` and `read_file`, which read any project file as rows: a table, one
+  section of a RAW case (read by `analysis/raw_sections.py`), the fields of a JSON or XML document, or lines
+  of text. `read_file` also groups rows and compares two documents.
+- `agent/gridlens_tools.py`: tools that list and describe projects and their runs, create projects, import
+  inputs, write the GridPACK XML, start runs, build analyses, report on runs and jobs, and stop either.
 - `agent/jobs.py`: background jobs. A GridPACK run or an analysis build runs as `gridlens --agent-job`, a
   separate process that outlives the turn and records its state under `<project>/agent/jobs/`.
 - `agent/mcp_server.py`: serves those tools over stdio using the official MCP Python SDK, marking the tools
