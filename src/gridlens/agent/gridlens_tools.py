@@ -9,6 +9,11 @@ job (see `gridlens.agent.jobs`) and return its ID at once. `get_status` reports 
 and can wait for it to end; the analysis tools read a run's results once its analysis job has completed.
 `stop` ends a job or a run.
 
+A change that replaces or ends something the user already has, an input file, the project's XML, or a
+running job, waits for the user. Over MCP, the first call returns a preview and changes nothing, and the
+change is made only when the same call comes back with confirm=True after the user has sent another
+message. A model cannot preview and confirm in one turn, so it has to stop and ask.
+
 Run settings the agent does not give, such as the Docker image and the MPI process count, come from the
 settings the Run tab saved last. Input files are imported from any absolute path; everything else these
 tools write stays inside the project folder.
@@ -16,12 +21,15 @@ tools write stays inside the project folder.
 from __future__ import annotations
 
 from dataclasses import asdict, fields, replace
+import difflib
+import hashlib
+import json
 from pathlib import Path
 from typing import Literal
 
 from gridlens.agent import jobs
 from gridlens.agent.policy import AgentError
-from gridlens.agent.session import PROJECT_FILE, RUN_ID_PATTERN, project_folders, read_json, resolve_run, scoped_path
+from gridlens.agent.session import PROJECT_FILE, RUN_ID_PATTERN, project_folders, read_json, resolve_run, scoped_path, timestamp, write_json
 from gridlens.agent.tool_base import ToolBase, tool
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.parser_models import PARSER_VERSION
@@ -39,6 +47,7 @@ from gridlens.gui.configuration_view_models import (
     load_input_configuration_values,
     project_network_file_names,
     save_input_configuration,
+    validated_input_configuration,
 )
 from gridlens.gui.project_view_models import ProjectFormValues, default_project_folder, prepare_project_save
 from gridlens.gui.run_view_models import RunFormValues, validate_run_form_values
@@ -54,6 +63,9 @@ GRIDLENS_TOOL_NAMES = (
 GRIDLENS_WRITE_TOOL_NAMES = frozenset({"create_project", "add_project_inputs", "configure_run", "start_run", "run_analysis", "stop"})
 # Tools that can replace or end something the user already had: an input file, the XML, or a running job.
 GRIDLENS_DESTRUCTIVE_TOOL_NAMES = frozenset({"add_project_inputs", "configure_run", "stop"})
+# Changes previewed in this session and waiting for the user, in the session folder.
+PENDING_CHANGES = "pending_changes.json"
+MAX_PENDING_CHANGES = 50
 # get_status waits less than the runtime's tool-call timeout, so a long wait returns before the call is abandoned.
 MAX_WAIT_SECONDS = 1500
 CONFIGURATION_CHOICES = {
@@ -106,6 +118,30 @@ def _coerce(name: str, value: object, default: object) -> object:
     raise AgentError("INVALID_SETTING", f"{name} must be true or false.")
 
 
+def _sha256(path: Path) -> str:
+    """Return a file's SHA-256, as a project records its inputs."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _user_turns(directory: Path) -> int:
+    """Count the user's messages in a session transcript; a change previewed in one turn is confirmed in a later one."""
+    path = scoped_path(directory, "transcript.jsonl")
+    if not path.exists():
+        return 0
+    count = 0
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                count += json.loads(line).get("role") == "user"
+            except (ValueError, AttributeError):
+                continue
+    return count
+
+
 def _run_settings(settings: AppSettings) -> dict:
     """Return the Run tab's saved settings that start_run uses when the agent gives none."""
     return {
@@ -118,6 +154,34 @@ def _run_settings(settings: AppSettings) -> dict:
 
 class GridLensTools(ToolBase):
     """The GridLens operation tools, bound to one session."""
+
+    def _held(self, name: str, root: Path, change: object, state: object, preview: dict, confirm: bool) -> dict | None:
+        """Hold a change until the user agrees to it: return the preview to send instead, or None to make it.
+
+        A model can call a tool twice in one turn, so confirm=True counts only for a change previewed in an
+        earlier turn, that is, when the user has sent a message since. state fingerprints what the change
+        replaces, so a preview goes stale, and is shown again, if the project changed before the user agreed.
+        """
+        if not self.confirm_changes:
+            return None
+        turn = _user_turns(self.context.directory)
+        key = hashlib.sha256(json.dumps([name, str(root), change, state], sort_keys=True, default=str).encode()).hexdigest()[:16]
+        path = scoped_path(self.context.directory, PENDING_CHANGES)
+        pending = read_json(path) if path.exists() else {}
+        record = pending.get(key)
+        if confirm and record and record["turn"] < turn:
+            del pending[key]
+            write_json(path, pending)
+            return None
+        if confirm and record:
+            raise AgentError("CONFIRMATION_REQUIRED", "Nothing was changed: the user has not replied since this change was previewed. End your turn, show the user the change, and ask them to confirm it.")
+        pending.setdefault(key, {"tool": name, "turn": turn, "previewed_at": timestamp()})
+        write_json(path, dict(list(pending.items())[-MAX_PENDING_CHANGES:]))
+        ignored = " confirm=True was ignored because the user has not seen this change." if confirm else ""
+        return {
+            **preview, "confirmation_required": True, "change_id": key,
+            "next_step": f"Nothing was changed.{ignored} Show the user exactly this change, ask whether to make it, and end your turn. If they agree in their next message, call {name} again with the same arguments and confirm=True.",
+        }
 
     @tool
     def list_projects(self, offset: int = 0, limit: int = 100) -> dict:
@@ -183,11 +247,26 @@ class GridLensTools(ToolBase):
         }
 
     @tool
-    def add_project_inputs(self, input_files: list[str], project: str = "", xml_file_name: str = "") -> dict:
-        """Copy more input files (absolute paths) into a project. A file with the same name as an existing input replaces it."""
+    def add_project_inputs(self, input_files: list[str], project: str = "", xml_file_name: str = "", confirm: bool = False) -> dict:
+        """Copy more input files (absolute paths) into a project. A file with the same name as an existing input replaces it. Replacing an input with different content, or switching the project's XML with xml_file_name, first returns a preview and changes nothing: show it to the user, and call again with confirm=True only after they agree in a later message."""
         root = self._project(project)
         project_record, data = _project_record(root)
         files = _absolute_files(input_files)
+        current = {record.file_name: record for record in data.input_files}
+        digests = {path.name: _sha256(path) for path in files}
+        replaced = [name for name, digest in digests.items() if name in current and current[name].sha256 != digest]
+        switched = bool(xml_file_name) and bool(data.xml_file_name) and xml_file_name != data.xml_file_name
+        if replaced or switched:
+            rows = [
+                {"file": path.name, "action": "replace" if path.name in replaced else "unchanged" if path.name in current else "add", "source": str(path), "sha256": digests[path.name], "current_sha256": getattr(current.get(path.name), "sha256", None)}
+                for path in files
+            ]
+            if switched:
+                rows.append({"file": xml_file_name, "action": f"use as the project's XML instead of {data.xml_file_name}"})
+            state = [sorted((name, record.sha256) for name, record in current.items()), data.xml_file_name]
+            held = self._held("add_project_inputs", root, {"files": sorted(digests.items()), "xml_file_name": xml_file_name}, state, {"rows": rows}, confirm)
+            if held is not None:
+                return held
         names = {path.name for path in files}
         kept = [Path(record.stored_path) for record in data.input_files if record.file_name not in names]
         saved = project_record.save(kept + files, xml_file_name or data.xml_file_name)
@@ -206,8 +285,8 @@ class GridLensTools(ToolBase):
         }
 
     @tool
-    def configure_run(self, settings: dict, project: str = "") -> dict:
-        """Change GridPACK XML settings by name, as listed by get_run_configuration (for example {"full_generator_n1": true, "max_voltage": "1.05"}), and save the XML into the project."""
+    def configure_run(self, settings: dict, project: str = "", confirm: bool = False) -> dict:
+        """Change GridPACK XML settings by name, as listed by get_run_configuration (for example {"full_generator_n1": true, "max_voltage": "1.05"}), and save the XML into the project. Changing a project's existing XML first returns a preview, each setting's current and new value and the XML diff, and changes nothing: show it to the user, and call again with confirm=True only after they agree in a later message. A project with no XML yet gets one at once."""
         root = self._project(project)
         project_record, data = _project_record(root)
         current = _current_configuration(root, data)
@@ -219,6 +298,17 @@ class GridLensTools(ToolBase):
         values = replace(current, **changes)
         if values.network_file_name not in {record.file_name for record in data.input_files}:
             raise AgentError("NETWORK_FILE_NOT_IN_PROJECT", "Set network_file_name to one of the project's input files, or add the case with add_project_inputs.")
+        normalized, after = validated_input_configuration(data, values)
+        existing = scoped_path(root, Path("original_inputs") / data.xml_file_name) if data.xml_file_name else None
+        if existing is not None and existing.is_file():
+            before = existing.read_text(encoding="utf-8")
+            if after != before or normalized.xml_file_name != data.xml_file_name:
+                rows = [{"setting": name, "current": getattr(current, name), "new": value} for name, value in changes.items()]
+                diff = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), f"{data.xml_file_name} (saved)", f"{normalized.xml_file_name} (proposed)"))
+                change = {name: str(value) for name, value in changes.items()}
+                held = self._held("configure_run", root, change, hashlib.sha256(before.encode()).hexdigest(), {"rows": rows, "xml_file": str(existing), "xml_diff": diff[:20000]}, confirm)
+                if held is not None:
+                    return held
         saved = save_input_configuration(project_record, data, values)
         xml = scoped_path(root, Path("original_inputs") / saved.xml_file_name)
         return {"rows": [{"setting": name, "value": value} for name, value in changes.items()], "xml_file": str(xml), "xml_text": xml.read_text(encoding="utf-8")}
@@ -273,15 +363,26 @@ class GridLensTools(ToolBase):
         }
 
     @tool
-    def stop(self, project: str = "", run_id: str = "", job_id: str = "") -> dict:
-        """Stop a background job (job_id), such as an analysis build, or a GridPACK run still running (run_id): its agent job if it has one, else its Docker container. Stopping a GridPACK run's job also stops its container."""
+    def stop(self, project: str = "", run_id: str = "", job_id: str = "", confirm: bool = False) -> dict:
+        """Stop a background job (job_id), such as an analysis build, or a GridPACK run still running (run_id): its agent job if it has one, else its Docker container. Stopping a GridPACK run's job also stops its container. Stopping something that is running first returns a preview and stops nothing: call again with confirm=True only after the user agrees in a later message."""
         root = self._project(project)
         if bool(run_id) == bool(job_id):
             raise AgentError("ONE_TARGET", "Give the job_id of a job or the run_id of a run to stop.")
         if job_id:
+            job = next((item for item in jobs.list_jobs(root) if item["job_id"] == job_id), None)
+            if job is not None and job["state"] not in jobs.FINAL_STATES:
+                held = self._held("stop", root, {"job_id": job_id}, job["state"], {"rows": [job], "message": f"Job {job_id} ({job['kind']}) is {job['state']}; stopping it ends its work."}, confirm)
+                if held is not None:
+                    return held
             return {"rows": [jobs.cancel_job(root, job_id)]}
         run = resolve_run(root, run_id, completed=False)
         active = [item for item in jobs.list_jobs(root) if item["run_id"] == run.name and item["kind"] == "gridpack_run" and item["state"] not in jobs.FINAL_STATES]
+        running = (read_json(run / "status.json") if (run / "status.json").is_file() else {}).get("status") == "running"
+        if active or running:
+            target = active[0] if active else {"run_id": run.name, "status": "running"}
+            held = self._held("stop", root, {"run_id": run.name}, [target.get("job_id"), target.get("state") or target.get("status")], {"rows": [target], "message": f"Run {run.name} is running; stopping it ends the GridPACK run."}, confirm)
+            if held is not None:
+                return held
         if active:
             job = jobs.cancel_job(root, active[0]["job_id"])
             return {"rows": [job], "message": f"Job {job['job_id']} is {job['state']}."}

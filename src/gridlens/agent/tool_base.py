@@ -147,8 +147,12 @@ class ToolBase:
 
     Instances are cheap and short-lived. `call_id`, `sources`, and `warnings` belong to the call in
     flight and are reset by `_invoke`."""
-    def __init__(self, context: SessionContext) -> None:
+    def __init__(self, context: SessionContext, *, confirm_changes: bool = False) -> None:
+        """Bind the tools to a session. confirm_changes makes a destructive change wait for the user's
+        confirmation in a later turn; the MCP server sets it, so every model is held to it, while a direct
+        caller, such as a script or a test, acts at once, as a GUI button does."""
         self.context = context
+        self.confirm_changes = confirm_changes
         self.call_id = ""
         self.sources: dict[str, dict] = {}
         self.warnings: list[str] = []

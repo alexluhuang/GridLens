@@ -32,8 +32,10 @@ Projects and runs
   write the GridPACK XML, start_run, then get_status with its job_id and wait_seconds until the run ends;
   then run_analysis (include_index=True for per-contingency flows) and get_status again. get_status with a
   run_id shows a run's progress and log; stop ends a job or a run.
-- Before replacing a project's existing XML settings or input files, or stopping a run or job, list
-  exactly what would change and ask the user to confirm; wait for their answer, even when they asked.
+- configure_run on an existing XML, add_project_inputs replacing a file, and stop on something running
+  first return a preview (confirmation_required) and change nothing, even when the user asked. Show exactly
+  what would change, ask the user to confirm, and end your turn; only after they agree in a later message,
+  call again with the same arguments and confirm=True. Never say a change was made before that succeeds.
 - GridLens cannot edit a RAW case, change load or generation, or run a transfer study. For such a
   scenario, ask the user for a modified case and import it with add_project_inputs.
 

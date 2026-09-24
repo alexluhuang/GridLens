@@ -77,6 +77,75 @@ def test_add_project_inputs_replaces_a_file_of_the_same_name(workspace, tmp_path
     assert (projects / "Study_One/original_inputs/case.raw").read_text() == "updated case\n"
 
 
+@pytest.fixture
+def confirming(workspace):
+    """Return tools that hold destructive changes for the user's confirmation, as the MCP server's do, and a project with an XML."""
+    tools, inputs, projects = workspace
+    tools.create_project("Study One", [str(inputs / "case.raw"), str(inputs / "monitor.txt")])
+    tools.configure_run({}, project="Study One")
+    return ToolService(tools.context, confirm_changes=True), inputs, projects
+
+
+def test_changing_an_existing_xml_waits_for_a_confirmation_in_a_later_turn(confirming):
+    """The first call previews; confirm=True counts only after the user has sent another message."""
+    tools, inputs, projects = confirming
+    xml = projects / "Study_One/original_inputs/input.xml"
+    before = xml.read_text()
+    preview = tools.configure_run({"contingency_rating": "A"}, project="Study One")["data"]
+    assert preview["confirmation_required"] and xml.read_text() == before
+    assert [(row["setting"], row["new"]) for row in preview["rows"]] == [("contingency_rating", "A")]
+    assert "+    <contingencyRating>A</contingencyRating>" in preview["xml_diff"]
+    same_turn = tools.configure_run({"contingency_rating": "A"}, project="Study One", confirm=True)
+    assert same_turn["error"]["code"] == "CONFIRMATION_REQUIRED" and xml.read_text() == before
+    tools.context.message("user", "Yes, switch to rating A.")
+    applied = tools.configure_run({"contingency_rating": "A"}, project="Study One", confirm=True)
+    assert applied["error"] is None and "<contingencyRating>A</contingencyRating>" in xml.read_text()
+    # A confirmation is used once, and a change the user has not seen is previewed even with confirm=True.
+    unseen = tools.configure_run({"contingency_rating": "B"}, project="Study One", confirm=True)["data"]
+    assert unseen["confirmation_required"] and "ignored" in unseen["next_step"]
+    # A preview goes stale when the XML changes before the user agrees, and is shown again.
+    tools.configure_run({"max_voltage": "1.05"}, project="Study One")
+    xml.write_text(xml.read_text() + "<!-- edited in another program -->\n")
+    tools.context.message("user", "Yes.")
+    assert tools.configure_run({"max_voltage": "1.05"}, project="Study One", confirm=True)["data"]["confirmation_required"]
+    # A project with no XML yet gets one at once: nothing is replaced.
+    tools.create_project("Study Two", [str(inputs / "case.raw")])
+    created = tools.configure_run({"contingency_rating": "A"}, project="Study Two")["data"]
+    assert "confirmation_required" not in created and (projects / "Study_Two/original_inputs/input.xml").is_file()
+
+
+def test_replacing_an_input_waits_but_adding_one_does_not(confirming, tmp_path):
+    tools, inputs, projects = confirming
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    (extra / "contingencies.txt").write_text("line 1 2\n")
+    added = tools.add_project_inputs([str(extra / "contingencies.txt")], project="Study One")["data"]
+    assert "confirmation_required" not in added and "contingencies.txt" in {row["file_name"] for row in added["rows"]}
+    (extra / "case.raw").write_text("updated case\n")
+    preview = tools.add_project_inputs([str(extra / "case.raw")], project="Study One")["data"]
+    assert preview["confirmation_required"] and preview["rows"][0]["action"] == "replace"
+    stored = projects / "Study_One/original_inputs/case.raw"
+    assert stored.read_text() != "updated case\n"
+    tools.context.message("user", "Replace it.")
+    assert tools.add_project_inputs([str(extra / "case.raw")], project="Study One", confirm=True)["error"] is None
+    assert stored.read_text() == "updated case\n"
+
+
+def test_stopping_a_running_job_waits_for_confirmation(agent_context, monkeypatch):
+    tools = ToolService(agent_context, confirm_changes=True)
+    running = {"job_id": "20260924T000000Z_0123abcd", "kind": "gridpack_run", "run_id": "run_a", "state": "running", "message": "contingency 40 of 90"}
+    cancelled = []
+    monkeypatch.setattr(gridlens_tools.jobs, "list_jobs", lambda root: [dict(running)])
+    monkeypatch.setattr(gridlens_tools.jobs, "cancel_job", lambda root, job_id: cancelled.append(job_id) or {**running, "state": "cancelled"})
+    preview = tools.stop(job_id=running["job_id"])["data"]
+    assert preview["confirmation_required"] and preview["rows"][0]["state"] == "running" and not cancelled
+    assert tools.stop(job_id=running["job_id"], confirm=True)["error"]["code"] == "CONFIRMATION_REQUIRED" and not cancelled
+    assert tools.stop(run_id="run_a")["data"]["confirmation_required"]
+    agent_context.message("user", "Stop it.")
+    assert tools.stop(job_id=running["job_id"], confirm=True)["data"]["rows"][0]["state"] == "cancelled"
+    assert cancelled == [running["job_id"]]
+
+
 def test_start_run_checks_docker_then_starts_a_job(workspace, monkeypatch):
     """start_run fills in the Run tab's saved settings, checks Docker and the image, and starts a job."""
     tools, inputs, projects = workspace

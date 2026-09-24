@@ -303,17 +303,25 @@ def render_input_configuration_xml(values: InputConfigurationValues) -> str:
     return f'<?xml version="1.0" encoding="utf-8"?>\n{xml_text}\n'
 
 
-def save_input_configuration(
-    project: Project,
+def validated_input_configuration(
     project_data: ProjectData,
     values: InputConfigurationValues,
-) -> ProjectData:
+) -> tuple[InputConfigurationValues, str]:
+    """Validate configuration values against the project; return them normalized, with the XML they render to."""
     normalized = normalize_input_configuration_values(values)
     if normalized.monitor_branches_file:
         input_file_names = {record.file_name for record in project_data.input_files}
         if normalized.monitor_branches_file not in input_file_names:
             raise ValidationError("Monitor branches file must be added to the project input files.")
-    xml_text = render_input_configuration_xml(normalized)
+    return normalized, render_input_configuration_xml(normalized)
+
+
+def save_input_configuration(
+    project: Project,
+    project_data: ProjectData,
+    values: InputConfigurationValues,
+) -> ProjectData:
+    normalized, xml_text = validated_input_configuration(project_data, values)
     return project.save_generated_xml(project_data, normalized.xml_file_name, xml_text)
 
 

@@ -66,6 +66,17 @@ def test_official_sdk_client_tools_and_scope(agent_context):
     asyncio.run(exercise())
 
 
+def test_mcp_server_holds_destructive_changes_for_confirmation(agent_context, monkeypatch):
+    """Every model reaches the tools through the MCP server, so it is the one that makes changes wait for the user."""
+    import gridlens.agent.mcp_server as mcp_server
+
+    seen = {}
+    real = mcp_server.ToolService
+    monkeypatch.setattr(mcp_server, "ToolService", lambda context, **kwargs: seen.update(kwargs) or real(context, **kwargs))
+    mcp_server.create_server(agent_context)
+    assert seen == {"confirm_changes": True}
+
+
 def test_mcp_server_fails_closed_without_a_session_context():
     # stdout purity matters: stdio is the MCP transport, so a diagnostic there would corrupt the protocol.
     completed = subprocess.run(entry_point("--mcp-server"), env=entry_environment(None), capture_output=True, text=True, timeout=60)

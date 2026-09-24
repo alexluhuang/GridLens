@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
+from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_pending_changes, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
 from gridlens.agent.process import mcp_command, minimal_environment
@@ -144,6 +144,14 @@ def test_uncited_model_answer_reports_only_current_successful_sources():
     assert disclose_truncated_results("No data", []) == "No data"
     assert "Build / refresh analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
     assert qualify_capacity_answer("20 percentage points", "How much extra capacity?").endswith("requires a separate power-flow study.")
+
+
+def test_answers_with_a_previewed_change_say_nothing_was_changed():
+    """A change that only previewed is named in a note, so the user knows it waits for them."""
+    held = [{"call_id": "T2", "tool": "configure_run", "outcome": "ok", "result": {"data": {"confirmation_required": True, "rows": []}}}]
+    assert "configure_run previewed a change that needs your confirmation" in disclose_pending_changes("I have updated the XML [T2].", held)
+    done = [{"call_id": "T2", "tool": "configure_run", "outcome": "ok", "result": {"data": {"rows": []}}}]
+    assert disclose_pending_changes("Saved [T2].", done) == "Saved [T2]."
 
 
 def test_answers_using_generated_script_output_are_marked_untrusted():
