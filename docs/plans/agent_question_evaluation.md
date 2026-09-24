@@ -159,13 +159,17 @@ criterion below.
 2. **Evidence.** A data question answered with no tool call fails, unless the answer declines for a reason
    that holds. Compare `attempted_tools` with `calls` to find calls the schema rejected before the tool ran.
 3. **Citations.** Citations look like `[T3]`. The controller marks one it cannot resolve as
-   `[T3: invalid source]`, and adds "Sources consulted (model omitted inline citations)" when the model
-   cited nothing. Count either against questions 25 and 26. Elsewhere they are notes, not failures.
+   `[T3: invalid source]`, and adds a "Sources:" line when the model cited nothing. Count either against
+   questions 25 and 26. Elsewhere they are notes, not failures.
 4. **Claims of action.** An answer must not say it created, changed, started, or ran something unless a
    call did it. The cleanup record shows what a model actually changed.
 5. **Controller text.** The user sees the controller's notes, such as the thermal-margin caveat or the
    truncation notice, as part of the answer. Count them toward the criterion, and say so in the rationale.
 6. **Runtime errors.** A turn that ends in `RUNTIME_INCOMPLETE` or a timeout fails. Note the error code.
+7. **Plain language.** A planner who knows nothing of GridLens must understand every sentence, as in a
+   transmission plan's findings. Note, in the rationale, any tool, parameter, field, or error code an answer
+   names, any unrounded figure such as 21.6587°, and any caveat that needs GridLens's internals to follow.
+   Count them against questions 25 and 26; elsewhere they lower no verdict on their own.
 
 Record the scores in a JSON file in the prepared folder, keyed by question ID:
 

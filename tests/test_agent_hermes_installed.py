@@ -225,7 +225,7 @@ def test_installed_local_models_use_complete_voltage_groups(agent_project):
         print(json.dumps(record))
     output = Path(os.environ.get("GRIDLENS_TEST_GROUP_EVAL_OUTPUT", str(agent_project / "voltage_group_evaluation.json")))
     output.write_text(json.dumps(records, indent=2))
-    assert all(record["summary_tool"] and record["full_population"] and all(value in record["answer"] for value in ("103.3%", "60.0%", "40.0%", "all 11 matching facilities")) for record in records), records
+    assert all(record["summary_tool"] and record["full_population"] and all(value in record["answer"] for value in ("103%", "60%", "40%", "all 11 facilities")) for record in records), records
 
 
 @pytest.mark.skipif(not os.environ.get("GRIDLENS_TEST_SAMPLE_PROJECT"), reason="Set GRIDLENS_TEST_SAMPLE_PROJECT for a read-only cache benchmark.")

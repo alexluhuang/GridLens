@@ -270,7 +270,7 @@ def cite_uncited_turn(answer: str, turn_sources: list[dict]) -> str:
     ids = [row["call_id"] for row in turn_sources if row.get("outcome") == "ok"]
     if not ids or any(f"[{call_id}]" in answer for call_id in ids):
         return answer
-    return answer.rstrip() + "\n\nSources consulted (model omitted inline citations): " + ", ".join(f"[{call_id}]" for call_id in ids[:10])
+    return answer.rstrip() + "\n\nSources: " + ", ".join(f"[{call_id}]" for call_id in ids[:10])
 
 
 def disclose_truncated_results(answer: str, turn_sources: list[dict]) -> str:
@@ -279,30 +279,55 @@ def disclose_truncated_results(answer: str, turn_sources: list[dict]) -> str:
     A call is partial when its page stopped before the last matching row, or when its rows were too
     large to show inline and were saved to a file instead.
     """
-    notes = []
+    partial, saved = {}, []
     for row in turn_sources:
         data = ((row.get("result") or {}).get("data") or {})
+        if row.get("tool") in LOOKUP_TOOLS:
+            continue
         if data.get("truncated"):
-            notes.append(f"[{row['call_id']}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching rows; {_more_rows(row)}")
+            # Lists cut at the same point, such as two rankings of the ten highest lines, share one sentence.
+            key = (data.get("returned", 0), data.get("total_matching", 0), _items(row), _more_rows(row))
+            partial.setdefault(key, []).append(f"[{row['call_id']}]")
         if data.get("result_file"):
-            notes.append(f"[{row['call_id']}] showed {data.get('inline_rows', 0):,} rows inline; its complete result is in {data.get('rows_file') or data['result_file']}")
+            saved.append(f"the complete list from [{row['call_id']}] is saved in {data.get('rows_file') or data['result_file']}")
+    notes = [
+        f"{'the lists from ' + ' and '.join(ids) + ' each show' if len(ids) > 1 else 'the list from ' + ids[0] + ' shows'} {returned:,} of {total:,} {items}; {more}"
+        for (returned, total, items, more), ids in partial.items()
+    ] + saved
     if not notes:
         return answer
-    return answer.rstrip() + "\n\nGridLens audit: " + "; ".join(notes[:10]) + "."
+    text = "; ".join(notes[:10])
+    return answer.rstrip() + "\n\nGridLens note: " + text[0].upper() + text[1:] + "."
+
+
+# Tools the model calls to find things, not to measure them, so a partial result of theirs qualifies no figure.
+LOOKUP_TOOLS = ("list_files", "list_projects", "get_project")
+
+
+# What a user would call the items each kind of result lists, by the tool and, for the rank tools, the objects ranked.
+ITEM_NOUNS = {"branches": "lines", "transformers": "transformers", "both": "lines and transformers", "contingencies": "outages", "cases": "line results by outage"}
+TOOL_NOUNS = {"rank_groups": "groups", "list_files": "files", "list_projects": "projects", "read_file": "records"}
+
+
+def _items(row: dict) -> str:
+    """Name, in plain words, the items a result lists, such as lines, outages, or groups."""
+    if row.get("tool") == "rank":
+        return ITEM_NOUNS.get((row.get("arguments") or {}).get("object", "branches"), "results")
+    return TOOL_NOUNS.get(row.get("tool"), "results")
 
 
 def _more_rows(row: dict) -> str:
-    """Say how to get the rest of a partial result: a larger magnitude for the rank tools, else an offset."""
+    """Say how a user gets the rest of a partial result: a larger number for the rank tools, else the next page."""
     if row.get("tool") in ("rank", "rank_groups"):
-        return "more are available with a larger magnitude, or magnitude=0 for all"
-    return f"more are available from offset {((row.get('result') or {}).get('data') or {}).get('next_offset') or 0:,}"
+        return "ask for a larger number, or for all of them, to see the rest"
+    return "ask for the next page to see the rest"
 
 
 def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
     """Return an answer with a rebuild note for stale-cache turn_sources in run_turn."""
     ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT"]
     if ids:
-        return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " reported ANALYSIS_NOT_BUILT. The current cache is unavailable; no returned rows do not establish that congestion is absent. Build it with run_analysis or Build / refresh analysis, and ask again."
+        return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " could not read this run's loadings, because its results have not been prepared for analysis yet. This does not mean nothing is congested. Preparing them takes a few minutes: ask for it here, or use Build / refresh analysis, and then ask again."
     return answer
 
 
@@ -366,26 +391,27 @@ def verified_group_mean_answer(answer: str, question: str, turn_sources: list[di
     matching = [row for row in turn_sources if group_mean_source(row, group_by, facility) and row["arguments"].get("run_id") == run_ids[0]]
     if not matching:
         if any(((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT" for row in turn_sources):
-            return "The analysis cache is unavailable. Use Build / refresh analysis and ask again."
-        needed = f"rank_groups(group='{RANK_GROUPS_GROUP[group_by]}', object='{RANK_GROUPS_OBJECT.get(facility)}')"
+            return "This run's results have not been prepared for analysis yet, so its loadings cannot be averaged. Preparing them takes a few minutes: use Build / refresh analysis, and then ask again."
         ranked = [row for row in turn_sources if row.get("tool") == "rank" and row.get("outcome") == "ok"]
         if ranked:
             data = ranked[-1]["result"]["data"]
-            return f"I cannot verify whole-run {mean_label} means from ranked rows. [{ranked[-1]['call_id']}] returned {data['returned']:,} of {data['total_matching']:,} facilities. A complete {needed} result is needed."
-        return f"I cannot verify whole-run {mean_label} means without a complete {needed} result."
+            return f"I cannot give reliable {mean_label} averages from this answer's figures: they cover only the {data['returned']:,} most heavily loaded of {data['total_matching']:,} facilities [{ranked[-1]['call_id']}], and an average needs every facility in each group. Ask again for the averages."
+        return f"I cannot give reliable {mean_label} averages, because they were not computed over every facility in each group. Ask again for the averages."
     source = matching[-1]
     data = source["result"]["data"]
     if data.get("truncated") or data.get("returned") != data.get("total_matching"):
-        return f"[{source['call_id']}] returned only {data.get('returned', 0)} of {data.get('total_matching', 0)} {title.lower()}; I cannot rank every category from it. Narrow the filters and ask again."
+        return f"Only {data.get('returned', 0)} of {data.get('total_matching', 0)} {title.lower()} were listed [{source['call_id']}], so I cannot rank all of them. Ask again for every one of them."
     groups = sorted(((row["group"], float(row["value"]), row["count"]) for row in data["rows"]), key=lambda group: -group[1])
     count = data.get("objects_used", 0)
     noun = "facility" if count == 1 else "facilities"
-    lines = [f"{title}, ranked by mean maximum observed loading across all {count:,} matching {noun} ({facility}, all control areas, at least 50 kV) [{source['call_id']}]:"]
-    lines.extend(f"- {label}: {value:.1f}% ({members:,} facilities)" for label, value, members in groups)
+    scope = "lines only" if facility == "line" else "lines and transformers"
+    lines = [f"{title}, ranked by the average of each facility's highest loading, across all {count:,} {noun} ({scope}, every area, 50 kV and above) [{source['call_id']}]:"]
+    lines.extend(f"- {label}: {value:.0f}% ({members:,} facilities)" for label, value, members in groups)
+    lines.append("A facility's highest loading is its highest in the base case or any single outage studied, as a percentage of its rating.")
     convergence = data.get("convergence") or {}
     if convergence.get("failed"):
-        lines.append(f"The cache includes {convergence['failed']} failed or non-converged cases among {convergence['total']} recorded cases; their rows are not excluded from these maxima.")
-    lines.append("These means use all matching facilities, not just the displayed ranked rows.")
+        lines.append(f"In {convergence['failed']:,} of the {convergence['total']:,} outages studied, the power flow did not solve normally; their loadings are included in these figures but are less reliable.")
+    lines.append("Each average covers every facility in its group, not only the most heavily loaded.")
     return "\n".join(lines)
 
 
@@ -428,18 +454,18 @@ def verified_top_line_areas(answer: str, question: str, turn_sources: list[dict]
         return answer
     source = ranked_line_source(turn_sources, run_ids[0], count)
     if source is None:
-        return "I cannot verify the requested top-line areas from a complete ranked result. Ask again after refreshing the analysis."
+        return "I cannot confirm the areas of the most congested lines, because this run's line loadings could not be read. Use Build / refresh analysis, and then ask again."
     data = source["result"]["data"]
     rows = data["rows"][:count]
     if not rows:
-        return f"No eligible lines were found in the selected run [{source['call_id']}]."
-    lines = [f"Top {len(rows)} congested lines by maximum observed loading, with both endpoint control areas where they differ [{source['call_id']}]:"]
+        return f"The selected run has no lines of 50 kV and above with results [{source['call_id']}]."
+    lines = [f"The {len(rows)} most congested lines, by highest loading in the base case or any single outage studied, with the area at each end where the ends differ [{source['call_id']}]:"]
     for index, row in enumerate(rows, 1):
         areas = ", ".join(row.get("control_area") or ["unknown"])
-        loading = "unknown loading" if row.get("value") is None else f"{float(row['value']):.1f}%"
+        loading = "loading unknown" if row.get("value") is None else f"{float(row['value']):.0f}% of rating"
         lines.append(f"{index}. {row['object']}: {areas} ({loading}).")
     if len(rows) < count:
-        lines.append(f"Only {data['total_matching']:,} eligible lines matched the run scope.")
+        lines.append(f"The run has only {data['total_matching']:,} lines of 50 kV and above with results.")
     return "\n".join(lines)
 
 
@@ -452,14 +478,16 @@ def verified_singular_line_area(answer: str, question: str, previous_answer: str
         return "I cannot identify which line you mean from the previous answer. Name its buses and circuit."
     source = ranked_line_source(sources, run_ids[0], 1)
     if source is None or not source["result"]["data"]["rows"]:
-        return "I cannot verify that line's area from an audited ranking. Ask for the most congested line again."
+        return "I cannot confirm that line's area, because this run's line loadings could not be read again. Ask for the most congested line again."
     row = source["result"]["data"]["rows"][0]
     prior = " ".join(previous_answer.casefold().split())
     endpoints = [str(name or "").casefold() for name in row.get("bus_name") or ()]
     if any(endpoint and " ".join(endpoint.split()) not in prior for endpoint in endpoints):
-        return "The line named in the previous answer does not match the audited top line. Name its buses and circuit."
+        return "The line named in the previous answer is not the most congested line in this run's results. Name the line by its buses and circuit."
     areas = ", ".join(row.get("control_area") or ["unknown"])
-    return f"{row['object']} has endpoint control area(s): {areas} [{source['call_id']}]."
+    ends = row.get("control_area") or []
+    where = f"is in {ends[0]}" if len(set(ends)) == 1 else f"connects {' and '.join(ends)}" if ends else "is in an unknown area"
+    return f"{row['object']} {where} [{source['call_id']}]."
 
 
 def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) -> str:
@@ -480,24 +508,24 @@ def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) ->
         call_id = row["call_id"]
         by_magnitude = row.get("tool") in ("rank", "rank_groups")
         requested = (row.get("arguments") or {}).get("magnitude") if by_magnitude else data.get("limit", (row.get("arguments") or {}).get("limit"))
+        items = _items(row)
         if error:
-            lines.append(f"[{call_id}] returned no rows because the call failed with {error.get('code', 'UNKNOWN')}.")
+            lines.append(f"[{call_id}] listed nothing, because the request could not be completed.")
         else:
-            kind = {"rank_groups": "group rows", "rank": "object rows"}.get(row.get("tool"), "rows")
-            lines.append(f"[{call_id}] returned {data.get('returned', 0):,} of {data.get('total_matching', 0):,} matching {kind}; truncated: {bool(data.get('truncated'))}.")
+            complete = "some were left out" if data.get("truncated") else "that is all of them"
+            lines.append(f"[{call_id}] listed {data.get('returned', 0):,} of the {data.get('total_matching', 0):,} matching {items}; {complete}.")
             if row.get("tool") == "rank_groups":
-                lines.append(f"Its group statistics were computed from all {data.get('objects_used', 0):,} matching objects before limiting group rows.")
+                facilities = ITEM_NOUNS.get((row.get("arguments") or {}).get("object", "branches"), "items")
+                lines.append(f"Each group's figure was computed from all {data.get('objects_used', 0):,} matching {facilities}, whichever groups were listed.")
         if requested is not None:
-            requested_text = "all rows" if requested == 0 else f"{requested:,}" if isinstance(requested, int) else str(requested)
-            if by_magnitude:
-                lines.append(f"Requested magnitude: {requested_text}.")
-            else:
-                lines.append(f"Requested row limit: {requested_text}; offset: {data.get('offset') or 0:,}.")
+            requested_text = "all of them" if requested == 0 else f"{requested:,}" if isinstance(requested, int) else str(requested)
+            offset = data.get("offset") or 0
+            lines.append(f"It was asked for {requested_text}" + (f", starting after the first {offset:,}." if offset and not by_magnitude else "."))
         if data.get("next_offset") is not None:
-            lines.append("More matching rows are " + _more_rows(row).removeprefix("more are ") + ".")
+            lines.append(_more_rows(row).capitalize() + ".")
         if data.get("result_file"):
-            lines.append(f"{data.get('inline_rows', 0):,} rows were shown inline; the complete result is in {data.get('rows_file') or data['result_file']}.")
-    lines.append("GridLens applies no maximum row count: limit=0, or magnitude=0 for rank and rank_groups, returns every matching row, and offset pages the other tools.")
+            lines.append(f"The answer showed {data.get('inline_rows', 0):,} of them; the complete list is saved in {data.get('rows_file') or data['result_file']}.")
+    lines.append("There is no limit on how many can be listed; ask for all of them to see every one.")
     return "\n".join(lines)
 
 
@@ -506,15 +534,19 @@ def disclose_mixed_flow_directions(answer: str, turn_sources: list[dict]) -> str
     mixed = any(any("mixes directions" in warning for warning in (row.get("result") or {}).get("warnings") or []) for row in turn_sources)
     if not mixed:
         return answer
-    return answer.rstrip() + "\n\nGridLens note: A total or average of branch MW or Mvar here adds flows measured from each branch's own from end, in different directions, so it is not the net flow across an interface. That needs each branch oriented from one area, for example in a reviewed script."
+    return answer.rstrip() + "\n\nGridLens note: A total or average of line flows here adds flows measured in different directions, since each line's flow is measured from the end the case lists first. It is not the net flow across the interface. That needs every line's flow measured in the same direction, from one area into the other, which a custom script can do."
 
 
 def disclose_pending_changes(answer: str, turn_sources: list[dict]) -> str:
     """Return an answer with a note when a change this turn only previewed is waiting for the user's confirmation."""
-    held = list(dict.fromkeys(row["tool"] for row in turn_sources if ((row.get("result") or {}).get("data") or {}).get("confirmation_required")))
+    held = list(dict.fromkeys(CHANGE_NAMES.get(row["tool"], "the change") for row in turn_sources if ((row.get("result") or {}).get("data") or {}).get("confirmation_required")))
     if not held:
         return answer
-    return answer.rstrip() + f"\n\nGridLens note: Nothing has been changed yet. {', '.join(held)} previewed a change that needs your confirmation; reply to confirm it, and it will be made in the next turn."
+    return answer.rstrip() + f"\n\nGridLens note: Nothing has been changed yet. {' and '.join(held).capitalize()} shown above {'needs' if len(held) == 1 else 'need'} your confirmation; reply to confirm, and {'it' if len(held) == 1 else 'they'} will be made in the next turn."
+
+
+# What a user would call each change that waits for confirmation, by the tool that previews it.
+CHANGE_NAMES = {"configure_run": "the change to the study settings", "add_project_inputs": "the replacement of the input files", "stop": "stopping the job"}
 
 
 def disclose_generated_output(answer: str, turn_sources: list[dict]) -> str:
@@ -522,11 +554,11 @@ def disclose_generated_output(answer: str, turn_sources: list[dict]) -> str:
     read = any(any("generated script's folder" in warning for warning in (row.get("result") or {}).get("warnings") or []) for row in turn_sources)
     if not read:
         return answer
-    return answer.rstrip() + "\n\nGridLens note: This answer uses the output of a generated script, which no deterministic GridLens tool has validated. Treat it as untrusted until it is checked."
+    return answer.rstrip() + "\n\nGridLens note: This answer uses results computed by a custom script you approved. GridLens has not checked them, so treat them as unverified until they are checked."
 
 
 def qualify_capacity_answer(answer: str, question: str) -> str:
     """Return an answer that qualifies thermal margin for capacity, headroom, and transfer questions in run_turn."""
     if not CAPACITY_QUESTION.search(question):
         return answer
-    return answer.rstrip() + "\n\nGridLens note: Observed thermal margin alone cannot establish how much more load, generation, or transfer a system can accommodate; that requires a separate power-flow study."
+    return answer.rstrip() + "\n\nGridLens note: How far a line stays below its rating does not show how much more load, generation, or transfer the line or the system can carry. That takes a separate power-flow or transfer study."
