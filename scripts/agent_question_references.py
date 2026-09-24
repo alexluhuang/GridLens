@@ -138,7 +138,7 @@ def main() -> None:
     ties = [{"column": "control_area", "op": "==", "value": AREA_A}, {"column": "control_area", "op": "==", "value": AREA_B}]
     facility = ("object", "from_bus", "to_bus", "line_id", "value", "control_area", "nominal_kv", "rating_mva", "base_utilization_pct", "max_utilization_pct", "compare_value", "binding_contingency", "branch_type")
     case = ("event_idx", "contingency", "object", "value", "p_from_mw", "q_from_mvar", "mva_from", "rate_mva", "v_from_pu", "v_to_pu", "ang_from_deg", "ang_to_deg", "converged", "outage_area")
-    outage = ("event_idx", "contingency", "value", "max_loading_pct", "violation_count", "type", "outage_area")
+    outage = ("event_idx", "contingency", "value", "max_loading_pct", "overload_count", "type", "outage_area")
     reference: dict[str, object] = {}
 
     reference["1"] = [{key: row.get(key) for key in ("run_id", "status", "analysis_current", "event_index_available")} for row in complete(tools.get_project())["rows"]]
@@ -167,9 +167,9 @@ def main() -> None:
     reference["13"] = brief(complete(tools.rank(a, object="both", magnitude=0, filters=ties, fields=["base_utilization_pct", "control_area", "branch_type"])), facility, 30)
     reference["14"] = {"worst_by_outage_area": brief(complete(tools.rank_groups(a, object="cases", group="outage_area", metric="loading_percent", statistic="max", magnitude=0, filters=ties)), ("group", "value", "count")),
                        "worst_in_area_c": brief(complete(tools.rank(a, object="cases", magnitude=3, filters=ties + [{"column": "outage_area", "op": "==", "value": AREA_C}], fields=["outage_area"])), case, 3)}
-    reference["15"] = {"by_loading": brief(complete(tools.rank(a, object="contingencies", metric="max_loading_pct", magnitude=10, fields=["violation_count", "outage_area"])), outage, 10),
-                       "by_violations": brief(complete(tools.rank(a, object="contingencies", metric="violation_count", magnitude=10, fields=["max_loading_pct", "outage_area"])), outage, 10)}
-    reference["16"] = {"contingency": brief(complete(tools.rank(a, object="contingencies", filters=[{"column": "contingency", "op": "==", "value": OUTAGE}], fields=["violation_count", "converged"])), outage, 1),
+    reference["15"] = {"by_loading": brief(complete(tools.rank(a, object="contingencies", metric="max_loading_pct", magnitude=10, fields=["overload_count", "outage_area"])), outage, 10),
+                       "by_overloads": brief(complete(tools.rank(a, object="contingencies", metric="overload_count", magnitude=10, fields=["max_loading_pct", "outage_area"])), outage, 10)}
+    reference["16"] = {"contingency": brief(complete(tools.rank(a, object="contingencies", filters=[{"column": "contingency", "op": "==", "value": OUTAGE}], fields=["overload_count", "converged"])), outage, 1),
                        "overloads": brief(complete(tools.rank(a, object="cases", magnitude=0, filters=[{"column": "contingency", "op": "==", "value": OUTAGE}, {"column": "loading_percent", "op": ">=", "value": 100}], fields=["p_from_mw", "q_from_mvar", "mva_from", "rate_mva"])), case, 10),
                        # The summary also counts rows GridPACK flags with viol, such as the outaged branch itself at 0%.
                        "flagged": brief(complete(tools.rank(a, object="cases", magnitude=0, filters=[{"column": "contingency", "op": "==", "value": OUTAGE}, {"column": "viol", "op": "==", "value": 1}], fields=["viol"])), case, 10)}

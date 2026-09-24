@@ -7,7 +7,7 @@ runtime attempted, and the time taken, for scoring against the question's pass c
 
 Between questions the harness puts the project back as it found it: it cancels any job a model started,
 restores the project record and XML, and moves runs, projects, inputs, and caches a model created into a
-quarantine folder beside the projects folder, so no answer depends on an earlier one. Question 23 is
+quarantine folder beside the projects folder, one per harness run, so no answer depends on an earlier one. Question 23 is
 followed in the same session by question 24, after the harness approves and runs the saved script in the
 sandbox image, as a user would in the review dialog.
 
@@ -195,7 +195,7 @@ def main() -> None:
     projects_dir = args.projects_dir.expanduser().resolve()
     runs = json.loads((projects_dir / "eval_runs.json").read_text())
     project = Path(runs["project"])
-    quarantine = projects_dir.parent / f"{projects_dir.name}-quarantine"
+    quarantine = projects_dir.parent / f"{projects_dir.name}-quarantine" / time.strftime("%Y%m%dT%H%M%S")
     adapter = HermesAdapter()
     status = adapter.probe()
     if not status.ready:

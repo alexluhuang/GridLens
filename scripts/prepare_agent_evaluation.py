@@ -54,6 +54,15 @@ def indexed(run: Path) -> bool:
     return manifest.is_file() and json.loads(manifest.read_text()).get("version") == INDEX_VERSION
 
 
+def thermal(run: Path) -> bool:
+    """Return whether a run's analysis cache records thermal overload counts, which caches built before 2026-09-24 lack."""
+    path = run / "reports/interactive_tables/pflow_mm.csv"
+    if not path.is_file():
+        return False
+    with path.open(encoding="utf-8") as handle:
+        return "thermal_overload_count" in handle.readline().split(",")
+
+
 def area_loads(case: Path) -> dict[int, float]:
     """Return the in-service real load of each area of a RAW case, in MW."""
     _, sections = read_raw_sections(case)
@@ -144,6 +153,9 @@ def main() -> None:
     if not indexed(run_a):
         log("rebuilding run A's analysis with the contingency summary and the drill-down index")
         wait(tools(), tools().run_analysis(args.run, include_index=True, rebuild=True)["data"]["job_id"])
+    elif not thermal(run_a):
+        log("rebuilding run A's analysis cache, which predates thermal overload counts")
+        wait(tools(), tools().run_analysis(args.run, rebuild=True)["data"]["job_id"])
 
     case = inputs / "Texas7k_coast_shift_3pct.raw"
     if not (record.get("run_b") and (project / "runs" / record["run_b"]).is_dir()):
@@ -163,6 +175,9 @@ def main() -> None:
     if not indexed(project / "runs" / record["run_b"]):
         log(f"building run B ({record['run_b']}) analysis and index")
         wait(tools(), tools().run_analysis(record["run_b"], include_index=True)["data"]["job_id"])
+    elif not thermal(project / "runs" / record["run_b"]):
+        log(f"rebuilding run B ({record['run_b']}) analysis cache, which predates thermal overload counts")
+        wait(tools(), tools().run_analysis(record["run_b"], rebuild=True)["data"]["job_id"])
 
     record.update(project=str(project), run_a=args.run, run_c="2026-09-24_00-00-00", run_d="2026-09-24_01-00-00")
     if not (project / "runs" / record["run_c"]).exists():
