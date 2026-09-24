@@ -41,8 +41,17 @@ docker build --build-arg ANALYSIS_BASE=rapidsai/base@sha256:c6c8424ecefd77bdf3d4
 
 The build adds the `org.gridlens.purpose=generated-analysis` label that GridLens checks, the `python -I -B`
 entrypoint, `NVIDIA_VISIBLE_DEVICES=void`, a world-readable `/opt/conda`, and a trailing `USER 65534:65534`.
-The `/opt/conda` change matters because RAPIDS-style bases restrict that directory to their own user, and
-GridLens runs the container as the invoking host UID. The image ships no GridLens code and no run data.
+The `/opt/conda` change matters because RAPIDS-style bases restrict its directories and some of its files to
+their own user and group, and GridLens runs the container as the invoking host UID. An image built before
+2026-09-24 opened only three directories, so `import pyarrow` failed as a normal user: it could not load
+`libxml2.so.16`, one of about 5,000 files readable only by the `conda` group. Rebuild such an image. The image
+ships no GridLens code and no run data.
+
+Check that a normal user can import what scripts use:
+
+```bash
+docker run --rm --network none --user 65534:65534 <image ID> -c "import pandas, pyarrow.dataset; print('ok')"
+```
 
 ## 3. Read the image ID and paste it into GridLens
 

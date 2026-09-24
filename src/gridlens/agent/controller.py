@@ -203,6 +203,7 @@ class AgentController:
             final = disclose_truncated_results(final, sources[prior_calls:])
             final = disclose_tool_failures(final, sources[prior_calls:])
             final = qualify_capacity_answer(final, prompt)
+            final = disclose_generated_output(final, sources[prior_calls:])
             final = verified_group_mean_answer(final, prompt, sources[prior_calls:], self.context.run_ids)
             final = verified_top_line_areas(final, prompt, sources[prior_calls:], self.context.run_ids)
             previous_answer = next((item["text"] for item in reversed(self.history[:-1]) if item["role"] == "assistant"), "")
@@ -496,6 +497,14 @@ def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) ->
             lines.append(f"{data.get('inline_rows', 0):,} rows were shown inline; the complete result is in {data.get('rows_file') or data['result_file']}.")
     lines.append("GridLens applies no maximum row count: limit=0, or magnitude=0 for rank and rank_groups, returns every matching row, and offset pages the other tools.")
     return "\n".join(lines)
+
+
+def disclose_generated_output(answer: str, turn_sources: list[dict]) -> str:
+    """Return an answer with a note when this turn read the output of a generated script, which nothing has validated."""
+    read = any(any("generated script's folder" in warning for warning in (row.get("result") or {}).get("warnings") or []) for row in turn_sources)
+    if not read:
+        return answer
+    return answer.rstrip() + "\n\nGridLens note: This answer uses the output of a generated script, which no deterministic GridLens tool has validated. Treat it as untrusted until it is checked."
 
 
 def qualify_capacity_answer(answer: str, question: str) -> str:

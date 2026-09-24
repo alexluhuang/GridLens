@@ -7,7 +7,9 @@
 ARG ANALYSIS_BASE
 FROM ${ANALYSIS_BASE}
 USER root
-RUN if [ -d /opt/conda ]; then chmod a+rx /opt/conda /opt/conda/bin /opt/conda/lib; fi
+# Conda bases can restrict files to their own group, such as the libxml2 that pyarrow loads, and scripts run as
+# the host user. Open only what a normal user cannot read or enter, so the layer copies few files.
+RUN if [ -d /opt/conda ]; then find /opt/conda \( ! -perm -o=r -o \( -type d ! -perm -o=x \) \) -exec chmod a+rX {} +; fi
 LABEL org.gridlens.purpose="generated-analysis"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 NVIDIA_VISIBLE_DEVICES=void
 ENV PATH="/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

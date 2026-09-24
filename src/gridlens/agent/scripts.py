@@ -112,6 +112,35 @@ def save_proposal(context: SessionContext, run_id: str, purpose: str, code: str)
     return record
 
 
+# Where a sandboxed script finds the run: the run folder is mounted read-only at this path.
+RUN_MOUNT = "/run-data"
+GLOB_CHARACTERS = re.compile(r"[*?\[]")
+
+
+def sandbox_view(run: Path) -> dict:
+    """Describe a run's files as a sandboxed script sees them, under /run-data."""
+    def listed(folder: str) -> list[str]:
+        directory = run / folder
+        return [f"{RUN_MOUNT}/{folder}/{path.name}" for path in sorted(directory.iterdir()) if path.is_file() and not path.name.startswith(".")] if directory.is_dir() else []
+
+    index = sorted((run / "reports/event_index").glob("*/*.parquet"))
+    return {
+        "work": listed("work"), "caches": listed("reports/interactive_tables"),
+        "index": f"{RUN_MOUNT}/reports/event_index/*/*.parquet ({len(index)} files)" if index else "none: build it with run_analysis(include_index=True)",
+    }
+
+
+def missing_run_paths(code: str, run: Path) -> list[str]:
+    """Return the literal /run-data paths in a script that name nothing in the run folder."""
+    missing = []
+    for node in ast.walk(ast.parse(code)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith(RUN_MOUNT + "/"):
+            relative = node.value[len(RUN_MOUNT) + 1:].rstrip("/")
+            if relative and not GLOB_CHARACTERS.search(relative) and not (run / relative).exists():
+                missing.append(node.value)
+    return sorted(set(missing))
+
+
 def read_proposal(context: SessionContext, identifier: str) -> tuple[dict, Path, str]:
     """Load a saved proposal, refusing it if the bytes changed after review."""
     if not re.fullmatch(r"[a-f0-9]{32}", identifier):

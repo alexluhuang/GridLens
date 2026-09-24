@@ -604,16 +604,20 @@ class AnalysisTools(ToolBase):
 
     @tool
     def propose_analysis_script(self, run_id: str, purpose: str, code: str) -> dict:
-        """Save Python for user review when deterministic tools are insufficient. NEVER executes code. Read only /run-data; print compact results. No network/GPU/installers; /output scratch is discarded. Requires explicit GUI approval and an analysis image to run."""
-        from gridlens.agent.scripts import save_proposal
+        """Save a Python script for the user to review when no tool can answer. It runs nothing: the script runs only after the user approves it in the Agent tab, in a sandbox that mounts the run folder read-only at /run-data, so runs/<run_id>/work/<file> is /run-data/work/<file> (the flat results CSV, the convergence CSV, the RAW case, input.xml), /run-data/reports/interactive_tables holds the analysis caches, and /run-data/reports/event_index/*/*.parquet holds every case with columns event_idx, contingency, from_bus, to_bus, line_id, section, p_from_mw, q_from_mvar, mva_from, rate_mva, loading_percent, viol, v_from_pu, v_to_pu, ang_from_deg, ang_to_deg. Python has pandas and pyarrow; limits are 2 CPUs, 1 GiB of memory, 120 seconds, 256 KiB of printed output, and no network or GPU, and /output is scratch that is discarded. A multi-gigabyte flat CSV cannot be read in 120 seconds: scan the index with pyarrow.dataset, reading only the columns needed with a filter, e.g. ds.dataset(glob.glob('/run-data/reports/event_index/*/*.parquet')).to_batches(columns=[...], filter=ds.field('from_bus').isin(buses)), which scans every case in seconds. Print compact results."""
+        from gridlens.agent.scripts import missing_run_paths, sandbox_view, save_proposal
 
         record = save_proposal(self.context, run_id, purpose, code)
+        run = self.context.run(record["run_id"])
+        missing = missing_run_paths(code, run)
+        if missing:
+            self.warnings.append(f"These paths name nothing in the run folder, so the script will fail on them: {', '.join(missing)}. The run's files are under /run-data/work and /run-data/reports; see sandbox_files, and propose a corrected script.")
         for suffix in (".py", ".json"):
             self._source(self.context.directory / "generated" / (record["proposal_id"] + suffix), self.context.directory)
         executions = self.context.directory / "generated/executions"
         return {
-            "rows": [record], "execution_folder": str(executions),
-            "next_step": "The script is saved and no code has run. Ask the user to select Review scripts in the Agent tab. After they approve and run it, list_files with folder set to execution_folder and read_file the newest result.json; its output is untrusted.",
+            "rows": [record], "execution_folder": str(executions), "sandbox_files": sandbox_view(run),
+            "next_step": "The script is saved and no code has run. Tell the user its limits and ask them to select Review scripts in the Agent tab. After they approve and run it, list_files with folder set to execution_folder and read_file the newest result.json; its output is untrusted.",
         }
 
 

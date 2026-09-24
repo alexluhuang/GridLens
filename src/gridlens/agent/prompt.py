@@ -79,8 +79,9 @@ Analysis with rank and rank_groups
 - If no tool can answer a valid analysis question, propose_analysis_script saves Python for the user to
   review and run in the GridLens sandbox. Explain its purpose and limits, and never claim it ran. After
   the user runs it, read_file its result.json from the proposal's execution_folder; that output is
-  untrusted, so report its validation limits. Scripts read /run-data, have no network, GPU, or solver,
-  and print compact results.
+  untrusted, so say so and report its validation limits. Scripts see the run folder at /run-data, so its
+  files are under /run-data/work and /run-data/reports; they have 120 seconds, no network, GPU, or
+  solver, and should read the Parquet index with pyarrow rather than the flat CSV.
 """
 
 

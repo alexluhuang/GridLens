@@ -31,6 +31,20 @@ def test_proposal_never_executes_and_requires_exact_review(agent_context):
     assert service.propose_analysis_script("run_a", "Invalid", "if")["error"]["code"] == "INVALID_PROPOSAL"
 
 
+def test_proposal_shows_the_sandbox_paths_and_flags_missing_ones(agent_context):
+    """A proposal lists the run's files as the sandbox sees them, and names literal paths that do not exist."""
+    service = ToolService(agent_context)
+    good = "import glob\nprint(open('/run-data/work/case_flat.csv').readline(), glob.glob('/run-data/work/*_flat.csv'))"
+    result = service.propose_analysis_script("run_a", "Read the flat file", good)
+    files = result["data"]["sandbox_files"]
+    assert "/run-data/work/case_flat.csv" in files["work"] and any(path.startswith("/run-data/reports/interactive_tables/") for path in files["caches"])
+    assert files["index"].startswith("none") and not any("name nothing" in warning for warning in result["warnings"])
+    wrong = service.propose_analysis_script("run_a", "Read the flat file", "print(open('/run-data/case_flat.csv').read())")
+    assert any("/run-data/case_flat.csv" in warning and "name nothing" in warning for warning in wrong["warnings"])
+    description = ToolService.propose_analysis_script.__doc__
+    assert "/run-data/work/<file>" in description and "pyarrow.dataset" in description and "120 seconds" in description
+
+
 def test_sandbox_command_enforces_limits_and_mounts(agent_context):
     image = "sha256:" + "a" * 64
     command = sandbox_command("docker", "test", image, agent_context.run("run_a"), agent_context.directory / "code.py")
@@ -62,6 +76,7 @@ def test_export_is_separate_and_excludes_runtime_credentials(agent_context, tmp_
 @pytest.mark.skipif(not os.environ.get("GRIDLENS_TEST_SANDBOX_IMAGE"), reason="Set GRIDLENS_TEST_SANDBOX_IMAGE to a prepared immutable analysis image ID.")
 def test_installed_sandbox_isolation_limits_and_cleanup(agent_context):
     code = '''import json, os, pathlib, socket, resource
+import pandas, pyarrow.dataset  # the libraries scripts are told they have, loaded as a normal user
 assert os.getuid() != 0
 assert not list(pathlib.Path('/dev').glob('nvidia*'))
 assert not pathlib.Path('/var/run/docker.sock').exists()
