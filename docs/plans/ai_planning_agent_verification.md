@@ -179,3 +179,44 @@ the controller from the saved session, and completed a follow-up through the res
 **Interpretation.** The GUI checks cover session selection and prompt construction without launching a model;
 the Hermes loopback test verifies persisted continuation with its installed CLI and a synthetic model API.
 It does not test an answer from a live Ollama model.
+
+## Planning-question evaluation after the tool consolidation (2026-09-23)
+
+**Rationale.** The consolidation replaced 35 tools with 15 general ones, so a model must fill in parameters
+and chain calls rather than pick a tool per question. The user's 30 planning questions test whether a local
+model can, across inventory, provenance, the RAW case, convergence, loading, margin, ties, contingencies,
+voltages and angles, run comparison, setup, scripts, communication, scope, and robustness.
+
+**Method.** gemma4:31b through Hermes 0.21.4 and Ollama, at a 262,144-token context, used the tools of
+`c0e500d`. It answered 32 prompts: questions 2 and 30 in two variants each, and 24 as the follow-up to 23.
+Each ran in a fresh session on a prepared copy of the sample project, `/home/alh360/GridLensProjects-eval2`,
+with a load-shift comparison run, a run without analysis, and a failed run. Answers were scored against
+each question's criterion and against reference facts computed from the data.
+`scripts/prepare_agent_evaluation.py`, `scripts/agent_question_references.py`, and
+`scripts/evaluate_agent_questions.py` do the work; `agent_question_evaluation.md` gives the steps for another
+model. The run began with nemotron3:33b as well, which was stopped after two prompts at the user's request.
+
+**Outcome.** 11 prompts passed, 16 partly passed, and 5 failed. They took 193 minutes, a median of 176
+seconds each, with 130 audited tool calls. `agent_evaluation_gemma4_31b.md` gives every question, the exact
+answer, each tool call, and the verdict and rationale. Preparing the run found two defects, fixed before it
+began: generator outages had no outage area (`12b976d`), and a count by status dropped failed contingencies
+(`c0e500d`).
+
+**Interpretation.** When gemma chose the call, the tools gave exact answers, including:
+- status counts, margins, contingency rankings, per-outage flows, and run changes;
+- a complete create, configure, run, and wait sequence;
+- a filing draft whose citations all resolve.
+
+Most partial scores omit a caveat or scope the criterion asks for. The failures are:
+- an XML replaced without confirmation;
+- a claimed MVA headroom;
+- an answer whose cited query named an area that does not exist;
+- overloads classified by a count that includes GridPACK violation flags;
+- a file question answered with no call.
+
+The answers expose seven gaps, listed in the report, that are the next work. The largest are:
+- no tool text on selecting tie lines with two `control_area` qualifiers, which cost 18 to 26 minutes on
+  each of three questions;
+- a confirmation rule held only in the prompt.
+
+Each question was asked once, so the scores describe this sample, not a model's reliability.
