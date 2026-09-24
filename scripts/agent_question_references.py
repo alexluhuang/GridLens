@@ -2,7 +2,8 @@
 
 It reads a projects folder that `prepare_agent_evaluation.py` made and writes one JSON object per question
 ID. Totals by area, convergence counts, islanding outages, file sizes, and XML settings are read straight
-from the files, independently of the agent tools. Rankings, ties, cases, and comparisons come from the same
+from the files, independently of the agent tools, and so is question 23's interface flow, summed from the index
+with PyArrow. Rankings, ties, cases, and comparisons come from the same
 deterministic `rank` and `rank_groups` calls a model should make, run with every qualifier stated, so a
 score compares a model's choices and wording with the tools' own answer. The script opens one session in
 the prepared project, as the tools require, and does not change any run.
@@ -20,6 +21,7 @@ import xml.etree.ElementTree as ET
 
 from gridlens.agent.session import SessionContext
 from gridlens.agent.tools import ToolService
+from gridlens.analysis.event_index import open_event_index
 from gridlens.analysis.raw_sections import read_raw_sections
 
 AREA_A, AREA_B, AREA_C = "Far West", "West", "North"
@@ -93,6 +95,36 @@ def raw_totals(case: Path) -> dict:
             "note": "The GENERATOR section has no AREA column; generation is summed by the area of each generator's bus."}
 
 
+def interface_flow(run: Path, ties: list[dict], sending: str) -> dict:
+    """Sum each case's real power across the ties, oriented out of the sending area, straight from the index.
+
+    A tie whose from end is in the sending area adds its p_from_mw; one whose from end is in the other area
+    subtracts it. Losses on the ties are ignored, as a simple interface sum does.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    sign = {f"{row['from_bus']}|{row['to_bus']}|{row['line_id']}|{row.get('section') or ''}": 1.0 if row["control_area"][0] == sending else -1.0 for row in ties}
+    dataset, _, _ = open_event_index(run)
+    keys = pa.array(sorted(sign), pa.string())
+    parts = []
+    for batch in dataset.scanner(columns=["event_idx", "contingency", "from_bus", "to_bus", "line_id", "section", "p_from_mw"], batch_size=262144).to_batches():
+        table = pa.Table.from_batches([batch])
+        key = pc.binary_join_element_wise(pc.cast(table["from_bus"], pa.string()), pc.cast(table["to_bus"], pa.string()), table["line_id"], table["section"], "|")
+        mask = pc.is_in(key, value_set=keys)
+        if pc.any(mask).as_py():
+            parts.append(table.filter(mask).append_column("key", key.filter(mask)))
+    table = pa.concat_tables(parts)
+    table = table.append_column("oriented", pc.multiply(table["p_from_mw"], pa.array([sign[item] for item in table["key"].to_pylist()], pa.float64())))
+    sums = table.group_by(["event_idx", "contingency"]).aggregate([("oriented", "sum")]).to_pylist()
+    outages = [row for row in sums if row["event_idx"] != 0]
+    low, high = min(outages, key=lambda row: row["oriented_sum"]), max(outages, key=lambda row: row["oriented_sum"])
+    describe = lambda row: {"event_idx": row["event_idx"], "contingency": row["contingency"].strip(), "mw": round(row["oriented_sum"], 2)}
+    return {"ties": len(sign), "sending_area": sending, "contingencies": len(outages),
+            "base_case_mw": round(next(row["oriented_sum"] for row in sums if row["event_idx"] == 0), 2),
+            "minimum": describe(low), "maximum": describe(high)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--projects-dir", required=True, type=Path)
@@ -138,11 +170,14 @@ def main() -> None:
     reference["15"] = {"by_loading": brief(complete(tools.rank(a, object="contingencies", metric="max_loading_pct", magnitude=10, fields=["violation_count", "outage_area"])), outage, 10),
                        "by_violations": brief(complete(tools.rank(a, object="contingencies", metric="violation_count", magnitude=10, fields=["max_loading_pct", "outage_area"])), outage, 10)}
     reference["16"] = {"contingency": brief(complete(tools.rank(a, object="contingencies", filters=[{"column": "contingency", "op": "==", "value": OUTAGE}], fields=["violation_count", "converged"])), outage, 1),
-                       "overloads": brief(complete(tools.rank(a, object="cases", magnitude=0, filters=[{"column": "contingency", "op": "==", "value": OUTAGE}, {"column": "loading_percent", "op": ">=", "value": 100}], fields=["p_from_mw", "q_from_mvar", "mva_from", "rate_mva"])), case, 10)}
+                       "overloads": brief(complete(tools.rank(a, object="cases", magnitude=0, filters=[{"column": "contingency", "op": "==", "value": OUTAGE}, {"column": "loading_percent", "op": ">=", "value": 100}], fields=["p_from_mw", "q_from_mvar", "mva_from", "rate_mva"])), case, 10),
+                       # The summary also counts rows GridPACK flags with viol, such as the outaged branch itself at 0%.
+                       "flagged": brief(complete(tools.rank(a, object="cases", magnitude=0, filters=[{"column": "contingency", "op": "==", "value": OUTAGE}, {"column": "viol", "op": "==", "value": 1}], fields=["viol"])), case, 10)}
     low = [{"column": "min_voltage_pu", "op": "<", "value": 0.95}]
     reference["17"] = {"lowest": brief(complete(tools.rank(a, object="cases", metric="min_voltage_pu", order="ascending", magnitude=10, filters=low, fields=["v_from_pu", "v_to_pu", "converged"])), case, 10),
                        "by_contingency": brief(complete(tools.rank_groups(a, object="cases", group="contingency", metric="min_voltage_pu", statistic="count", magnitude=10, filters=low)), ("group", "value"), 10)}
     reference["18"] = brief(complete(tools.rank(a, object="cases", metric="angle_difference_deg", magnitude=5, filters=ties + [{"column": "event_idx", "op": ">", "value": 0}], fields=["ang_from_deg", "ang_to_deg", "converged"])), case, 5)
+    reference["23"] = interface_flow(run_a, reference["13"]["rows"], AREA_A)
     reference["19"] = brief(complete(tools.rank(a, object="both", compare_run_id=b, magnitude=10, fields=["compare_value", "max_utilization_pct", "control_area"])), facility, 10)
     new = [{"column": "max_utilization_pct", "op": "<", "value": 100}, {"column": "compare_value", "op": ">=", "value": 100}]
     resolved = [{"column": "max_utilization_pct", "op": ">=", "value": 100}, {"column": "compare_value", "op": "<", "value": 100}]
