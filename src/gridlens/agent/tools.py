@@ -78,6 +78,13 @@ def _number(value: object) -> float | None:
         return None
 
 
+def _require_metrics(missing: list[str], used: set[str], run: Path) -> None:
+    """Refuse a call that needs a metric the run's analysis cache was built without."""
+    needed = sorted(set(missing) & used)
+    if needed:
+        raise AgentError("CACHE_FIELD_UNAVAILABLE", f"Run {run.name}'s analysis cache was built before {', '.join(needed)} was recorded. Rebuild it with run_analysis(rebuild=True), then ask again.")
+
+
 def _descending(order: str) -> bool:
     """Return whether order sorts largest first, refusing anything but the two documented orders."""
     if order not in get_args(Order):
@@ -232,8 +239,10 @@ class AnalysisTools(ToolBase):
             if area and area.casefold() not in {str(value).casefold() for value in [*row["control_areas"], details.get("from_area"), details.get("to_area")]}:
                 excluded_area += 1
                 continue
-            for name in ("base_utilization_pct", "mean_utilization_pct", "contingency_count", "overload_count"):
+            for name in ("base_utilization_pct", "mean_utilization_pct", "contingency_count"):
                 row[name] = _number(details.get(name))
+            # The cache's overload_count also counts GridPACK's viol flag, which marks the outaged branch itself.
+            row["overload_count"] = _number(details.get("thermal_overload_count"))
             source = str(details.get("utilization_source") or "legacy.pflow_mm")
             legacy_rating |= not source.startswith("csv_flat")
             # csv_flat caches record the lowest loading; legacy caches record the lowest MW flow instead.
@@ -275,9 +284,11 @@ class AnalysisTools(ToolBase):
         self.warnings.extend([
             "Maximum observed loading includes all rows in the cache, including the base case; it is not a converged N-1-only metric.",
             "Thermal margin is 100 minus maximum utilization, in percentage points. It is not available transfer, generation, or load-serving capacity.",
-            "contingency_count counts recorded loading rows (including base); overload_count counts loading >=100% or a reported violation flag.",
+            "contingency_count counts recorded loading rows (including base); overload_count counts those at or above 100% loading.",
         ])
         scope = {"filters": {"facility": facility, "min_kv": min_kv, "area": area}, "monitored_facility_count": monitored, "analyzed_facility_count": len(filtered), "configured_contingency_rating": configured_rating}
+        # A cache built before thermal counts were added has only the flag-inclusive one, which is not offered.
+        scope["missing_metrics"] = [] if "thermal_overload_count" in tables["pflow_mm"].columns else ["overload_count"]
         return filtered, convergence, scope
 
     def _convergence_rows(self, run: Path) -> list[dict] | None:
@@ -319,11 +330,11 @@ class AnalysisTools(ToolBase):
             self.warnings.append(f"{len(failed)} of {len(rows)} recorded cases failed or were not converged; cached loading summaries do not exclude their rows.")
         return {"known": True, "total": len(rows), "converged": len(rows) - len(failed), "failed": len(failed), "rows": failed}
 
-    def _facilities(self, run: Path, kind: str) -> tuple[list[dict], dict]:
-        """Return a run's facility records of kind, at or above the 50 kV cutoff, and the counts that go with them."""
+    def _facilities(self, run: Path, kind: str) -> tuple[list[dict], dict, list[str]]:
+        """Return a run's facility records of kind, at or above the 50 kV cutoff, the counts that go with them, and the metrics its cache lacks."""
         rows, convergence, scope = self._loading(run, OBJECT_KINDS[kind], "", 50.0, argument=("object", kind, "both"))
         counts = {"monitored_facility_count": scope["monitored_facility_count"], "configured_contingency_rating": scope["configured_contingency_rating"], "convergence": convergence}
-        return [facility_record(row) for row in rows], counts
+        return [facility_record(row) for row in rows], counts, scope["missing_metrics"]
 
     def _compared(self, run: Path, records: list[dict], kind: str, metric: str, compare_run_id: str, compare_project: str) -> tuple[list[dict], dict]:
         """Keep the records whose facility is also in the compare run, each with its change in metric, compare run minus this run."""
@@ -331,7 +342,8 @@ class AnalysisTools(ToolBase):
         if other_run == run:
             raise AgentError("INVALID_COMPARISON", "Name a different run to compare with.")
         before = len(self.warnings)
-        others, _ = self._facilities(other_run, kind)
+        others, _, missing = self._facilities(other_run, kind)
+        _require_metrics(missing, {metric}, other_run)
         self.warnings[before:] = [f"In compare run {other_run.name}: {warning}" for warning in self.warnings[before:]]
         by_key = {_key(record): record for record in others}
         matched = []
@@ -351,8 +363,8 @@ class AnalysisTools(ToolBase):
             "rating_changed_count": sum(1 for record in matched if record["fields"]["rating_changed"]),
         }
 
-    def _contingencies(self, run: Path, facilities: dict | None = None) -> list[dict]:
-        """Return a run's contingency records, from its compact summary and convergence file, without the base case."""
+    def _contingencies(self, run: Path, facilities: dict | None = None) -> tuple[list[dict], list[str]]:
+        """Return a run's contingency records, from its compact summary and convergence file, without the base case, and the metrics its summary lacks."""
         summary = self._optional_table(run, "contingency_summary")
         convergence = self._convergence_rows(run) or []
         if facilities is None:
@@ -371,25 +383,30 @@ class AnalysisTools(ToolBase):
         summaries = {int(event): row for row in summary or [] if (event := _number(row.get("event_idx"))) is not None}
         solutions = {int(event): row for row in convergence if (event := _number(row.get("event_idx"))) is not None}
         if summary is None:
-            self.warnings.append("This run has no current contingency summary, so max_loading_pct, violation_count, and monitored_facility_count are unknown. Rebuild the analysis with run_analysis(rebuild=True) to add them.")
+            self.warnings.append("This run has no current contingency summary, so max_loading_pct, overload_count, and monitored_facility_count are unknown. Rebuild the analysis with run_analysis(rebuild=True) to add them.")
         if not convergence:
             self.warnings.append("This run has no convergence file, so no contingency is known to have converged.")
-        return [contingency_record(event, summaries.get(event, {}), solutions.get(event, {}), bus_areas, facilities) for event in sorted(set(summaries) | set(solutions)) if event != 0]
+        missing = ["overload_count"] if summary and "thermal_overload_count" not in summary[0] else []
+        return [contingency_record(event, summaries.get(event, {}), solutions.get(event, {}), bus_areas, facilities) for event in sorted(set(summaries) | set(solutions)) if event != 0], missing
 
-    def _population(self, run: Path, kind: str, family: str, metric: str, conditions: list, *, group: str = "", compare_run_id: str = "", compare_project: str = "", known_only: bool = True) -> tuple[list[dict], dict, str]:
+    def _population(self, run: Path, kind: str, family: str, metric: str, conditions: list, *, group: str = "", fields: tuple = (), compare_run_id: str = "", compare_project: str = "", known_only: bool = True) -> tuple[list[dict], dict, str]:
         """Return the facilities or contingencies that meet the qualifiers, the counts behind them, and their value's key.
 
-        known_only keeps only objects with a known value; a count needs none, so it keeps them all.
+        fields are the extra fields the caller returns. known_only keeps only objects with a known value; a
+        count needs none, so it keeps them all.
         """
         value_key = metric
+        used = {metric, *fields, *(column for column, _, _ in conditions)}
         if family == "facility":
-            records, counts = self._facilities(run, kind)
+            records, counts, missing = self._facilities(run, kind)
+            _require_metrics(missing, used, run)
             if compare_run_id:
                 records, compared = self._compared(run, records, kind, metric, compare_run_id, compare_project)
                 counts.update(compared)
                 value_key = "change"
         else:
-            records = self._contingencies(run)
+            records, missing = self._contingencies(run)
+            _require_metrics(missing, used, run)
             counts = {"recorded_contingencies": len(records)}
             # Ranking a failed solution as severe would mislead, so only converged contingencies count unless asked.
             if not ({column for column, _, _ in conditions} | {group}) & {"converged", "status_code"}:
@@ -424,7 +441,7 @@ class AnalysisTools(ToolBase):
         self._index(run, open_event_index)
         facilities = facility_attributes(self._tables(run))
         before = len(self.warnings)
-        contingencies = {record["fields"]["event_idx"]: record for record in self._contingencies(run, facilities)}
+        contingencies = {record["fields"]["event_idx"]: record for record in self._contingencies(run, facilities)[0]}
         if not ({column for column, _, _ in conditions} | used) & (set(CONTINGENCY_ATTRIBUTES) - {"event_idx", "contingency"}):
             del self.warnings[before:]
         facility_conditions = [condition for condition in conditions if condition[0] in FACILITY_ATTRIBUTES]
@@ -500,7 +517,7 @@ class AnalysisTools(ToolBase):
     def rank(self, run_id: str, object: ObjectKind = "branches", order: Order = "descending", metric: ObjectMetric = "max_utilization_pct", magnitude: int = 10, filters: list[ObjectFilter] | None = None, fields: list[ObjectField] | None = None, compare_run_id: str = "", compare_project: str = "", project: str = "") -> dict:
         """Sort objects by one metric and return the first `magnitude` (0 returns all), each with the value it was sorted by; total_matching counts every object that qualified.
 
-        object: branches (non-transformer), transformers, or both are facilities at or above 50 kV; their metrics are max_utilization_pct (congestion), base_utilization_pct, mean_utilization_pct, min_utilization_pct, thermal_margin_pct_points, overload_count (cases at or above 100%), contingency_count, rating_mva, and nominal_kv. contingencies are outage cases, converged ones only unless a qualifier names converged or status_code; their metrics are max_loading_pct, violation_count, monitored_facility_count, iterations, max_p_mismatch, and max_q_mismatch. cases are one facility in one contingency, from the drill-down index; their metrics are loading_percent, mva_from, p_from_mw, q_from_mvar, rate_mva, v_from_pu, v_to_pu, min_voltage_pu, ang_from_deg, ang_to_deg, and angle_difference_deg, and a case also has its facility's and its contingency's fields.
+        object: branches (non-transformer), transformers, or both are facilities at or above 50 kV; their metrics are max_utilization_pct (congestion), base_utilization_pct, mean_utilization_pct, min_utilization_pct, thermal_margin_pct_points, overload_count (cases at or above 100%), contingency_count, rating_mva, and nominal_kv. contingencies are outage cases, converged ones only unless a qualifier names converged or status_code; their metrics are max_loading_pct, overload_count (monitored facilities at or above 100%), monitored_facility_count, iterations, max_p_mismatch, and max_q_mismatch. cases are one facility in one contingency, from the drill-down index; their metrics are loading_percent, mva_from, p_from_mw, q_from_mvar, rate_mva, v_from_pu, v_to_pu, min_voltage_pu, ang_from_deg, ang_to_deg, and angle_difference_deg, and a case also has its facility's and its contingency's fields; its viol field is GridPACK's own flag, which mostly marks the outaged branch itself, not an overload.
         filters keep objects meeting every qualifier, e.g. [{"column": "control_area", "op": "==", "value": "Coast"}, {"column": "nominal_kv", "op": ">=", "value": 345}]; outage_area is where a contingency's outaged element is. fields adds attributes to each row. compare_run_id ranks facilities by their change from this run to another (value = other minus this) and allows compare_value and change as qualifiers. For counts, means, or any statistic use rank_groups, never these rows.
         """
         descending = _descending(order)
@@ -518,7 +535,7 @@ class AnalysisTools(ToolBase):
         if family == "case":
             rows, total, counts = self._rank_cases(run, metric, descending, magnitude, conditions, extra)
             return {**header, **counts, **page_result(rows, total, 0, magnitude)}
-        records, counts, value_key = self._population(run, object, family, metric, conditions, compare_run_id=compare_run_id, compare_project=compare_project)
+        records, counts, value_key = self._population(run, object, family, metric, conditions, fields=tuple(extra), compare_run_id=compare_run_id, compare_project=compare_project)
         records.sort(key=lambda record: (-record["values"][value_key] if descending else record["values"][value_key], _order(record)))
         rows = [
             {"rank": position, **record["identity"], "value": reported(record["values"][value_key]), **{name: shown(record["fields"][name]) for name in extra}}

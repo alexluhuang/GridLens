@@ -96,6 +96,7 @@ _PFLOW_MM_COLUMNS = [
     "max_contingency_label",
     "contingency_count",
     "overload_count",
+    "thermal_overload_count",
     "utilization_source",
 ]
 _SUCCESS_COLUMNS = ["contingency_index", "success", "violation", "isolated_warning", "raw_line"]
@@ -165,7 +166,10 @@ class _BranchAggregate:
     section: str
     row_index: int
     count: int = 0
+    # Cases with loading of at least 100% or GridPACK's viol flag, which also marks the outaged branch itself.
     overload_count: int = 0
+    # Cases with loading of at least 100% only.
+    thermal_overload_count: int = 0
     sum_loading: float = 0.0
     min_loading: float | None = None
     max_loading: float | None = None
@@ -188,6 +192,8 @@ class _BranchAggregate:
             self.base_loading = loading
         if _is_truthy(row.get("viol")) or loading >= 100.0:
             self.overload_count += 1
+        if abs(loading) >= 100.0:
+            self.thermal_overload_count += 1
 
         if self.min_loading is None or loading < self.min_loading:
             self.min_loading = loading
@@ -618,6 +624,7 @@ def _normalize_flat_frame_columns(data):
     data["overloaded"] = ((data["viol"] != 0) | (data["loading_percent"] >= 100.0)).astype("int64")
     data["base_loading"] = data["loading_percent"].where(data["event_idx"] == 0)
     data["abs_loading"] = data["loading_percent"].abs()
+    data["thermal_overloaded"] = (data["abs_loading"] >= 100.0).astype("int64")
     return data
 
 
@@ -628,6 +635,7 @@ def _flat_grouped_frame(data, keys: list[str]):
             "abs_loading": "max",
             "base_loading": "max",
             "overloaded": "sum",
+            "thermal_overloaded": "sum",
             "rate_mva": "first",
         }
     )
@@ -828,6 +836,7 @@ def _aggregates_from_frame(
             row_index=index,
             count=count,
             overload_count=int(_float_value(row.get("overload_count")) or 0),
+            thermal_overload_count=int(_float_value(row.get("thermal_overload_count")) or 0),
             sum_loading=sum_loading,
             min_loading=_float_value(row.get("min_loading")),
             max_loading=_float_value(row.get("max_loading")),
@@ -865,6 +874,7 @@ def _flatten_aggregate_frame(frame):
         "abs_loading_max": "max_abs_loading",
         "base_loading_max": "base_loading",
         "overloaded_sum": "overload_count",
+        "thermal_overloaded_sum": "thermal_overload_count",
         "rate_mva_first": "rate_mva",
     }
     return frame.reset_index().rename(columns=rename)
@@ -1314,6 +1324,7 @@ def _aggregate_to_pflow_mm_row(aggregate: _BranchAggregate) -> dict[str, object]
         "max_contingency_label": aggregate.max_abs_contingency,
         "contingency_count": aggregate.count,
         "overload_count": aggregate.overload_count,
+        "thermal_overload_count": aggregate.thermal_overload_count,
         "utilization_source": "csv_flat.loading_percent",
     }
 

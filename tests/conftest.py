@@ -39,7 +39,7 @@ def agent_project(tmp_path):
             ("T", "", 95, 60, "two_winding_transformer_branch", 115),
             ("L", "", 200, 90, "nontransformer_branch", 13.8),
         ):
-            rows.append({"from_bus": 1, "to_bus": 2, "line_id": line_id, "section": section, "from_bus_name": "ALPHA", "to_bus_name": "BETA", "from_base_kv": kv, "to_base_kv": kv, "from_area": "1", "to_area": "2", "from_area_name": "North", "to_area_name": "South", "raw_branch_type": branch_type, "rate_mva": 100, "ratec": 100, "base_utilization_pct": base + offset, "mean_utilization_pct": 65, "max_utilization_pct": maximum + offset, "max_utilization_contingency": 1, "max_contingency_label": "line outage", "contingency_count": 3, "overload_count": int(maximum >= 100), "utilization_source": "csv_flat.loading_percent"})
+            rows.append({"from_bus": 1, "to_bus": 2, "line_id": line_id, "section": section, "from_bus_name": "ALPHA", "to_bus_name": "BETA", "from_base_kv": kv, "to_base_kv": kv, "from_area": "1", "to_area": "2", "from_area_name": "North", "to_area_name": "South", "raw_branch_type": branch_type, "rate_mva": 100, "ratec": 100, "base_utilization_pct": base + offset, "mean_utilization_pct": 65, "max_utilization_pct": maximum + offset, "max_utilization_contingency": 1, "max_contingency_label": "line outage", "contingency_count": 3, "overload_count": int(maximum >= 100), "thermal_overload_count": int(maximum >= 100), "utilization_source": "csv_flat.loading_percent"})
         table_dir = run / "reports/interactive_tables"
         table_dir.mkdir(parents=True)
         tables = {"pflow_mm": rows, "branch_metadata": rows, "area_metadata": [{"area": 1, "area_name": "North"}, {"area": 2, "area_name": "South"}]}

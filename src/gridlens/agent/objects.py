@@ -26,7 +26,7 @@ ObjectKind = Literal["branches", "transformers", "both", "contingencies", "cases
 ObjectMetric = Literal[
     "max_utilization_pct", "base_utilization_pct", "mean_utilization_pct", "min_utilization_pct",
     "thermal_margin_pct_points", "overload_count", "contingency_count", "rating_mva", "nominal_kv",
-    "max_loading_pct", "violation_count", "monitored_facility_count", "iterations", "max_p_mismatch", "max_q_mismatch",
+    "max_loading_pct", "monitored_facility_count", "iterations", "max_p_mismatch", "max_q_mismatch",
     "loading_percent", "mva_from", "p_from_mw", "q_from_mvar", "rate_mva", "v_from_pu", "v_to_pu", "min_voltage_pu",
     "ang_from_deg", "ang_to_deg", "angle_difference_deg",
 ]
@@ -40,7 +40,7 @@ ObjectField = Literal[
     "mean_utilization_pct", "min_utilization_pct", "thermal_margin_pct_points", "overload_count",
     "contingency_count", "rating_mva", "compare_value", "change", "rating_changed",
     "event_idx", "contingency", "type", "converged", "status_code", "outage_area", "worst_facility",
-    "max_loading_pct", "violation_count", "monitored_facility_count", "iterations", "max_p_mismatch", "max_q_mismatch",
+    "max_loading_pct", "monitored_facility_count", "iterations", "max_p_mismatch", "max_q_mismatch",
     "viol", "loading_percent", "mva_from", "p_from_mw", "q_from_mvar", "rate_mva", "v_from_pu", "v_to_pu",
     "min_voltage_pu", "ang_from_deg", "ang_to_deg", "angle_difference_deg",
 ]
@@ -65,14 +65,14 @@ FACILITY_METRICS = {
     "mean_utilization_pct": ("%", "mean loading over every recorded case", True),
     "min_utilization_pct": ("%", "lowest loading over every recorded case", True),
     "thermal_margin_pct_points": ("percentage points", "100 minus maximum loading; not transfer, generation, or load-serving capacity", True),
-    "overload_count": ("cases", "recorded cases with loading of at least 100% or a reported violation", True),
+    "overload_count": ("cases", "recorded cases, including the base case, with loading of at least 100%", True),
     "contingency_count": ("cases", "recorded loading cases, including the base case", False),
     "rating_mva": ("MVA", "the rating that loading percentages are computed against", False),
     "nominal_kv": ("kV", "the higher of the two end base voltages", False),
 }
 CONTINGENCY_METRICS = {
     "max_loading_pct": ("%", "highest absolute loading of any monitored facility in the contingency"),
-    "violation_count": ("facilities", "monitored facilities loaded at or above 100%, or reported as violations, in the contingency"),
+    "overload_count": ("facilities", "monitored facilities loaded at or above 100% in the contingency"),
     "monitored_facility_count": ("facilities", "monitored facilities recorded for the contingency"),
     "iterations": ("iterations", "power-flow iterations the solution took"),
     "max_p_mismatch": ("as reported", "largest real-power mismatch left at the solution, in GridPACK's units"),
@@ -215,7 +215,9 @@ def facility_record(row: dict) -> dict:
 def contingency_record(event: int, summary: dict, convergence: dict, bus_areas: dict, facilities: dict) -> dict:
     """Describe one contingency from its compact-summary row and its convergence row, either of which may be empty."""
     name = " ".join(str(summary.get("contingency") or convergence.get("contingency") or "").split())
-    values = {name_: _number(summary.get(name_)) for name_ in ("max_loading_pct", "violation_count", "monitored_facility_count")}
+    values = {name_: _number(summary.get(name_)) for name_ in ("max_loading_pct", "monitored_facility_count")}
+    # The summary's violation_count also counts GridPACK's viol flag, which marks the outaged branch itself.
+    values["overload_count"] = _number(summary.get("thermal_overload_count"))
     values.update({name_: _number(convergence.get(name_)) for name_ in ("iterations", "max_p_mismatch", "max_q_mismatch")})
     if convergence:
         status = str(convergence.get("status_code") or "OK").strip().upper() or "OK"

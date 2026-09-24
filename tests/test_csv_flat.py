@@ -152,6 +152,41 @@ def test_csv_flat_accelerated_backend_uses_absolute_max_loading(tmp_path, monkey
     assert any("CPU Dask backend" in note for note in tables["csv_flat_results"].notes)
 
 
+@pytest.mark.parametrize("backend", ["python", "dask"])
+def test_csv_flat_thermal_overload_counts_leave_out_violation_flags(tmp_path, monkeypatch, backend) -> None:
+    """GridPACK's viol flag marks the outaged branch itself; thermal counts take only loading of at least 100%."""
+    run_dir = _csv_flat_run(tmp_path)
+    (run_dir / "work" / "training_tiny_flat1.csv").write_text(
+        "\n".join(
+            [
+                "event_idx,contingency,from_bus,to_bus,circuit_id,rate_mva,loading_percent,viol",
+                "0,base_case,101,102,1,100,10,0",
+                "1,BR_101_102_1,101,102,1,100,0,1",
+                "2,NEGATIVE,101,102,1,100,-130,0",
+                "3,HIGH,101,102,1,100,105,0",
+                "4,FLAGGED,101,102,1,100,60,1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", backend)
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "off")
+    monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"cudf", "dask_cudf"}:
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    tables = parse_all_output_tables(run_dir)
+    branch = next(row for row in tables["pflow_mm"].rows if row["from_bus"] == 101)
+    assert (branch["overload_count"], branch["thermal_overload_count"]) == (3, 2)
+    events = {int(row["event_idx"]): row for row in tables["contingency_summary"].rows}
+    assert [(events[event]["violation_count"], events[event]["thermal_overload_count"]) for event in (1, 2, 3, 4)] == [(1, 0), (0, 1), (1, 1), (1, 0)]
+
+
 def test_csv_flat_auto_prefers_cudf_when_available(monkeypatch) -> None:
     fake_cudf = types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "cudf", fake_cudf)

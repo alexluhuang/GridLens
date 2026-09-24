@@ -330,9 +330,9 @@ def test_compact_contingencies_and_indexed_drilldown(agent_context):
     pytest.importorskip("pyarrow")
     run = agent_context.run("run_a")
     summary = [
-        dict(zip(SUMMARY_COLUMNS, [0, "base", 1, 0, 70, '["1", "2", "1", ""]', True, "OK"])),
-        dict(zip(SUMMARY_COLUMNS, [1, "line outage", 1, 1, 120, '["1", "2", "1", ""]', True, "OK"])),
-        dict(zip(SUMMARY_COLUMNS, [2, "island", 1, 0, 90, '["1", "2", "1", "2"]', False, "ISLANDED"])),
+        dict(zip(SUMMARY_COLUMNS, [0, "base", 1, 0, 70, '["1", "2", "1", ""]', True, "OK", 0])),
+        dict(zip(SUMMARY_COLUMNS, [1, "line outage", 1, 1, 120, '["1", "2", "1", ""]', True, "OK", 1])),
+        dict(zip(SUMMARY_COLUMNS, [2, "island", 1, 0, 90, '["1", "2", "1", "2"]', False, "ISLANDED", 0])),
     ]
     _rewrite_cached_table(run, "contingency_summary", summary)
     service = ToolService(agent_context)
@@ -344,7 +344,8 @@ def test_compact_contingencies_and_indexed_drilldown(agent_context):
     included = service.rank("run_a", object="contingencies", metric="max_loading_pct", filters=both, fields=["status_code", "worst_facility"])
     assert [(row["event_idx"], row["status_code"]) for row in included["data"]["rows"]] == [(1, "OK"), (2, "ISLANDED")]
     assert included["data"]["rows"][1]["worst_facility"] == "ALPHA to BETA (1) section 2"
-    assert service.rank("run_a", object="contingencies", metric="violation_count")["data"]["units"] == "facilities"
+    overloads = service.rank("run_a", object="contingencies", metric="overload_count")["data"]
+    assert (overloads["units"], [(row["event_idx"], row["value"]) for row in overloads["rows"]]) == ("facilities", [(1, 1)])
     statuses = service.rank_groups("run_a", object="contingencies", group="status_code", metric="max_loading_pct", statistic="count")["data"]["rows"]
     assert [(row["group"], row["value"]) for row in statuses] == [("ISLANDED", 1), ("OK", 1)]
     assert service.rank("run_a", object="cases")["error"]["code"] == "INDEX_NOT_BUILT"
@@ -413,7 +414,7 @@ def test_cases_rank_flows_voltages_and_angles_by_any_qualifier(agent_context):
     assert [(row["group"], row["value"]) for row in areas] == [("North", 120), ("South", 120)]
     fallback = service.rank("run_a", object="cases")
     assert fallback["data"]["metric"] == "loading_percent" and any("facility metric" in warning for warning in fallback["warnings"])
-    assert service.rank("run_a", object="cases", metric="violation_count")["error"]["code"] == "INVALID_METRIC"
+    assert service.rank("run_a", object="cases", metric="max_loading_pct")["error"]["code"] == "INVALID_METRIC"
     assert service.rank("run_a", object="cases", filters=[{"column": "loading_percent", "op": "contains", "value": "1"}])["error"]["code"] == "INVALID_FILTER"
     assert service.rank("run_a", object="cases", compare_run_id="run_b")["error"]["code"] == "COMPARE_FACILITIES_ONLY"
     assert service.rank_groups("run_a", object="cases", group="binding_contingency")["error"]["code"] == "INVALID_GROUP"
@@ -463,10 +464,31 @@ def test_compare_mode_ranks_changes_and_finds_new_and_resolved_overloads(agent_c
     assert service.rank("run_a", compare_run_id="run_a")["error"]["code"] == "INVALID_COMPARISON"
 
 
+def test_overload_counts_are_thermal_and_old_caches_are_refused(agent_context):
+    """overload_count counts loading of at least 100% only; a cache built without that count is refused, not misread."""
+    run = agent_context.run("run_a")
+    service = ToolService(agent_context)
+    counts = service.rank("run_a", metric="overload_count", magnitude=0)["data"]
+    assert (counts["units"], sorted(row["value"] for row in counts["rows"])) == ("cases", [0, 1, 1])
+    summary = [dict(zip(SUMMARY_COLUMNS, [1, "BR_1_2_2", 2, 2, 120, '["1", "2", "1", ""]', True, "OK", 1]))]
+    _rewrite_cached_table(run, "contingency_summary", summary)
+    # violation_count counts the outaged branch GridPACK flags with viol; overload_count leaves it out.
+    assert service.rank("run_a", object="contingencies", metric="overload_count")["data"]["rows"][0]["value"] == 1
+    rows = [{key: value for key, value in row.items() if key != "thermal_overload_count"} for row in _cached_rows(run, "pflow_mm")]
+    _rewrite_cached_table(run, "pflow_mm", rows)
+    refused = service.rank("run_a", metric="overload_count")
+    assert refused["error"]["code"] == "CACHE_FIELD_UNAVAILABLE" and "run_analysis(rebuild=True)" in refused["error"]["remedy"]
+    assert service.rank("run_a", filters=[{"column": "overload_count", "op": ">", "value": 0}])["error"]["code"] == "CACHE_FIELD_UNAVAILABLE"
+    assert service.rank("run_a")["error"] is None  # every other metric still reads the old cache
+    _rewrite_cached_table(run, "contingency_summary", [{key: value for key, value in row.items() if key != "thermal_overload_count"} for row in summary])
+    assert service.rank("run_a", object="contingencies", metric="overload_count")["error"]["code"] == "CACHE_FIELD_UNAVAILABLE"
+    assert service.rank("run_a", object="contingencies", metric="max_loading_pct")["error"] is None
+
+
 def test_optional_tables_fall_back_when_source_is_missing(agent_context):
     """An absent optional source causes a documented fallback, not an artifact exception."""
     run = agent_context.run("run_a")
-    _rewrite_cached_table(run, "contingency_summary", [dict(zip(SUMMARY_COLUMNS, [1, "line outage", 1, 1, 120, "[]", True, "OK"]))])
+    _rewrite_cached_table(run, "contingency_summary", [dict(zip(SUMMARY_COLUMNS, [1, "line outage", 1, 1, 120, "[]", True, "OK", 1]))])
     (run / "work/case_flat.csv").unlink()
     # With no current summary the convergence file still names the contingencies, but their loading is unknown.
     result = ToolService(agent_context).rank("run_a", object="contingencies", metric="max_loading_pct")
