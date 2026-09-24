@@ -220,3 +220,46 @@ The answers expose seven gaps, listed in the report, that are the next work. The
 - a confirmation rule held only in the prompt.
 
 Each question was asked once, so the scores describe this sample, not a model's reliability.
+
+## Fixes for the gaps the evaluation found, and a re-run (2026-09-24)
+
+**Rationale.** The planning-question evaluation exposed six gaps in the tools:
+- overload counts that included GridPACK's violation flag;
+- `rank` dropping objects with no value;
+- no guidance for selecting tie lines;
+- no joins in `read_file`;
+- script instructions that did not say where a run's files are;
+- confirmation enforced only by the prompt.
+
+Each fix was checked by the unit tests and then by asking gemma4:31b the affected questions again.
+
+**Method.** Commits `048d1d7` to `ff8305c` fix the six gaps; §12 of `agent_tool_consolidation.md` gives
+each. Fixing the script instructions also exposed a packaging defect: the sandbox image could not import
+pyarrow as a normal user. The Dockerfile now opens every file such a user cannot read. The default suite
+passes, 292 tests with 5 opt-in skips, and the Hermes isolation and sandbox tests also pass on a rebuilt
+image. The evaluation folder's caches were rebuilt with thermal counts, and the 12 questions the
+fixes touch, 13 prompts, were asked again as in the first run.
+
+**Outcome.**
+- The 13 prompts passed 6, partly passed 5, and failed 2, against 3, 6, and 4 in the first run, in 44
+  minutes instead of 144.
+- The tie-line questions each took about 3 minutes instead of 18 to 26, and questions 14 and 18 now pass.
+- Question 20 found the reference's 26 new and 12 resolved overloads, where it had found 241 and 159.
+- In question 22 the tool held the XML change until confirmation, and the answer asked for it.
+- Question 5 gave generation by area correctly, through a join.
+
+Question 23 exposed a seventh problem. Once ties were easy to select, gemma totaled `p_from_mw` over them
+and gave a sum of flows in mixed directions as the net flow. `a5e3a00` makes the tool warn and the controller
+note such totals. Asked again, gemma wrote a script with the right paths, which ran out of memory; question
+24 reported that as a failure. With those two answers the re-run passed 7, partly passed 5, and failed 1.
+`agent_evaluation_gemma4_31b_fixes.md` gives every answer and verdict.
+
+**Interpretation.** The fixes removed the failures that came from the tools:
+- the slow and unsupported tie-line answers;
+- the wrong overload classification;
+- the XML replaced without confirmation;
+- the generation total that needed a script.
+
+The remaining failure is the model's. It states MVA headroom although the prompt and the controller's note
+say margin is not capacity. Most partial scores omit a caveat the criterion asks for. The re-run is one
+sample per prompt, and question 15 lost a caveat it had given before, which shows that variation.

@@ -110,8 +110,9 @@ def restore(project: Path, projects_dir: Path, before: dict, quarantine: Path) -
         elif not before["runs"][path.name] and (path / "reports").exists():
             shutil.move(str(path / "reports"), str(quarantine / f"reports-{path.name}"))
             done.append(f"moved the analysis a model built for run {path.name}")
+    # A project is a folder; a file someone saved beside the projects, such as a scores file, is left alone.
     for path in sorted(projects_dir.iterdir()):
-        if path.name not in before["projects"]:
+        if path.name not in before["projects"] and path.is_dir():
             if (path / "project.json").is_file():
                 for job in jobs.list_jobs(path):
                     if job["state"] not in jobs.FINAL_STATES:

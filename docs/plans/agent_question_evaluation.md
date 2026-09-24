@@ -49,8 +49,13 @@ GRIDLENS_TEST_HERMES=1 PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_a
 
 - The model must be a local Ollama model with tool support. Cloud models are refused.
 - The sandbox image ID is the `sha256:` value; question 23's script runs in it. Build it from
-  `packaging/agent/Dockerfile` if it is missing. The first run used
-  `sha256:f34d86be5decb4880a6b20b19f5bc58f45bc258a7e63157658291261531611ef`.
+  `packaging/agent/Dockerfile` if it is missing, and check that a normal user can import what scripts are
+  told they have: `docker run --rm --network none --user 65534:65534 <image ID> -c "import pandas, pyarrow.dataset"`.
+  An image built before 2026-09-24 fails this, because about 5,000 of its files were readable only by the
+  `conda` group; rebuild it. The first run used
+  `sha256:f34d86be5decb4880a6b20b19f5bc58f45bc258a7e63157658291261531611ef`, which fails the check, so its
+  scripts could not have read the index. The re-run after the fixes used the rebuilt
+  `sha256:4e927b283c3fcc8cdc914610162bc8b46b1a48bac2f99b8035e2b5f7b02a763b`.
 - Question 21 starts a real GridPACK run with the Run tab's saved default image, unless the model names
   another one. Read it with
   `PYTHONPATH=src .venv/bin/python -c "from gridlens.core.app_settings import AppSettings; print(AppSettings.load().default_gridpack_image)"`
@@ -213,9 +218,10 @@ filtering stated. Reference, in-service load in MW: Coast 20,130.7; East 3,473.7
 is in service. The RAW generator section has no area column, so generation by area needs each generator
 joined to its bus's area: Coast 16,848.2; East 7,757.9; Far West 7,219.2; North 7,271.9; North Central
 14,648.4; South 9,274.2; South Central 9,129.6; West 5,397.2; total 77,546.5, with 94 generators out of
-service. `read_file` cannot join, so pass when the load totals are right with the status filter stated, and
-generation is either correct or explained as needing a join, with a script proposed. Fail on invented
-generation figures.
+service. Since `1021b89`, `read_file` joins the generator section to the bus section on `I`, and a second join
+to the area section gives the names. Pass when both sets of totals are right, with the in-service filter
+stated. Partial when the load totals are right and generation is explained as needing a join, with a script
+proposed. Fail on invented generation figures. Before the fix, the partial answer was the best possible.
 
 **Q6.** *Find the bus named "east bernard" and give its kV, area, and zone.* Criterion: match kind and
 disambiguation. Reference: four buses cut to `EAST BERNA~1` to `~4`: 110017 at 138 kV, 110018 and 110019 at
@@ -231,7 +237,8 @@ with what "converged" means.
 **Q8.** *Which outages island part of the system?* Criterion: lists them and notes the results they exclude.
 Reference: 82 `ISLANDED` outages, all branch outages, such as `BR_150055_150389_1` and `BR_200023_200075_1`.
 GridPACK writes no flow rows for a contingency whose status is not OK, and converged-only rankings leave the
-82 out. Pass when the count and names are given with that exclusion.
+82 out. Since `50fc80b`, `rank` with a `status_code` qualifier lists all 82, with value null. Pass when the
+count and names are given with that exclusion.
 
 **Q9.** *What are the 20 most congested lines in the system?* Criterion: states metric, rating basis, and
 coverage; queries every facility type before any system-wide claim. Reference: the first of 6,823 lines is
@@ -243,9 +250,11 @@ values, the metric, the basis, and the coverage, and any claim about the most co
 rests on `object="both"`.
 
 **Q10.** *Which lines overload under the most contingencies, as opposed to overloading once?* Criterion:
-distinguishes persistence from a single worst case. Reference: by `overload_count`, CLUTE 1 1 to CLUTE 6 1
-overloads in 8,634 of 8,640 cases (maximum 127.24%) and ODESSA 12 1 to ODESSA 19 2 in 8,629 (134.84%), both
-overloaded in the base case. SEABROOK 7 1 to LA PORTE 2 2 overloads in 11. The worst single case is BRYAN 11 1
+distinguishes persistence from a single worst case. Reference: by `overload_count`, cases at or above 100%
+since `048d1d7`, CLUTE 1 1 to CLUTE 6 1 overloads in 8,633 of 8,640 cases (maximum 127.24%) and ODESSA 12 1 to
+ODESSA 19 2 in 8,628 (134.84%), both overloaded in the base case. SEABROOK 7 1 to LA PORTE 2 2 overloads in 10.
+Before the fix each count was one higher, because it also counted the line's own outage, which GridPACK
+flags. The worst single case is BRYAN 11 1
 to BRYAN 2 1 at 206.49%. Pass when lines are ranked by overload count and contrasted with maximum loading.
 
 **Q11.** *Which lines at or above 345 kV in Coast have the most thermal margin under N-1?* Criterion: margin
@@ -267,13 +276,15 @@ listed, or counted with the leading ones listed, with both areas and both loadin
 third-area contingencies. Reference: no. The worst tie loading under a North outage is 72.99%, on FLUVANNA
 1 2 to ODONNELL 1 1 under `BR_190194_240299_1`. The one overload, 145.37%, comes from `BR_190121_190104_1`
 inside Far West and West. Pass when North outages are isolated, with `outage_area` or equivalent evidence,
-and the answer is no with the worst value.
+and the answer is no; the worst value makes a better answer but is not required. Fail when the evidence
+does not isolate them, such as a query on an area name that does not exist.
 
 **Q15.** *Which 10 contingencies are most severe, first by maximum loading and then by violation count?*
 Criterion: converged-only by default, and says so. Reference: 252 left out as failed. By loading:
-`BR_140329_140353_1` 360.86%, `BR_170206_170291_1` 355.47%, and `BR_230273_230288_1` 206.49%. By violations:
-`BR_230273_230288_1` 13, `BR_230273_230267_1` 12, and `BR_250357_250223_1` 11. Pass when both lists are given
-and the converged-only scope is stated.
+`BR_140329_140353_1` 360.86%, `BR_170206_170291_1` 355.47%, and `BR_230273_230288_1` 206.49%. By overload
+count, the contingency metric that replaced `violation_count` in `048d1d7`: `BR_230273_230288_1` 12,
+`BR_230273_230267_1` 11, and `BR_250357_250223_1` 10. The old counts, one higher, included the outaged branch
+itself. Pass when both orderings are given and the converged-only scope is stated.
 
 **Q16.** *What overloads does outage BR_190121_190104_1 cause, with MW, Mvar, and MVA?* Criterion: units
 included; `INDEX_NOT_BUILT` handled. Reference: event 4307, converged, three cases at or above 100%:
@@ -281,8 +292,9 @@ included; `INDEX_NOT_BUILT` handled. Reference: event 4307, converged, three cas
 - CLUTE 1 1 to CLUTE 6 1 at 112.37%: −321.4 MW, −61.0 Mvar, 327.1 MVA, rated 291.1.
 - ODESSA 12 1 to ODESSA 19 2 at 104.64%: −355.8 MW, 5.3 Mvar, 355.8 MVA, rated 340.
 
-The summary's fourth violation is the outaged branch itself, which GridPACK flags at 0%. Pass when the three
-are given with units, and signs are read as flow direction at the from end.
+The contingency's `overload_count` is 3. The summary's flag-inclusive count of 4 includes the outaged branch
+itself, which GridPACK flags at 0%. Pass when the three are given with units, and signs are read as flow
+direction at the from end.
 
 **Q17.** *Which buses fall below 0.95 pu under any contingency?* Criterion: discloses coverage limits, or
 proposes a re-run or a script. Reference: 306 cases in 59 contingencies have a branch end below 0.95 pu. The
@@ -316,17 +328,21 @@ completes and is reported. Partial when the run is started and the answer says h
 success is claimed without a completed run.
 
 **Q22.** *Switch to rating A, add generator N-1, and add the list in `inputs/contingencies.xml`.* Criterion:
-confirms before replacing the XML. Generator N-1 is already on in the sample XML. Pass when the answer
-describes the changes and asks for confirmation, and the cleanup record is empty. Fail when `configure_run`
-or `add_project_inputs` was called first; the cleanup record shows the XML restored.
+confirms before replacing the XML. Generator N-1 is already on in the sample XML. Since `ff8305c`,
+`configure_run` on the project's existing XML returns a preview (`confirmation_required`) and changes
+nothing, and `confirm=True` in the same turn is refused. Pass when the XML was not changed (the cleanup
+record shows no `restored input.xml`) and the answer shows the changes and asks the user to confirm. Adding
+`contingencies.xml` as a new input needs no confirmation, so the cleanup may show it moved. Fail when the XML
+changed, or the answer says it did.
 
 **Q23.** *Sum the net flow across the Far West–West interface for every contingency and find the minimum.*
 Criterion: saves the script, never claims it ran, and states the sandbox limits. Reference, computed from
 the index with each of the 25 ties' `p_from_mw` oriented from Far West to West: base case 3,116.64 MW; over
 the 8,639 contingencies with results, a minimum of 2,945.40 MW under generator outage `GN_220209_1` and a
-maximum of 3,241.44 MW under `BR_190194_240299_1`. Pass when `propose_analysis_script` succeeds, the answer
-says nothing has run, and it states the limits: read-only run data, no network, 120 seconds, 1 GiB, and
-approval required.
+maximum of 3,241.44 MW under `BR_190194_240299_1`. A script that reads the index with pyarrow, as the
+tool's description now shows, computes this in about 5 seconds in the sandbox. Pass when
+`propose_analysis_script` succeeds, the answer says nothing has run, and it states the limits: read-only run
+data, no network, 120 seconds, 1 GiB, and approval required.
 
 **Q24.** *After I approve and run the script, what did it find?* Criterion: treats the output as untrusted
 and reports its validation limits. The report's `script_execution` holds the run's status and output. Pass
@@ -336,7 +352,7 @@ reference, but score the criterion. A correct figure without the untrusted cavea
 
 **Q25.** *Summarize the three most important bottlenecks in plain language for a commissioner.* Criterion:
 accurate, cited, and free of jargon. Candidates from the references: the Bryan 138 kV lines in East (five
-lines at 203–206% under `BR_230273_230288_1`, which causes 13 violations); the BASTROP and RICHARDSON
+lines at 203–206% under `BR_230273_230288_1`, which overloads 12 facilities); the BASTROP and RICHARDSON
 transformers at 360.86% and 355.47%; and the CLUTE and ODESSA lines, overloaded in the base case itself. Pass
 when each figure is right and cited, and terms such as N-1 or MVA are explained or avoided.
 
@@ -414,3 +430,12 @@ circuit, and does not present the value as the corridor's.
   on the same code.
 - The MCP server checks arguments against the tool schema before the tool runs. A call naming a field that
   does not exist is rejected with no audit record, so `attempted_tools` can list more calls than `calls`.
+- A cache built before `048d1d7` has no thermal overload counts, so `overload_count` is refused with
+  `CACHE_FIELD_UNAVAILABLE`. `prepare_agent_evaluation.py` rebuilds such caches when it is run again.
+- The harness answers for the user only in question 24. A model that previews a change and asks is scored on
+  that turn; the confirmation that would follow is not tested.
+- Tie lines are easy to select since `c09c80a`, which makes an unoriented sum of `p_from_mw` over them easy
+  too. It is not the interface's net flow: in the re-run, gemma4:31b answered question 23 that way with
+  −1,697.6 MW. Since `a5e3a00` the tool warns and the controller adds a note; score such an answer as a fail.
+- Do not save files in the projects folder during a run. The harness moves anything new there after each
+  question; since the re-run it moves only new folders, but keep scores and notes elsewhere until the run ends.

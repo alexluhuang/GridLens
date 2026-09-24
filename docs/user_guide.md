@@ -153,8 +153,10 @@ analysis build take minutes, so the agent starts each one as a background job an
 going after the turn ends, and even after GridLens closes; ask the agent about it in a later turn. When a turn
 ends, the Results and Analysis tabs refresh their run lists, so a run the agent started appears there too.
 
-Before it stops a run or replaces inputs or settings you set up, the agent says what it would change and asks
-you to confirm, unless you asked for it.
+Before it stops a run, replaces an input file, or changes a project's XML, the agent shows you what would
+change and asks you to confirm, even when you asked for the change. GridLens enforces this: the first request
+only returns a preview, such as each setting's old and new value and the XML diff, and the change is made
+only if you reply to confirm. The answer ends with a note while a change is waiting for you.
 
 ### Read the answer
 
@@ -170,14 +172,17 @@ saved result and how many of its rows were shown inline.
 The agent answers with a few general tools whose parameters it fills in, chaining calls as it needs to.
 `rank` sorts objects by one metric and returns each with the value it was sorted by: facilities (branches,
 transformers, or both) by maximum, base-case, or mean loading, thermal margin, overload count, or rating;
-contingencies by their maximum loading, violation count, or solution statistics; and cases, one facility in
+contingencies by their maximum loading, overload count, or solution statistics; and cases, one facility in
 one contingency from the drill-down index, by loading, MW, Mvar, MVA, end voltage, or angle difference.
 `rank_groups` sorts groups such as control areas, voltage classes, or outages by one statistic of a metric:
 the mean, median, minimum, maximum, standard deviation, variance, interquartile range, count, or sum. It
 computes each statistic from every object in the group and reports how many it used. Both take qualifiers
 that select objects first, such as a control area, an outage's area, or loading above 100%, and both can
-compare one run with another. `read_file` reads, groups, or compares any project file, for example to total
-load by area from the RAW case or to list every setting that differs between two runs. For mean loading by
+compare one run with another. One control-area qualifier for each of two areas selects the tie lines between
+them. Overload counts count cases at or above 100% loading; GridPACK's own violation flag, which mostly marks
+the outaged branch itself, is not counted. `read_file` reads, groups, joins, or compares any project file, for
+example to total load or generation by area from the RAW case, or to list every setting that differs between
+two runs. For mean loading by
 voltage group or control area, the answer states the facility scope, the number of facilities used, and
 per-group counts.
 For top-line control-area questions, GridLens reads the endpoint area labels in the ranked result and
