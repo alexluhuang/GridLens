@@ -449,6 +449,42 @@ def test_contingencies_by_outage_area_status_and_solution(agent_context):
     assert service.rank_groups("run_a", object="contingencies", group="voltage_class")["error"]["code"] == "INVALID_GROUP"
 
 
+def test_ties_and_qualifier_values_that_no_object_has(agent_context):
+    """One control_area qualifier per area selects ties; a name no object has is refused, with the names that exist."""
+    service = ToolService(agent_context)
+    ties = [{"column": "control_area", "op": "==", "value": "North"}, {"column": "control_area", "op": "==", "value": "South"}]
+    assert service.rank("run_a", filters=ties)["data"]["total_matching"] == 3
+    tied = service.rank("run_a", filters=[{"column": "tie", "op": "==", "value": True}], fields=["tie", "control_area"])["data"]
+    assert (tied["total_matching"], tied["rows"][0]["tie"], tied["rows"][0]["control_area"]) == (3, "true", ["North", "South"])
+    # An open field's absent value is a real empty answer, so it is noted rather than refused.
+    inside = service.rank("run_a", filters=[{"column": "tie", "op": "==", "value": "false"}])
+    assert inside["data"]["total_matching"] == 0 and any("has tie 'false'" in warning for warning in inside["warnings"])
+    assert [(row["group"], row["value"]) for row in service.rank_groups("run_a", group="tie", statistic="count")["data"]["rows"]] == [("true", 3)]
+    refused = service.rank("run_a", filters=[{"column": "control_area", "op": "==", "value": "North / South"}])
+    assert refused["error"]["code"] == "UNKNOWN_VALUE"
+    assert "North, South" in refused["error"]["remedy"] and "one control_area qualifier per area" in refused["error"]["remedy"]
+    assert service.rank("run_a", filters=[{"column": "control_area", "op": "matches", "value": "Nort"}])["data"]["total_matching"] == 3
+    assert service.rank_groups("run_a", filters=[{"column": "voltage_class", "op": "in", "value": ["230-344 kV", "999 kV"]}])["error"]["code"] == "UNKNOWN_VALUE"
+    named = service.rank("run_a", filters=[{"column": "from_bus", "op": "matches", "value": "ALPHA"}])
+    assert named["error"]["code"] == "INVALID_FILTER" and "bus_name" in named["error"]["remedy"]
+    assert service.rank("run_a", filters=[{"column": "from_bus", "op": "==", "value": "1"}])["data"]["total_matching"] == 3
+
+
+def test_contingency_and_case_qualifier_values_that_no_object_has(agent_context):
+    """The value check applies to contingencies and to cases, whose qualifiers name facilities and outages."""
+    pytest.importorskip("pyarrow")
+    _rich_run(agent_context)
+    service = ToolService(agent_context)
+    missing = service.rank("run_a", object="contingencies", filters=[{"column": "status_code", "op": "==", "value": "NO_SLACK"}])
+    assert missing["data"]["total_matching"] == 0 and any("has status_code 'NO_SLACK'" in warning for warning in missing["warnings"])
+    assert service.rank("run_a", object="contingencies", filters=[{"column": "outage_area", "op": "==", "value": "Nowhere"}])["error"]["code"] == "UNKNOWN_VALUE"
+    assert service.rank("run_a", object="cases", filters=[{"column": "control_area", "op": "==", "value": "Nowhere"}])["error"]["code"] == "UNKNOWN_VALUE"
+    ties = [{"column": "control_area", "op": "==", "value": "North"}, {"column": "control_area", "op": "==", "value": "South"}]
+    across = service.rank("run_a", object="cases", metric="angle_difference_deg", magnitude=1, filters=ties, fields=["tie"])["data"]
+    assert (across["rows"][0]["value"], across["rows"][0]["tie"], across["total_matching"]) == (12, "true", 4)
+    assert service.rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": "BR_1_2_2"}])["error"]["code"] == "INVALID_FILTER"
+
+
 def test_compare_mode_ranks_changes_and_finds_new_and_resolved_overloads(agent_context):
     """compare_run_id ranks the change per facility and qualifies on both runs' values."""
     second = agent_context.run("run_b")

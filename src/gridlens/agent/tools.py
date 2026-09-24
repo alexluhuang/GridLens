@@ -33,7 +33,7 @@ from gridlens.agent.gridlens_tools import GRIDLENS_DESTRUCTIVE_TOOL_NAMES, GRIDL
 from gridlens.agent.objects import (
     BASE_CASE, CASE_INDEX_COLUMNS, CONTINGENCY_ATTRIBUTES, FACILITY_ATTRIBUTES, GROUP_DEFINITIONS, OBJECT_KINDS,
     ObjectField, ObjectFilter, ObjectGroup, ObjectKind, ObjectMetric, Order,
-    case_record, change_units, check_conditions, check_fields, check_group, contingency_record, facility_fields,
+    case_record, change_units, check_conditions, check_fields, check_group, check_values, contingency_record, facility_fields,
     facility_label, facility_record, group_labels, metric_units, qualifies, reported, resolve_metric, shown,
 )
 from gridlens.agent.policy import AgentError
@@ -405,6 +405,7 @@ class AnalysisTools(ToolBase):
         if family == "facility":
             records, counts, missing = self._facilities(run, kind)
             _require_metrics(missing, used, run)
+            check_values(records, conditions, "facility", self.warnings)
             if compare_run_id:
                 records, compared = self._compared(run, records, kind, metric, compare_run_id, compare_project)
                 counts.update(compared)
@@ -412,6 +413,7 @@ class AnalysisTools(ToolBase):
         else:
             records, missing = self._contingencies(run)
             _require_metrics(missing, used, run)
+            check_values(records, conditions, "contingency", self.warnings)
             counts = {"recorded_contingencies": len(records)}
             # Ranking a failed solution as severe would mislead, so only converged contingencies count unless asked.
             if not ({column for column, _, _ in conditions} | {group}) & {"converged", "status_code"}:
@@ -459,6 +461,8 @@ class AnalysisTools(ToolBase):
             del self.warnings[before:]
         facility_conditions = [condition for condition in conditions if condition[0] in FACILITY_ATTRIBUTES]
         contingency_conditions = [condition for condition in conditions if condition[0] in CONTINGENCY_ATTRIBUTES]
+        check_values([{"fields": facility_fields(key, attributes)} for key, attributes in facilities.items()], facility_conditions, "facility", self.warnings)
+        check_values([BASE_CASE, *contingencies.values()], contingency_conditions, "contingency", self.warnings)
         keys = events = None
         if facility_conditions:
             keys = {case_key(*key) for key, attributes in facilities.items() if qualifies({"fields": facility_fields(key, attributes)}, facility_conditions)}
@@ -531,7 +535,7 @@ class AnalysisTools(ToolBase):
         """Sort objects by one metric and return the first `magnitude` (0 returns all), each with the value it was sorted by; total_matching counts every object that qualified. Facilities and contingencies with no known value, such as a failed contingency's loading, follow the ranked ones with value null.
 
         object: branches (non-transformer), transformers, or both are facilities at or above 50 kV; their metrics are max_utilization_pct (congestion), base_utilization_pct, mean_utilization_pct, min_utilization_pct, thermal_margin_pct_points, overload_count (cases at or above 100%), contingency_count, rating_mva, and nominal_kv. contingencies are outage cases, converged ones only unless a qualifier names converged or status_code; their metrics are max_loading_pct, overload_count (monitored facilities at or above 100%), monitored_facility_count, iterations, max_p_mismatch, and max_q_mismatch. cases are one facility in one contingency, from the drill-down index; their metrics are loading_percent, mva_from, p_from_mw, q_from_mvar, rate_mva, v_from_pu, v_to_pu, min_voltage_pu, ang_from_deg, ang_to_deg, and angle_difference_deg, and a case also has its facility's and its contingency's fields; its viol field is GridPACK's own flag, which mostly marks the outaged branch itself, not an overload.
-        filters keep objects meeting every qualifier, e.g. [{"column": "control_area", "op": "==", "value": "Coast"}, {"column": "nominal_kv", "op": ">=", "value": 345}]; outage_area is where a contingency's outaged element is. fields adds attributes to each row. compare_run_id ranks facilities by their change from this run to another (value = other minus this) and allows compare_value and change as qualifiers. For counts, means, or any statistic use rank_groups, never these rows.
+        filters keep objects meeting every qualifier, e.g. [{"column": "control_area", "op": "==", "value": "Coast"}, {"column": "nominal_kv", "op": ">=", "value": 345}]; outage_area is where a contingency's outaged element is. control_area holds both ends' areas, the from end's first, so one control_area qualifier per area selects the tie lines between two areas, e.g. [{"column": "control_area", "op": "==", "value": "Far West"}, {"column": "control_area", "op": "==", "value": "West"}], and tie == "true" with one control_area selects an area's ties; the same qualifiers select cases, for flows or angles across an interface. An area name no object has is refused with the names that exist. fields adds attributes to each row. compare_run_id ranks facilities by their change from this run to another (value = other minus this) and allows compare_value and change as qualifiers. For counts, means, or any statistic use rank_groups, never these rows.
         """
         descending = _descending(order)
         family, metric = resolve_metric(object, metric, self.warnings)
@@ -562,7 +566,7 @@ class AnalysisTools(ToolBase):
     def rank_groups(self, run_id: str, group: ObjectGroup = "voltage_class", object: ObjectKind = "branches", order: Order = "descending", metric: ObjectMetric = "max_utilization_pct", statistic: GroupStatistic = "mean", magnitude: int = 10, filters: list[ObjectFilter] | None = None, compare_run_id: str = "", compare_project: str = "", project: str = "") -> dict:
         """Group every qualifying object, compute one statistic of one metric over each group's objects, and return the first `magnitude` groups (0 returns all), each with that statistic and the count of objects it used.
 
-        group for facilities: control_area (a facility joining two areas counts in both), voltage_class (the voltage groups or categories of the Branch Analysis tab, such as 100-229 kV; transformers group by step direction), nominal_kv (each exact base voltage, such as 138 kV), branch_type, or binding_contingency (the case that set each facility's maximum loading). For contingencies: type, status_code, converged, or outage_area. For cases: contingency, facility, or any facility or contingency group. statistic is mean, median, min, max, std, var (population), iqr, count (every qualifying object, whatever its metric value), or sum (only for additive quantities). metric is a per-object value as in rank, so statistic='mean' of metric='max_utilization_pct' is the mean maximum loading the Branch Analysis tab shows, and of mean_utilization_pct or min_utilization_pct it is the mean mean or mean min. object, metric, filters, and compare_run_id are as in rank; filters remove objects before grouping.
+        group for facilities: control_area (a facility joining two areas counts in both), tie (tie lines against facilities inside one area), voltage_class (the voltage groups or categories of the Branch Analysis tab, such as 100-229 kV; transformers group by step direction), nominal_kv (each exact base voltage, such as 138 kV), branch_type, or binding_contingency (the case that set each facility's maximum loading). For contingencies: type, status_code, converged, or outage_area. For cases: contingency, facility, or any facility or contingency group. statistic is mean, median, min, max, std, var (population), iqr, count (every qualifying object, whatever its metric value), or sum (only for additive quantities). metric is a per-object value as in rank, so statistic='mean' of metric='max_utilization_pct' is the mean maximum loading the Branch Analysis tab shows, and of mean_utilization_pct or min_utilization_pct it is the mean mean or mean min. object, metric, filters, and compare_run_id are as in rank; filters remove objects before grouping.
         """
         descending = _descending(order)
         if statistic not in GROUP_STATISTICS:

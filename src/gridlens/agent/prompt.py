@@ -68,6 +68,9 @@ Analysis with rank and rank_groups
   merge parallel circuits.
 - Voltages and angles in cases are recorded only at the ends of monitored branches; state that coverage.
   Angle differences alone do not show stability.
+- Tie lines: control_area lists both ends' areas, so one control_area qualifier per area selects the
+  ties between two areas, and tie == 'true' with one control_area selects all of an area's ties. The same
+  qualifiers select cases, for flows or angles across an interface; object='cases' ranks them directly.
 - compare_run_id compares two runs facility by facility; report the change in percentage points and the
   facilities found in only one run. Qualify on compare_value to find overloads that are new or resolved.
 - If a cache or index is missing, say so, and build it with run_analysis when the user wants results.

@@ -31,11 +31,11 @@ ObjectMetric = Literal[
     "ang_from_deg", "ang_to_deg", "angle_difference_deg",
 ]
 ObjectGroup = Literal[
-    "control_area", "voltage_class", "nominal_kv", "branch_type", "binding_contingency",
+    "control_area", "voltage_class", "nominal_kv", "branch_type", "binding_contingency", "tie",
     "contingency", "facility", "type", "status_code", "converged", "outage_area",
 ]
 ObjectField = Literal[
-    "control_area", "voltage_class", "nominal_kv", "branch_type", "binding_contingency", "bus", "bus_name",
+    "control_area", "tie", "voltage_class", "nominal_kv", "branch_type", "binding_contingency", "bus", "bus_name",
     "from_bus", "to_bus", "line_id", "section", "max_utilization_pct", "base_utilization_pct",
     "mean_utilization_pct", "min_utilization_pct", "thermal_margin_pct_points", "overload_count",
     "contingency_count", "rating_mva", "compare_value", "change", "rating_changed",
@@ -48,7 +48,7 @@ Order = Literal["descending", "ascending"]
 
 
 class ObjectFilter(TypedDict):
-    """One qualifier. An object is kept only when every qualifier holds; control_area, outage_area, bus, and bus_name match either end."""
+    """One qualifier. An object is kept only when every qualifier holds; control_area, outage_area, bus, and bus_name match either end, so one control_area qualifier per area selects the ties between two areas."""
 
     column: ObjectField
     op: FilterOperator
@@ -78,11 +78,12 @@ CONTINGENCY_METRICS = {
     "max_p_mismatch": ("as reported", "largest real-power mismatch left at the solution, in GridPACK's units"),
     "max_q_mismatch": ("as reported", "largest reactive-power mismatch left at the solution, in GridPACK's units"),
 }
-FACILITY_ATTRIBUTES = ("control_area", "voltage_class", "nominal_kv", "branch_type", "bus", "bus_name", "from_bus", "to_bus", "line_id", "section")
+FACILITY_ATTRIBUTES = ("control_area", "tie", "voltage_class", "nominal_kv", "branch_type", "bus", "bus_name", "from_bus", "to_bus", "line_id", "section")
 CONTINGENCY_ATTRIBUTES = ("event_idx", "contingency", "type", "converged", "status_code", "outage_area")
 COMPARE_FIELDS = ("compare_value", "change", "rating_changed")
 GROUP_DEFINITIONS = {
     "control_area": "the control area of each end; an object joining two areas counts in both",
+    "tie": "whether the facility joins two control areas: true for tie lines, false for facilities inside one area",
     "voltage_class": "the GridLens voltage class of the higher end; transformers group as step-up, step-down, or same-voltage",
     "nominal_kv": "the higher end's base voltage",
     "branch_type": "the RAW branch type",
@@ -98,7 +99,7 @@ FAMILIES = {
     "facility": {
         "metrics": tuple(FACILITY_METRICS), "default": "max_utilization_pct",
         "fields": (*FACILITY_ATTRIBUTES, "binding_contingency", *FACILITY_METRICS),
-        "groups": ("control_area", "voltage_class", "nominal_kv", "branch_type", "binding_contingency"),
+        "groups": ("control_area", "tie", "voltage_class", "nominal_kv", "branch_type", "binding_contingency"),
     },
     "contingency": {
         "metrics": tuple(CONTINGENCY_METRICS), "default": "max_loading_pct",
@@ -108,9 +109,17 @@ FAMILIES = {
     "case": {
         "metrics": tuple(CASE_METRICS), "default": "loading_percent",
         "fields": (*FACILITY_ATTRIBUTES, *CONTINGENCY_ATTRIBUTES, "viol", *CASE_METRICS),
-        "groups": ("contingency", "facility", "control_area", "voltage_class", "nominal_kv", "branch_type", "type", "status_code", "converged", "outage_area"),
+        "groups": ("contingency", "facility", "control_area", "tie", "voltage_class", "nominal_kv", "branch_type", "type", "status_code", "converged", "outage_area"),
     },
 }
+# Fields that name things the run's objects have, so a value no object has is a mistake and is refused.
+CLOSED_FIELDS = ("control_area", "outage_area", "voltage_class", "branch_type")
+# Fields whose value may simply not occur in a run, such as a status no contingency ended with, so a value
+# no object has is noted rather than refused.
+OPEN_FIELDS = ("tie", "type", "status_code", "converged", "binding_contingency")
+# Fields that hold numbers, which a name can never match.
+NUMBER_FIELDS = {"from_bus": "a bus number", "to_bus": "a bus number", "bus": "bus numbers", "event_idx": "an event number"}
+NUMBER_HINTS = {"event_idx": "To name an outage, qualify contingency instead.", "bus": "To find a bus by name, qualify bus_name with op 'matches' instead."}
 # Case qualifiers the index filters numerically; the others select events or facilities first.
 CASE_INDEX_COLUMNS = (*CASE_METRICS, "viol")
 NUMERIC_OPERATORS = ("==", "!=", "<", "<=", ">", ">=", "in")
@@ -168,6 +177,9 @@ def check_conditions(kind: str, filters: list | None, *, compare: bool = False) 
             raise AgentError("INVALID_FILTER", "The 'in' operator needs a list value.")
         if family == "case" and item["column"] in CASE_INDEX_COLUMNS and item["op"] not in NUMERIC_OPERATORS:
             raise AgentError("INVALID_FILTER", f"{item['column']} is a number; qualify it with one of {', '.join(NUMERIC_OPERATORS)}.")
+        if item["column"] in NUMBER_FIELDS and any(_number(value) is None for value in (item["value"] if isinstance(item["value"], list) else [item["value"]])):
+            hint = NUMBER_HINTS.get(item["column"], NUMBER_HINTS["bus"])
+            raise AgentError("INVALID_FILTER", f"{item['column']} holds {NUMBER_FIELDS[item['column']]}, so {str(item['value'])[:100]!r} can never match it. {hint}")
         checked.append((item["column"], item["op"], item["value"]))
     return checked
 
@@ -202,7 +214,7 @@ def facility_record(row: dict) -> dict:
     if not row["utilization_known"]:
         values.update({name: None for name, (_, _, loading) in FACILITY_METRICS.items() if loading})
     fields = {
-        "control_area": list(row["control_areas"]), "voltage_class": row["voltage_group"], "nominal_kv": nominal,
+        "control_area": list(row["control_areas"]), "tie": is_tie(row["control_areas"]), "voltage_class": row["voltage_group"], "nominal_kv": nominal,
         "branch_type": row.get("raw_branch_type") or NONTRANSFORMER_BRANCH,
         "binding_contingency": row.get("max_contingency_label") or "unknown",
         "bus": [from_bus, to_bus], "bus_name": [row.get("from_bus_name", ""), row.get("to_bus_name", "")],
@@ -251,8 +263,9 @@ def facility_label(key: tuple, attributes: dict) -> str:
 
 def facility_fields(key: tuple, attributes: dict) -> dict:
     """Return the qualifier fields of one facility from its `facility_attributes` entry and full key."""
+    areas = list(attributes.get("control_area") or ["unknown"])
     return {
-        "control_area": list(attributes.get("control_area") or ["unknown"]), "voltage_class": attributes.get("voltage_class", "unknown"),
+        "control_area": areas, "tie": is_tie(areas), "voltage_class": attributes.get("voltage_class", "unknown"),
         "nominal_kv": attributes.get("nominal_kv"), "branch_type": attributes.get("branch_type", "unknown"),
         "bus": [key[0], key[1]], "bus_name": list(attributes.get("bus_name") or ["", ""]),
         "from_bus": key[0], "to_bus": key[1], "line_id": key[2], "section": key[3],
@@ -295,6 +308,40 @@ def outage_areas(name: str, bus_areas: dict) -> list[str]:
     buses = [int(number) for number in match.groups() if number]
     areas = list(dict.fromkeys(bus_areas[bus] for bus in buses if bus in bus_areas))
     return areas or ["unknown"]
+
+
+def is_tie(areas) -> str:
+    """Return "true" when a facility's ends lie in two known control areas, else "false"."""
+    return "true" if len({area for area in areas if area and area != "unknown"}) > 1 else "false"
+
+
+def check_values(records: list[dict], conditions: list[tuple[str, str, object]], noun: str, warnings: list[str]) -> None:
+    """Refuse a qualifier naming a value of a closed field that no object has, and note one on an open field.
+
+    A qualifier such as control_area == "Far West / West" matches nothing, and an empty answer would read as
+    "none of them"; naming the values that exist lets the caller correct it. Values are compared as the
+    qualifier would compare them, so "matches" accepts names cut to twelve characters.
+    """
+    for column, op, value in conditions:
+        if op not in ("==", "in", "matches") or column not in CLOSED_FIELDS + OPEN_FIELDS:
+            continue
+        present = sorted({str(item) for record in records for item in _as_list(record["fields"].get(column)) if item not in (None, "")})
+        wanted = value if op == "in" else [value]
+        test = "matches" if op == "matches" else "=="
+        missing = [item for item in wanted if not any(cell_passes(existing, test, item) for existing in present)]
+        if not missing:
+            continue
+        shown = ", ".join(present[:40]) + (f", and {len(present) - 40} more" if len(present) > 40 else "")
+        names = ", ".join(repr(str(item)) for item in missing)
+        if column in CLOSED_FIELDS:
+            hint = " A facility joining two areas has both, so give one control_area qualifier per area to select the ties between them. op 'matches' accepts names PSS/E cut to 12 characters." if column in ("control_area", "outage_area") else ""
+            raise AgentError("UNKNOWN_VALUE", f"No {noun} in this run has {column} {names}. Its {column} values are: {shown}.{hint}")
+        warnings.append(f"No {noun} in this run has {column} {names}, so none can meet that qualifier. Its {column} values are: {shown}.")
+
+
+def _as_list(value: object) -> list:
+    """Return a field value as a list, so one-ended and two-ended fields are read alike."""
+    return value if isinstance(value, list) else [value]
 
 
 def qualifies(record: dict, conditions: list[tuple[str, str, object]]) -> bool:
