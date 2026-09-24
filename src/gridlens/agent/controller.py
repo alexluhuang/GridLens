@@ -205,6 +205,7 @@ class AgentController:
             final = qualify_capacity_answer(final, prompt)
             final = disclose_generated_output(final, sources[prior_calls:])
             final = disclose_pending_changes(final, sources[prior_calls:])
+            final = disclose_mixed_flow_directions(final, sources[prior_calls:])
             final = verified_group_mean_answer(final, prompt, sources[prior_calls:], self.context.run_ids)
             final = verified_top_line_areas(final, prompt, sources[prior_calls:], self.context.run_ids)
             previous_answer = next((item["text"] for item in reversed(self.history[:-1]) if item["role"] == "assistant"), "")
@@ -498,6 +499,14 @@ def audited_row_scope_answer(answer: str, question: str, sources: list[dict]) ->
             lines.append(f"{data.get('inline_rows', 0):,} rows were shown inline; the complete result is in {data.get('rows_file') or data['result_file']}.")
     lines.append("GridLens applies no maximum row count: limit=0, or magnitude=0 for rank and rank_groups, returns every matching row, and offset pages the other tools.")
     return "\n".join(lines)
+
+
+def disclose_mixed_flow_directions(answer: str, turn_sources: list[dict]) -> str:
+    """Return an answer with a note when this turn totaled or averaged branch flows measured in different directions."""
+    mixed = any(any("mixes directions" in warning for warning in (row.get("result") or {}).get("warnings") or []) for row in turn_sources)
+    if not mixed:
+        return answer
+    return answer.rstrip() + "\n\nGridLens note: A total or average of branch MW or Mvar here adds flows measured from each branch's own from end, in different directions, so it is not the net flow across an interface. That needs each branch oriented from one area, for example in a reviewed script."
 
 
 def disclose_pending_changes(answer: str, turn_sources: list[dict]) -> str:

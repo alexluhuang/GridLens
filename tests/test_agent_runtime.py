@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_pending_changes, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
+from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_mixed_flow_directions, disclose_pending_changes, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
 from gridlens.agent.process import mcp_command, minimal_environment
@@ -144,6 +144,13 @@ def test_uncited_model_answer_reports_only_current_successful_sources():
     assert disclose_truncated_results("No data", []) == "No data"
     assert "Build / refresh analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
     assert qualify_capacity_answer("20 percentage points", "How much extra capacity?").endswith("requires a separate power-flow study.")
+
+
+def test_answers_that_total_signed_branch_flows_are_flagged():
+    """A sum of MW across branches measured from different ends is named as not a net flow."""
+    mixed = [{"call_id": "T2", "tool": "rank_groups", "outcome": "ok", "result": {"warnings": ["p_from_mw is signed at each branch's from end, which the RAW case sets, not the flow, so a sum across branches mixes directions and is not the net flow between areas."]}}]
+    assert "not the net flow across an interface" in disclose_mixed_flow_directions("The minimum net flow is -1,697.6 MW [T2].", mixed)
+    assert disclose_mixed_flow_directions("Answer [T2].", [{"call_id": "T2", "tool": "rank", "outcome": "ok", "result": {"warnings": []}}]) == "Answer [T2]."
 
 
 def test_answers_with_a_previewed_change_say_nothing_was_changed():

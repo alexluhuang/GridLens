@@ -75,6 +75,9 @@ Analysis with rank and rank_groups
 - Tie lines: control_area lists both ends' areas, so one control_area qualifier per area selects the
   ties between two areas, and tie == 'true' with one control_area selects all of an area's ties. The same
   qualifiers select cases, for flows or angles across an interface; object='cases' ranks them directly.
+  p_from_mw and q_from_mvar are signed at each branch's from end, which the RAW case sets, so their sum
+  across ties is not an interface's net flow: orient each tie from one area, the first in its control_area,
+  in a reviewed script.
 - compare_run_id compares two runs facility by facility; report the change in percentage points and the
   facilities found in only one run. Qualify on compare_value to find overloads that are new or resolved.
 - If a cache or index is missing, say so, and build it with run_analysis when the user wants results.

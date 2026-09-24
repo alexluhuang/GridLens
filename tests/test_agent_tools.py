@@ -483,6 +483,11 @@ def test_contingency_and_case_qualifier_values_that_no_object_has(agent_context)
     across = service.rank("run_a", object="cases", metric="angle_difference_deg", magnitude=1, filters=ties, fields=["tie"])["data"]
     assert (across["rows"][0]["value"], across["rows"][0]["tie"], across["total_matching"]) == (12, "true", 4)
     assert service.rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": "BR_1_2_2"}])["error"]["code"] == "INVALID_FILTER"
+    # MW signed at each branch's from end, summed across branches, is flagged: it is not an interface's net flow.
+    summed = service.rank_groups("run_a", object="cases", group="contingency", metric="p_from_mw", statistic="sum", filters=ties)
+    assert any("mixes directions" in warning and "The 5 branches here start 5 in North" in warning for warning in summed["warnings"])
+    per_branch = service.rank_groups("run_a", object="cases", group="facility", metric="p_from_mw", statistic="max", filters=ties)
+    assert not any("mixes directions" in warning for warning in per_branch["warnings"])
 
 
 def test_compare_mode_ranks_changes_and_finds_new_and_resolved_overloads(agent_context):

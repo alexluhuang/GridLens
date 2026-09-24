@@ -21,6 +21,7 @@ over every object in scope. The vocabulary those parameters take is in `gridlens
 """
 from __future__ import annotations
 
+from collections import Counter
 import csv
 import math
 from pathlib import Path
@@ -78,6 +79,8 @@ def _number(value: object) -> float | None:
         return None
 
 
+# Case flows signed at each branch's from end, which the RAW case sets, so a statistic across branches mixes directions.
+SIGNED_FLOWS = ("p_from_mw", "q_from_mvar")
 # Contingency metrics from the compact summary, which a contingency whose solution failed has no rows for.
 SUMMARY_METRICS = ("max_loading_pct", "overload_count", "monitored_facility_count")
 
@@ -527,6 +530,13 @@ class AnalysisTools(ToolBase):
             labels = {case_key(*key): [facility_label(key, attributes)] if group == "facility" else group_labels(facility_fields(key, attributes), group) for key, attributes in scope["facilities"].items()}
         accumulators, used, _ = self._index(run, group_cases, metric=metric, statistic=statistic, by=by, labels=labels, events=scope["events"], keys=scope["keys"], conditions=scope["index_conditions"])
         self.warnings.append("Cases are every recorded row of the drill-down index, including the base case and non-converged contingencies. Voltages and angles are recorded only at the ends of monitored branches.")
+        if metric in SIGNED_FLOWS and group != "facility" and statistic != "count":
+            starts = Counter(attributes["end_areas"][0] for key, attributes in scope["facilities"].items() if scope["keys"] is None or case_key(*key) in scope["keys"])
+            split = ", ".join(f"{count:,} in {area}" for area, count in starts.most_common())
+            self.warnings.append(
+                f"{metric} is signed at each branch's from end, which the RAW case sets, not the flow, so a {statistic} across branches mixes directions and is not the net flow between areas. "
+                f"The {sum(starts.values()):,} branches here start {split}. An interface's net flow needs each branch oriented from one area, as a reviewed script can do."
+            )
         groups = [(label, accumulator.result(), accumulator.count) for label, accumulator in accumulators.items() if accumulator.count]
         return groups, {"objects_used": used, "recorded_cases": self._json(run, "reports/event_index/manifest.json").get("rows")}
 
