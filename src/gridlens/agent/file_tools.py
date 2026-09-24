@@ -24,7 +24,7 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Iterable, Iterator, Literal, get_args
+from typing import Iterable, Iterator, Literal, NotRequired, TypedDict, get_args
 import xml.etree.ElementTree as ET
 
 from gridlens.agent.policy import AgentError
@@ -92,6 +92,49 @@ def _number(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+class JoinSpec(TypedDict):
+    """Columns to add to each row from the first row of another table whose right_on value equals the row's left_on value."""
+
+    table: NotRequired[str]
+    path: NotRequired[str]
+    left_on: str
+    right_on: NotRequired[str]
+    columns: list[str]
+
+
+def _join_key(value: object) -> str:
+    """Normalize a key so a RAW bus number, a CSV cell, and a Parquet integer compare alike, and text ignores case and spacing."""
+    number = _number(value)
+    if number is not None:
+        return str(int(number)) if number.is_integer() else repr(number)
+    return " ".join(str(value if value is not None else "").split()).casefold()
+
+
+class _Joined:
+    """Add joined columns to rows as they stream by, and count the rows each join found no match for."""
+
+    def __init__(self, joins: list[dict]) -> None:
+        self.joins = joins
+        self.unmatched = [0] * len(joins)
+
+    def rows(self, rows: Iterable[dict]) -> Iterator[dict]:
+        for row in rows:
+            row = dict(row)
+            for index, join in enumerate(self.joins):
+                match = join["lookup"].get(_join_key(row.get(join["left_on"])))
+                if match is None:
+                    self.unmatched[index] += 1
+                for name, column in join["added"].items():
+                    row[name] = match.get(column) if match is not None else None
+            yield row
+
+    def warnings(self) -> list[str]:
+        return [
+            f"{count:,} of the rows read had no {join['label']} row with {join['right_on']} equal to their {join['left_on']}, so their {', '.join(join['added'])} {'is' if len(join['added']) == 1 else 'are'} blank."
+            for join, count in zip(self.joins, self.unmatched) if count
+        ]
 
 
 def _sort_key(value: object) -> tuple:
@@ -478,11 +521,59 @@ class FileTools(ToolBase):
             rows.append({"path": str(relative), "absolute_path": str(path), "size_bytes": info.st_size, "modified": modified, "kind": file_kind(path)})
         return {"rows": rows, "root": str(root)}
 
+    def _joins(self, file: Path, kind: str, specs: list, project: str, available: list[str]) -> list[dict]:
+        """Load the tables read_file's join names, keyed for lookup, and name the columns each adds."""
+        if not isinstance(specs, list) or not all(isinstance(spec, dict) for spec in specs):
+            raise AgentError("INVALID_JOIN", "Give join as a list such as [{'table': 'bus', 'left_on': 'I', 'columns': ['AREA']}].")
+        names = list(available)
+        joins = []
+        for spec in specs:
+            left_on, wanted = spec.get("left_on"), spec.get("columns")
+            if not isinstance(left_on, str) or not isinstance(wanted, list) or not wanted or not all(isinstance(name, str) for name in wanted):
+                raise AgentError("INVALID_JOIN", "Each join needs left_on, the key column of the rows read, and columns, a list of the joined table's columns to add.")
+            if left_on not in names:
+                raise AgentError("UNKNOWN_COLUMN", f"No column '{left_on[:200]}' to join on. Columns: {', '.join(names[:200])}.")
+            other = self._file(spec["path"], project) if spec.get("path") else file
+            other_kind = file_kind(other) if spec.get("path") else kind
+            other_table = str(spec.get("table") or "")
+            if other_kind == "raw_case" and not other_table:
+                raise AgentError("RAW_SECTION_REQUIRED", "Name the RAW section to join from in the join's table, such as 'bus'.")
+            if other_kind in ("json", "xml", "text", "binary"):
+                raise AgentError("INVALID_JOIN", "A join reads a table: a CSV, Parquet, or GridPACK table file, or a RAW case section.")
+            right_on = str(spec.get("right_on") or left_on)
+            lookup: dict[str, dict] = {}
+            duplicates = 0
+            with file_rows(other, other_kind, other_table) as (columns, rows):
+                for name in [right_on, *wanted]:
+                    if name not in columns:
+                        raise AgentError("UNKNOWN_COLUMN", f"The joined table has no column '{name[:200]}'. Its columns: {', '.join(columns[:200])}.")
+                for count, row in enumerate(rows, 1):
+                    if count > MAX_ROWS_IN_MEMORY:
+                        raise AgentError("JOIN_TOO_LARGE", f"The joined table has more than {MAX_ROWS_IN_MEMORY:,} rows; join a smaller table, or use a script.")
+                    key = _join_key(row.get(right_on))
+                    if key in lookup:
+                        duplicates += 1
+                        continue
+                    lookup[key] = {name: row.get(name) for name in wanted}
+            # A RAW section is named as find_section names it, such as BUS for table='bus'.
+            label = re.sub(r"\s+DATA$", "", other_table.strip().upper()) if other_kind == "raw_case" else (other_table or other.stem)
+            added = {}
+            for name in wanted:
+                shown = name if name not in names and name not in added else f"{label}.{name}"
+                if shown in names or shown in added:
+                    raise AgentError("INVALID_JOIN", f"Column '{shown}' is already in the rows; join it once.")
+                added[shown] = name
+            names.extend(added)
+            if duplicates:
+                self.warnings.append(f"{duplicates:,} {label} rows repeat a {right_on} value already seen; each row read took the first.")
+            joins.append({"lookup": lookup, "left_on": left_on, "right_on": right_on, "added": added, "label": label, "file": str(other), "table": other_table})
+        return joins
+
     @tool
-    def read_file(self, path: str, project: str = "", table: str = "", columns: list[str] | None = None, filters: list[dict] | None = None, sort_by: str = "", descending: bool = False, group_by: str = "", statistic: GroupStatistic = "count", value_column: str = "", compare_path: str = "", as_text: bool = False, offset: int = 0, limit: int = 100) -> dict:
+    def read_file(self, path: str, project: str = "", table: str = "", columns: list[str] | None = None, filters: list[dict] | None = None, sort_by: str = "", descending: bool = False, group_by: str = "", statistic: GroupStatistic = "count", value_column: str = "", compare_path: str = "", as_text: bool = False, join: list[JoinSpec] | None = None, offset: int = 0, limit: int = 100) -> dict:
         """Read any project file as rows. A table (CSV, GridPACK text table, Parquet, or the RAW case section named in table) gives its records; a RAW case without table lists its sections; JSON and XML give one row per field (path, value); other text gives numbered lines (line, text), as as_text=True does for any file. Results state the file's kind, columns, and total row count.
 
-        filters keep rows meeting every condition, such as {"column": "loading_percent", "op": ">", "value": 100}; op "matches" finds PSS/E names and IDs, even names cut short such as BERNA~1, and adds match_kind. group_by summarizes every matching row per value of that column with statistic (count, sum, mean, median, min, max, std, var, iqr) of value_column, such as the sum of PL by AREA in the RAW load section. compare_path lists only the fields where two JSON or XML files differ, such as two runs' manifest.json or input.xml. limit=0 returns every row.
+        filters keep rows meeting every condition, such as {"column": "loading_percent", "op": ">", "value": 100}; op "matches" finds PSS/E names and IDs, even names cut short such as BERNA~1, and adds match_kind. join adds columns from another table to each row, from the first row whose right_on (default left_on) equals the row's left_on: a RAW section of the same file, or another file named in path. Joins apply in order, before filters and grouping, so generators get their bus's area with table='generator', join=[{"table": "bus", "left_on": "I", "columns": ["AREA"]}], group_by='AREA', statistic='sum', value_column='PG', filters=[{"column": "STAT", "op": "==", "value": 1}]. group_by summarizes every matching row per value of that column with statistic (count, sum, mean, median, min, max, std, var, iqr) of value_column, such as the sum of PL by AREA in the RAW load section. compare_path lists only the fields where two JSON or XML files differ, such as two runs' manifest.json or input.xml. limit=0 returns every row.
         """
         file = self._file(path, project)
         kind = "text" if as_text else file_kind(file)
@@ -490,6 +581,8 @@ class FileTools(ToolBase):
         if _generated_output(file):
             self.warnings.append(GENERATED_OUTPUT_WARNING)
         if compare_path:
+            if join:
+                raise AgentError("INVALID_JOIN", "compare_path compares two documents field by field; it takes no join.")
             return self._differences(file, kind, compare_path, project, filters, info)
         if kind == "binary":
             raise AgentError("NOT_READABLE", "This file is binary. list_files shows its size; read_file reads text, tables, RAW cases, JSON, and XML.")
@@ -498,13 +591,21 @@ class FileTools(ToolBase):
             listing = [{"section": section.name, "record_count": len(section.rows), "columns": section.columns} for section in sections]
             return {"rows": listing, **info, "header": header, "next_step": "Name a section in table, such as table='bus', to read its records."}
         with file_rows(file, kind, table) as (available, rows):
+            joined = None
+            if join:
+                joins = self._joins(file, kind, join, project, available)
+                joined = _Joined(joins)
+                rows, available = joined.rows(rows), [*available, *(name for spec in joins for name in spec["added"])]
+                info["joins"] = [{"file": spec["file"], "table": spec["table"], "left_on": spec["left_on"], "right_on": spec["right_on"], "added": list(spec["added"]), "keys": len(spec["lookup"])} for spec in joins]
             checked = _check_filters(filters or [], available)
             wanted = list(columns or [])
             for name in [*wanted, *([value_column] if value_column else [])]:
                 if name not in available:
                     raise AgentError("UNKNOWN_COLUMN", f"No column '{str(name)[:200]}'. Columns: {', '.join(available[:200])}.")
             if group_by:
-                return {**info, "table": table, **self._summary(rows, checked, available, group_by, statistic, value_column, sort_by, descending)}
+                summary = self._summary(rows, checked, available, group_by, statistic, value_column, sort_by, descending)
+                self.warnings.extend(joined.warnings() if joined else [])
+                return {**info, "table": table, **summary}
             if sort_by and sort_by not in available:
                 raise AgentError("UNKNOWN_COLUMN", f"No column '{sort_by[:200]}' to sort by. Columns: {', '.join(available[:200])}.")
             match = next(((column, value) for column, operator, value in checked if operator == "matches"), None)
@@ -515,6 +616,7 @@ class FileTools(ToolBase):
                 page, total = _guarded(islice(rows, offset, offset + limit if limit else None)), _row_count(file, kind)
             else:
                 page, total = select_rows(rows, checked, sort_by, descending, offset, limit)
+        self.warnings.extend(joined.warnings() if joined else [])
         if wanted:
             page = [{name: row.get(name) for name in wanted} | ({"match_kind": row["match_kind"]} if "match_kind" in row else {}) for row in page]
         return {**page_result(page, total, offset, limit), **info, "table": table, "columns": wanted or available}

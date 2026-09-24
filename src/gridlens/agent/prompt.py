@@ -42,7 +42,9 @@ Files
   'generator', 'branch', ...), every field of XML settings and JSON manifests, GridPACK CSV and text
   outputs, caches, and logs. A setting can appear in several XML sections; report each section's value.
 - read_file group_by gives totals or counts per group, such as the sum of PL by AREA for loads with STATUS
-  1; compare_path lists every field where two manifests or XML files differ. op 'matches' finds PSS/E
+  1; join first adds another table's columns by a shared key, such as the bus section's AREA onto
+  generators, which have no area of their own. compare_path lists every field where two manifests or XML
+  files differ. op 'matches' finds PSS/E
   names even when cut short, and reports match_kind.
 
 Analysis with rank and rank_groups

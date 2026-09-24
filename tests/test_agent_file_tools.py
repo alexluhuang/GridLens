@@ -32,6 +32,28 @@ Q
 """
 
 
+# Generators in two areas, one out of service, and one on a bus the case does not have.
+GENERATION_CASE = """ 0,   100.00, 33, 0, 0, 60.00     / synthetic header
+Two areas with generators
+second title line
+     1,'ALPHA 1     ', 230.0000,3,   1,   1,   1,1.02000,   0.0000, 1.10000, 0.90000, 1.10000, 0.90000
+     2,'BETA, TWO   ', 115.0000,1,   2,   1,   1,0.98000,  -5.0000, 1.10000, 0.90000, 1.10000, 0.90000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+     2,'1 ',1,   2,   1,   50.000,   10.000,     0.000,     0.000,     0.000,     0.000,   1,1,0
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+     1,'1 ',  100.000,  10.000,  50.000, -50.000,1.02000,     0,  200.000, 0.0, 1.0, 0.0, 0.0,1.00000,1,  100.0,  150.000,    0.000,   1,1.0000
+     2,'1 ',   40.000,   5.000,  20.000, -20.000,0.98000,     0,  100.000, 0.0, 1.0, 0.0, 0.0,1.00000,1,  100.0,   80.000,    0.000,   1,1.0000
+     2,'2 ',    5.000,   0.000,  20.000, -20.000,0.98000,     0,  100.000, 0.0, 1.0, 0.0, 0.0,1.00000,0,  100.0,   80.000,    0.000,   1,1.0000
+     9,'1 ',    7.000,   0.000,  20.000, -20.000,0.98000,     0,  100.000, 0.0, 1.0, 0.0, 0.0,1.00000,1,  100.0,   80.000,    0.000,   1,1.0000
+0 / END OF GENERATOR DATA, BEGIN AREA DATA
+   1,    1,     0.000,    10.000,'NORTH       '
+   2,    2,     0.000,    10.000,'SOUTH       '
+0 / END OF AREA DATA
+Q
+"""
+
+
 @pytest.fixture
 def project_files(agent_context):
     """Give run_a a real RAW case, a GridPACK text table, and a log, and return the session's tools."""
@@ -133,6 +155,29 @@ def test_read_file_filters_sorts_and_pages_every_kind(project_files):
     assert project_files.read_file("runs/run_a/work/case.raw", table="generator")["error"]["code"] == "RAW_SECTION_REQUIRED"
     lines = project_files.read_file("runs/run_a/logs/run.log", filters=[{"column": "text", "op": "contains", "value": "line 1"}])["data"]
     assert [row["line"] for row in lines["rows"]] == [1, 10]
+
+
+def test_read_file_joins_generators_to_their_bus_area(project_files, agent_context):
+    """join adds another table's columns by a shared key, so generation by area takes one call."""
+    raw = str(agent_context.run("run_a") / "work/generation.raw")
+    Path(raw).write_text(GENERATION_CASE)
+    online = [{"column": "STAT", "op": "==", "value": 1}]
+    to_bus = {"table": "bus", "left_on": "I", "columns": ["AREA"]}
+    result = project_files.read_file(raw, table="generator", join=[to_bus], filters=online, group_by="AREA", statistic="sum", value_column="PG")
+    assert [(row["group"], row["value"]) for row in result["data"]["rows"]] == [("1", 100), ("2", 40), ("(blank)", 7)]
+    assert result["data"]["joins"][0]["added"] == ["AREA"] and any("1 of the rows read had no BUS row" in warning for warning in result["warnings"])
+    # Joins apply in order, so the second can use a column the first added.
+    names = project_files.read_file(raw, table="generator", join=[to_bus, {"table": "area", "left_on": "AREA", "right_on": "I", "columns": ["ARNAME"]}], filters=online, group_by="ARNAME", statistic="sum", value_column="PG")
+    assert [(row["group"], row["value"]) for row in names["data"]["rows"]] == [("NORTH", 100), ("SOUTH", 40), ("(blank)", 7)]
+    # A joined column that the rows already have is named after the table it came from.
+    loads = project_files.read_file(raw, table="load", join=[{"table": "bus", "left_on": "I", "columns": ["AREA", "BASKV"]}], columns=["I", "AREA", "BUS.AREA", "BASKV"])
+    assert loads["data"]["rows"] == [{"I": 2, "AREA": 2, "BUS.AREA": 2, "BASKV": 115.0}]
+    flat = "runs/run_a/work/case_flat.csv"
+    statuses = project_files.read_file(flat, join=[{"path": "runs/run_a/work/case_convergence.csv", "left_on": "event_idx", "columns": ["status_code"]}], filters=[{"column": "status_code", "op": "==", "value": "ISLANDED"}], columns=["event_idx", "status_code"])
+    assert statuses["data"]["rows"] == [{"event_idx": "2", "status_code": "ISLANDED"}]
+    for bad, code in (([{"table": "bus", "left_on": "NOPE", "columns": ["AREA"]}], "UNKNOWN_COLUMN"), ([{"table": "bus", "left_on": "I", "columns": ["NOPE"]}], "UNKNOWN_COLUMN"), ([{"left_on": "I", "columns": ["AREA"]}], "RAW_SECTION_REQUIRED"), ([{"table": "bus", "left_on": "I"}], "INVALID_JOIN"), ({"table": "bus"}, "INVALID_JOIN")):
+        assert project_files.read_file(raw, table="generator", join=bad)["error"]["code"] == code
+    assert project_files.read_file("runs/run_a/manifest.json", compare_path="runs/run_b/manifest.json", join=[to_bus])["error"]["code"] == "INVALID_JOIN"
 
 
 def test_read_file_groups_rows_and_compares_documents(project_files, agent_context):
