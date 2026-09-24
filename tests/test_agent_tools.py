@@ -175,8 +175,8 @@ def test_rank_returns_each_object_with_the_value_it_was_sorted_by(agent_context)
     assert [(row["line_id"], row["section"], row["value"]) for row in service.rank("run_a", metric="nominal_kv")["data"]["rows"]] == [("1", "", 230), ("1", "2", 230), ("2", "", 230)]
 
 
-def test_rank_filters_remove_objects_and_unknown_values_are_left_out(agent_context):
-    """Qualifiers remove objects before sorting, and an unknown value is never ranked as a low one."""
+def test_rank_filters_remove_objects_and_unknown_values_are_listed_last(agent_context):
+    """Qualifiers remove objects before sorting, and an unknown value is never ranked as a low one: it follows the ranked ones."""
     service = ToolService(agent_context)
     over = service.rank("run_a", filters=[{"column": "max_utilization_pct", "op": ">", "value": 100}])["data"]
     assert [row["value"] for row in over["rows"]] == [120, 110]
@@ -187,15 +187,18 @@ def test_rank_filters_remove_objects_and_unknown_values_are_left_out(agent_conte
     assert service.rank("run_a", filters=[{"column": "bus", "op": "in", "value": [2, 3]}])["data"]["total_matching"] == 3
     # The fixture cache records no minimum loading, so every minimum is unknown rather than 0%.
     unknown = service.rank("run_a", metric="min_utilization_pct")["data"]
-    assert (unknown["total_matching"], unknown["excluded_unknown_value"]) == (0, 3)
+    assert (unknown["total_matching"], unknown["without_value"]) == (3, 3)
+    assert {(row["rank"], row["value"]) for row in unknown["rows"]} == {(None, None)}
     run = agent_context.run("run_a")
     rows = _cached_rows(run, "branch_metadata")
     for row in rows:
         row["rate_mva"] = "0" if row["line_id"] == "2" else row["rate_mva"]
     _rewrite_cached_table(run, "branch_metadata", rows)
     unrated = service.rank("run_a", order="ascending")["data"]
-    assert [row["value"] for row in unrated["rows"]] == [110, 120]
-    assert unrated["excluded_unknown_value"] == 1
+    assert [(row["rank"], row["value"]) for row in unrated["rows"]] == [(1, 110), (2, 120), (None, None)]
+    assert (unrated["without_value"], unrated["rows"][2]["line_id"]) == (1, "2")
+    # A qualifier on the metric still excludes an unknown value, which meets no qualifier.
+    assert service.rank("run_a", filters=[{"column": "max_utilization_pct", "op": ">=", "value": 0}])["data"]["total_matching"] == 2
     assert [row["value"] for row in service.rank("run_a", metric="contingency_count")["data"]["rows"]] == [3, 3, 3]
     for bad in ([{"column": "zone", "op": "==", "value": 1}], [{"column": "control_area", "op": "~", "value": "x"}], [{"column": "bus", "op": "in", "value": 2}], [{"column": "bus", "op": "=="}], {"column": "bus"}):
         assert service.rank("run_a", filters=bad)["error"]["code"] == "INVALID_FILTER"
@@ -435,6 +438,10 @@ def test_contingencies_by_outage_area_status_and_solution(agent_context):
     assert [(row["group"], row["value"]) for row in counted["rows"]] == [("OK", 2), ("DIVERGED", 1)] and counted["excluded_unknown_value"] == 0
     failed = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "status_code", "op": "!=", "value": "OK"}], fields=["type", "outage_area"])["data"]["rows"]
     assert [(row["contingency"], row["type"], row["outage_area"]) for row in failed] == [("GN_3_1", "generator", ["East"])]
+    # A failed contingency has no loading, yet a qualifier on its status still lists it, with value null.
+    diverged = service.rank("run_a", object="contingencies", filters=[{"column": "status_code", "op": "==", "value": "DIVERGED"}])
+    assert [(row["event_idx"], row["rank"], row["value"]) for row in diverged["data"]["rows"]] == [(3, None, None)]
+    assert diverged["data"]["without_value"] == 1 and any("solution failed records no flows" in warning for warning in diverged["warnings"])
     south = service.rank("run_a", object="contingencies", metric="iterations", filters=[{"column": "outage_area", "op": "==", "value": "South"}])["data"]
     assert south["total_matching"] == 2
     by_area = service.rank_groups("run_a", object="contingencies", group="outage_area", metric="iterations", statistic="max")["data"]["rows"]
@@ -492,7 +499,8 @@ def test_optional_tables_fall_back_when_source_is_missing(agent_context):
     (run / "work/case_flat.csv").unlink()
     # With no current summary the convergence file still names the contingencies, but their loading is unknown.
     result = ToolService(agent_context).rank("run_a", object="contingencies", metric="max_loading_pct")
-    assert (result["error"], result["data"]["total_matching"], result["data"]["excluded_unknown_value"]) == (None, 0, 1)
+    assert (result["error"], result["data"]["total_matching"], result["data"]["without_value"]) == (None, 1, 1)
+    assert (result["data"]["rows"][0]["event_idx"], result["data"]["rows"][0]["value"]) == (1, None)
     assert any("no current contingency summary" in warning for warning in result["warnings"])
 
 
@@ -530,8 +538,8 @@ def test_method_settings_rating_basis_and_filter_scope(agent_context):
     assert by_id["1"]["rating_mva"] == 200
     assert by_id["1"]["base_utilization_pct"] == 25
     assert any("RAW rate C" in basis for basis in rows["data"]["rating_basis"])
-    # A facility without a positive rating has unknown loading, so it is left out rather than ranked at 0%.
-    assert "2" not in by_id and rows["data"]["excluded_unknown_value"] == 1
+    # A facility without a positive rating has unknown loading, so it is listed last rather than ranked at 0%.
+    assert (by_id["2"]["rank"], by_id["2"]["value"], rows["data"]["without_value"]) == (None, None, 1)
     assert any(warning.startswith("1 of 4 facilities have no positive rating") and "unknown rather than low" in warning for warning in rows["warnings"])
     assert any("configured contingencyRating=B" in warning for warning in rows["warnings"])
 

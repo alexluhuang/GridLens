@@ -433,7 +433,8 @@ def verified_top_line_areas(answer: str, question: str, turn_sources: list[dict]
     lines = [f"Top {len(rows)} congested lines by maximum observed loading, with both endpoint control areas where they differ [{source['call_id']}]:"]
     for index, row in enumerate(rows, 1):
         areas = ", ".join(row.get("control_area") or ["unknown"])
-        lines.append(f"{index}. {row['object']}: {areas} ({float(row['value']):.1f}%).")
+        loading = "unknown loading" if row.get("value") is None else f"{float(row['value']):.1f}%"
+        lines.append(f"{index}. {row['object']}: {areas} ({loading}).")
     if len(rows) < count:
         lines.append(f"Only {data['total_matching']:,} eligible lines matched the run scope.")
     return "\n".join(lines)

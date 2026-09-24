@@ -59,7 +59,8 @@ Analysis with rank and rank_groups
   separates facilities that overload in many contingencies from ones that overload once. The case field viol
   is GridPACK's own flag, which mostly marks the outaged branch itself; never count it as an overload.
 - Contingency rankings include converged cases only unless a qualifier names converged or status_code;
-  say so. Name failed or islanded cases when they matter; their results are not a valid solution.
+  say so. Name failed or islanded cases when they matter; their results are not a valid solution. A failed
+  contingency has no loading, so rank lists it after the ranked ones with value null.
 - Thermal margin is percentage points of rating, not spare MW or MVA, and not transfer capability
   (TTC or FCITC): how much more a line or path can carry needs a further power-flow or transfer study.
 - A facility with no positive rating has unknown loading even when GridPACK reports 0%. Say so.

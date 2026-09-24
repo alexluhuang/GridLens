@@ -78,6 +78,10 @@ def _number(value: object) -> float | None:
         return None
 
 
+# Contingency metrics from the compact summary, which a contingency whose solution failed has no rows for.
+SUMMARY_METRICS = ("max_loading_pct", "overload_count", "monitored_facility_count")
+
+
 def _require_metrics(missing: list[str], used: set[str], run: Path) -> None:
     """Refuse a call that needs a metric the run's analysis cache was built without."""
     needed = sorted(set(missing) & used)
@@ -389,11 +393,12 @@ class AnalysisTools(ToolBase):
         missing = ["overload_count"] if summary and "thermal_overload_count" not in summary[0] else []
         return [contingency_record(event, summaries.get(event, {}), solutions.get(event, {}), bus_areas, facilities) for event in sorted(set(summaries) | set(solutions)) if event != 0], missing
 
-    def _population(self, run: Path, kind: str, family: str, metric: str, conditions: list, *, group: str = "", fields: tuple = (), compare_run_id: str = "", compare_project: str = "", known_only: bool = True) -> tuple[list[dict], dict, str]:
+    def _population(self, run: Path, kind: str, family: str, metric: str, conditions: list, *, group: str = "", fields: tuple = (), compare_run_id: str = "", compare_project: str = "", unknown_values: str = "exclude") -> tuple[list[dict], dict, str]:
         """Return the facilities or contingencies that meet the qualifiers, the counts behind them, and their value's key.
 
-        fields are the extra fields the caller returns. known_only keeps only objects with a known value; a
-        count needs none, so it keeps them all.
+        fields are the extra fields the caller returns. unknown_values says what happens to an object with no
+        known value: "exclude" leaves it out, as a statistic must; "count" keeps it, since a count needs no
+        value; and "list" keeps it for rank to list after the ranked objects.
         """
         value_key = metric
         used = {metric, *fields, *(column for column, _, _ in conditions)}
@@ -416,17 +421,25 @@ class AnalysisTools(ToolBase):
                 counts["excluded_not_converged"] = len(records) - len(converged)
                 records = converged
         kept = [record for record in records if qualifies(record, conditions)]
-        known = [record for record in kept if record["values"][value_key] is not None] if known_only else kept
-        if len(known) < len(kept):
-            reason = ", because they have no positive rating or the cache does not record it," if family == "facility" else ""
-            self.warnings.append(f"{len(kept) - len(known)} objects have no known {value_key}{reason} and were left out.")
-        if metric == "min_utilization_pct" and known and known_only:
+        known = [record for record in kept if record["values"][value_key] is not None]
+        unknown = len(kept) - len(known)
+        if unknown and unknown_values != "count":
+            if family == "facility":
+                reason = ", because they have no positive rating or the cache does not record it,"
+            elif value_key in SUMMARY_METRICS:
+                reason = ", because a contingency whose solution failed records no flows,"
+            else:
+                reason = ""
+            fate = "were left out" if unknown_values == "exclude" else "are listed after the ranked objects, with value null"
+            self.warnings.append(f"{unknown} objects have no known {value_key}{reason} and {fate}.")
+        if metric == "min_utilization_pct" and known:
             zero = sum(1 for record in known if record["values"][metric] == 0)
             self.warnings.append(f"{zero} of {len(known)} objects have a minimum loading of 0%, usually in the case where the object itself is out of service; a low minimum does not show light loading.")
-        counts.update(objects_in_scope=len(records), excluded_by_filters=len(records) - len(kept), excluded_unknown_value=len(kept) - len(known))
+        counts.update(objects_in_scope=len(records), excluded_by_filters=len(records) - len(kept))
+        counts["without_value" if unknown_values == "list" else "excluded_unknown_value"] = unknown if unknown_values != "count" else 0
         if family == "facility":
             counts["rating_basis"] = sorted({record["rating_basis"] for record in known})
-        return known, counts, value_key
+        return (known if unknown_values == "exclude" else kept), counts, value_key
 
     def _cases(self, run: Path, conditions: list, used: set[str]) -> dict:
         """Resolve case qualifiers into the events and facilities they select and the numeric qualifiers the index applies.
@@ -515,7 +528,7 @@ class AnalysisTools(ToolBase):
 
     @tool
     def rank(self, run_id: str, object: ObjectKind = "branches", order: Order = "descending", metric: ObjectMetric = "max_utilization_pct", magnitude: int = 10, filters: list[ObjectFilter] | None = None, fields: list[ObjectField] | None = None, compare_run_id: str = "", compare_project: str = "", project: str = "") -> dict:
-        """Sort objects by one metric and return the first `magnitude` (0 returns all), each with the value it was sorted by; total_matching counts every object that qualified.
+        """Sort objects by one metric and return the first `magnitude` (0 returns all), each with the value it was sorted by; total_matching counts every object that qualified. Facilities and contingencies with no known value, such as a failed contingency's loading, follow the ranked ones with value null.
 
         object: branches (non-transformer), transformers, or both are facilities at or above 50 kV; their metrics are max_utilization_pct (congestion), base_utilization_pct, mean_utilization_pct, min_utilization_pct, thermal_margin_pct_points, overload_count (cases at or above 100%), contingency_count, rating_mva, and nominal_kv. contingencies are outage cases, converged ones only unless a qualifier names converged or status_code; their metrics are max_loading_pct, overload_count (monitored facilities at or above 100%), monitored_facility_count, iterations, max_p_mismatch, and max_q_mismatch. cases are one facility in one contingency, from the drill-down index; their metrics are loading_percent, mva_from, p_from_mw, q_from_mvar, rate_mva, v_from_pu, v_to_pu, min_voltage_pu, ang_from_deg, ang_to_deg, and angle_difference_deg, and a case also has its facility's and its contingency's fields; its viol field is GridPACK's own flag, which mostly marks the outaged branch itself, not an overload.
         filters keep objects meeting every qualifier, e.g. [{"column": "control_area", "op": "==", "value": "Coast"}, {"column": "nominal_kv", "op": ">=", "value": 345}]; outage_area is where a contingency's outaged element is. fields adds attributes to each row. compare_run_id ranks facilities by their change from this run to another (value = other minus this) and allows compare_value and change as qualifiers. For counts, means, or any statistic use rank_groups, never these rows.
@@ -535,11 +548,13 @@ class AnalysisTools(ToolBase):
         if family == "case":
             rows, total, counts = self._rank_cases(run, metric, descending, magnitude, conditions, extra)
             return {**header, **counts, **page_result(rows, total, 0, magnitude)}
-        records, counts, value_key = self._population(run, object, family, metric, conditions, fields=tuple(extra), compare_run_id=compare_run_id, compare_project=compare_project)
-        records.sort(key=lambda record: (-record["values"][value_key] if descending else record["values"][value_key], _order(record)))
+        records, counts, value_key = self._population(run, object, family, metric, conditions, fields=tuple(extra), compare_run_id=compare_run_id, compare_project=compare_project, unknown_values="list")
+        # Objects with no known value cannot be ranked, but they qualified, so they follow the ranked ones.
+        known = sorted((record for record in records if record["values"][value_key] is not None), key=lambda record: (-record["values"][value_key] if descending else record["values"][value_key], _order(record)))
+        unknown = sorted((record for record in records if record["values"][value_key] is None), key=_order)
         rows = [
-            {"rank": position, **record["identity"], "value": reported(record["values"][value_key]), **{name: shown(record["fields"][name]) for name in extra}}
-            for position, record in enumerate(records, 1)
+            {"rank": position if position <= len(known) else None, **record["identity"], "value": reported(record["values"][value_key]) if position <= len(known) else None, **{name: shown(record["fields"][name]) for name in extra}}
+            for position, record in enumerate(known + unknown, 1)
         ]
         return {**header, **counts, **page_result(rows[:magnitude] if magnitude else rows, len(rows), 0, magnitude)}
 
@@ -561,7 +576,7 @@ class AnalysisTools(ToolBase):
         if family == "case":
             groups, counts = self._group_cases(run, group, metric, statistic, conditions)
         else:
-            records, counts, value_key = self._population(run, object, family, metric, conditions, group=group, compare_run_id=compare_run_id, compare_project=compare_project, known_only=statistic != "count")
+            records, counts, value_key = self._population(run, object, family, metric, conditions, group=group, compare_run_id=compare_run_id, compare_project=compare_project, unknown_values="count" if statistic == "count" else "exclude")
             members: dict[str, list[float]] = {}
             for record in records:
                 for label in group_labels(record["fields"], group):

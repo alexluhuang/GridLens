@@ -33,7 +33,7 @@ from gridlens.runner.gridpack_runner import gridpack_container_name, terminate_g
 MODELS = ("nemotron3:33b", "gemma4:31b")
 # Result fields that show how much a call covered, kept in the report beside each call's arguments.
 COUNT_FIELDS = (
-    "total_matching", "returned", "truncated", "objects_in_scope", "excluded_by_filters", "excluded_unknown_value",
+    "total_matching", "returned", "truncated", "objects_in_scope", "excluded_by_filters", "excluded_unknown_value", "without_value",
     "excluded_not_converged", "objects_used", "recorded_cases", "only_in_run", "only_in_compare_run", "rows_used",
     "fields_compared", "differing_fields", "kind", "status", "target",
 )

@@ -46,7 +46,7 @@ def complete(result: dict) -> dict:
 
 def brief(data: dict, fields: tuple[str, ...], limit: int = 25) -> dict:
     """Keep a ranking's counts and the named fields of its first rows."""
-    counts = {key: data[key] for key in ("total_matching", "objects_in_scope", "excluded_by_filters", "excluded_unknown_value", "excluded_not_converged", "only_in_run", "only_in_compare_run", "rating_changed_count", "rating_basis", "recorded_cases") if key in data}
+    counts = {key: data[key] for key in ("total_matching", "objects_in_scope", "excluded_by_filters", "excluded_unknown_value", "without_value", "excluded_not_converged", "only_in_run", "only_in_compare_run", "rating_changed_count", "rating_basis", "recorded_cases") if key in data}
     return {**counts, "rows": [{name: row.get(name) for name in fields if name in row} for row in data.get("rows", [])[:limit]], **({"error": data["error"]} if "error" in data else {})}
 
 
