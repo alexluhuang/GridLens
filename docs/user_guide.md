@@ -59,6 +59,45 @@ If the image is not already in Docker's local image store, set the Docker pull p
 `always`. In **Configuration**, expand **Advanced Configuration** and set the contingency **Output format**
 to `csv_flat` before you click **Generate / Save XML**.
 
+## Run a sensitivity analysis
+
+The **Sensitivity Analysis** tab runs what-if studies that need an edited RAW case: loads, generators, and
+branches that are new, removed, or changed. It edits a copy of the case that the project's XML configuration
+names, and never changes the project's case.
+
+1. Generate the XML configuration first. Its network file must be a PSS/E RAW case of version 33, 34, or 35.
+2. Go to **Sensitivity Analysis** and choose **Loads**, **Generators**, or **Branches**. Each row is a record,
+   and each column is one of its RAW fields, in the order the case's version gives them. Hover over a column
+   heading to see what the field holds. A grey value is one the file leaves out, which PSS/E assumes.
+3. To find a record, type a bus number, an ID or circuit, or part of a bus name in the filter box.
+4. To change a field, double-click its cell and type the new value. A changed cell turns yellow, and its
+   tooltip gives the old value.
+5. To add a record, click **Add…** and enter its bus number, or a branch's from and to bus numbers. The new
+   row takes PSS/E's defaults: the next free ID or circuit, the bus's area, zone, and owner, and, for a
+   generator, the case's system base as its machine base. Give a new branch its reactance X.
+6. To remove records, select their rows and click **Remove / Restore**. Click it again to restore them.
+7. Click **Run N-1 Analysis**. The run starts in the **Run** tab, with its container settings, and appears in
+   **Results** like any other run.
+
+GridLens refuses an edit that GridPACK cannot read: a number in the wrong form, text with quotes, commas, or
+slashes, a record at a bus the case does not have, two records with the same buses and ID, or a branch with
+zero reactance. It warns before it runs a generator that is in service at a load bus (type 1), because
+GridPACK holds such a generator at its PG and QG instead of letting it regulate voltage. A column heading also
+says when GridPACK does not read a field, such as a load's owner or distributed generation.
+
+A sensitivity run's `work/` folder holds three more files than a normal run:
+
+```text
+<case>_sensitivity.raw     the edited case, which GridPACK reads
+<xml>_sensitivity.xml      the project's XML configuration, naming the edited case
+sensitivity_changes.json   each edit, with the old and new values
+```
+
+The edited case differs from the base case only where you edited it. Unchanged fields keep their text and
+spacing, a removed record loses its line, and a new record goes at the end of its section. **Save Edited
+Case…** writes the same case to a file you choose, for example to open in PSS/E. **Discard Edits** undoes every
+edit. The tab keeps your edits while you run them, so you can change a value and run again.
+
 ## Review outputs
 
 Go to **Results**, choose a run, and review the files written under `work/`.

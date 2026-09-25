@@ -4,6 +4,10 @@ GridLens is a local Python desktop application for running GridPACK contingency 
 Docker container. You set up a project, run a case, and read the results as tables and graphs without leaving
 your machine.
 
+The Sensitivity Analysis tab runs what-if studies: it adds, removes, or changes loads, generators, and
+branches in a copy of a PSS/E RAW case of version 33, 34, or 35, and runs GridPACK N-1 analysis on the copy.
+It rewrites only the lines you edit, and the project's case stays as it is.
+
 The app also has an optional Agent tab: a planning agent that answers questions about any project file in
 plain language, and can set up projects, configure and start runs, and build analyses for you. It drives an
 AI command-line tool that you install yourself, and it only uses a model served on a loopback address.
@@ -61,13 +65,15 @@ On x86_64 systems the platform is `linux/amd64`. On DGX Spark ARM64 it is usuall
 ```text
 src/gridlens/
   gui/        PySide6 tabs and main window
-  core/       settings, projects, validation, run manifests
+  core/       settings, projects, validation, run manifests, sensitivity runs
+  psse/       PSS/E RAW record layouts and the surgical RAW patcher
   runner/     Docker probing, command construction, GridPACK execution
   analysis/   local output parsing, graph data, metrics, exports
   agent/      runtime adapters, sessions, deterministic tools, background jobs, MCP server
   resources/  application icon
 
 tests/        core unit tests
+tests/data/   synthetic three-bus RAW cases in versions 33, 34, and 35
 docs/         architecture, install, user, security, packaging notes
 docs/plans/   design notes and work in progress
 packaging/    PyInstaller, Debian, and agent sandbox image files

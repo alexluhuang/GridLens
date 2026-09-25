@@ -79,6 +79,28 @@ Each run creates:
 - `logs/run.log`: the command and the streamed GridPACK output.
 - `work/terminal.log`: the same streamed terminal output, copied into the output folder.
 
+## Sensitivity runs
+
+The Sensitivity Analysis tab runs GridPACK on an edited copy of the project's case:
+
+```text
+PySide6 Sensitivity Analysis tab
+  -> psse/patch.py reads the case the project's XML names, and edits a copy of its text
+  -> core/sensitivity.py writes the edited case, an XML naming it, and the edits into run/work
+  -> the Run tab and the Docker/GridPACK runner, as for any other run
+```
+
+`psse/layouts.py` lists the fields of load, generator, and non-transformer branch records in PSS/E versions
+33, 34, and 35, with PSS/E's defaults. Each field sits where GridPACK's block parsers read it (in
+`src/parser/block_parsers` of the GridPACK repository): version 34 appends NREG to the generator record, and
+version 35 moves NREG after IREG and adds BASLOD. `psse/patch.py` finds sections as GridPACK's PTI parsers do,
+and changes only what an edit needs: the characters of an edited field, the line of a removed record, and a
+new line for an added record, just before its section ends. It reads and writes the case as Latin-1, so every
+other byte, including line endings, comments, and the sections it does not read, is written back unchanged.
+
+A sensitivity run's `work/` folder holds three more files than a normal run: `<case>_sensitivity.raw`,
+`<xml>_sensitivity.xml`, and `sensitivity_changes.json`. The project's input files never change.
+
 ## Analysis layer
 
 The analysis layer is deliberately local and file-based. It can do the following:

@@ -73,7 +73,9 @@ local dependency is available:
 
 ## Code organization
 
-- `core/` owns settings, projects, validation, and manifests.
+- `core/` owns settings, projects, validation, manifests, and the files of sensitivity runs.
+- `psse/` owns the PSS/E RAW record layouts and the patcher that edits a case one field or line at a time.
+  Keep its record layouts where GridPACK's block parsers read each field.
 - `runner/` owns Docker probing, command construction, and process execution.
 - `analysis/` owns parsing, enrichment, metrics, graph caches, master exports, and distribution exports.
 - `agent/` owns the runtime adapter contract, the provider registry, sessions, the deterministic tools, the
