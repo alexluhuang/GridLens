@@ -100,7 +100,8 @@ def test_installed_hermes_exposes_only_gridlens_tools_and_resumes(agent_project)
         assert tools_sent
         expected = {"mcp__gridlens__" + name for name in TOOL_NAMES}
         assert all({item["function"]["name"] for item in listing} == expected for listing in tools_sent)
-        assert any(SYSTEM_PROMPT.strip() in json.dumps(body, ensure_ascii=False).replace("\\n", "\n") for body in requests)
+        model_requests = [body for body in requests if body.get("tools")]
+        assert all(SYSTEM_PROMPT.strip() in body["messages"][0]["content"] for body in model_requests)
         print(f"\nHermes isolation + continuation passed: {context.directory}")
     finally:
         server.shutdown()
