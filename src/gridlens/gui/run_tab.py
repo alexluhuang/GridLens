@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 import traceback
 
 from PySide6.QtCore import QThread, Signal, QUrl
@@ -24,11 +25,13 @@ from PySide6.QtWidgets import (
 
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project, ProjectData
+from gridlens.core.sensitivity import PatchedCase
 from gridlens.core.validation import ValidationError
 from gridlens.gui.run_view_models import (
     RunFormValues,
     apply_run_form_values_to_settings,
     build_gridpack_run_request,
+    build_sensitivity_run_request,
     validate_run_form_values,
 )
 from gridlens.gui.theme import configure_form_layout, set_button_role, set_context_label
@@ -233,6 +236,18 @@ class RunTab(QWidget):
             QMessageBox.warning(self, "Docker check", message)
 
     def start_run(self) -> None:
+        """Run the project's case."""
+        self._start_run(None)
+
+    def start_sensitivity_run(self, case: PatchedCase) -> None:
+        """Run the project's case with a sensitivity analysis's edits made."""
+        self._start_run(case)
+
+    def _start_run(self, case: PatchedCase | None) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            QMessageBox.warning(self, "Run in progress",
+                                "Wait for the current GridPACK run to end.")
+            return
         if not self.project or not self.project_data:
             QMessageBox.warning(self, "No project", "Create or open a project first.")
             return
@@ -251,7 +266,18 @@ class RunTab(QWidget):
         self.settings.save()
 
         run_dir = self.project.create_run_folder()
-        request = build_gridpack_run_request(self.project_data, run_dir, values)
+        if case is None:
+            request = build_gridpack_run_request(self.project_data, run_dir, values)
+        else:
+            try:
+                request = build_sensitivity_run_request(
+                    self.project_data, run_dir, values, case)
+            except (OSError, ValueError) as exc:
+                # GridPACK has not started, so the new folder holds no results.
+                shutil.rmtree(run_dir, ignore_errors=True)
+                QMessageBox.warning(self, "Sensitivity run cannot start",
+                                    str(exc))
+                return
 
         self.log.clear()
         self.append_log(f"Created run folder: {run_dir}")

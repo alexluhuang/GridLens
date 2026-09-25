@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import csv
 import json
+from pathlib import Path
+import shutil
 
 import pytest
 
 from gridlens.agent.session import SessionContext
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.parser_models import PARSER_VERSION
+from gridlens.core.project import Project
+from gridlens.gui.configuration_view_models import (
+    default_input_configuration_values,
+    render_input_configuration_xml,
+)
 
 
 @pytest.fixture
@@ -58,3 +65,15 @@ def agent_project(tmp_path):
 @pytest.fixture
 def agent_context(agent_project):
     return SessionContext.create(agent_project, ("run_a", "run_b"), "fixture:model", "http://127.0.0.1:11434", projects_dir=agent_project.parent)
+
+
+@pytest.fixture
+def three_bus_project(tmp_path):
+    """Save a project of the version 33 three-bus case and a GridLens XML."""
+    raw = tmp_path / "three_bus_v33.raw"
+    shutil.copy(Path(__file__).parent / "data" / raw.name, raw)
+    xml = tmp_path / "input.xml"
+    values = default_input_configuration_values(raw.name)
+    xml.write_text(render_input_configuration_xml(values), encoding="utf-8")
+    project = Project("Sensitivity Test", tmp_path / "project")
+    return project, project.save([raw, xml], "input.xml")

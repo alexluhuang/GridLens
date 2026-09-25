@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from gridlens.core import sensitivity
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import ProjectData
 from gridlens.core.validation import (
@@ -93,9 +94,23 @@ def build_gridpack_run_request(
     )
 
 
+def build_sensitivity_run_request(
+    project_data: ProjectData,
+    run_dir: Path,
+    values: RunFormValues,
+    case: sensitivity.PatchedCase,
+) -> GridpackRunRequest:
+    """Write an edited case into a run folder; return a request to run it."""
+    request = build_gridpack_run_request(project_data, run_dir, values)
+    xml_file_name = sensitivity.write_run_inputs(project_data, run_dir, case)
+    note = sensitivity.run_note(case)
+    return replace(request, xml_filename=xml_file_name, notes=note)
+
+
 __all__ = [
     "RunFormValues",
     "apply_run_form_values_to_settings",
     "build_gridpack_run_request",
+    "build_sensitivity_run_request",
     "validate_run_form_values",
 ]
