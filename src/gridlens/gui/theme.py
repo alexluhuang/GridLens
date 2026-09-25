@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase, QPalette, QColor
-from PySide6.QtWidgets import QApplication, QAbstractItemView, QFormLayout, QLabel, QPushButton, QTableWidget
+from PySide6.QtWidgets import QApplication, QAbstractItemView, QFormLayout, QLabel, QPushButton, QTableView
 
 
 def apply_theme(app: QApplication) -> None:
@@ -53,7 +53,7 @@ def set_muted_label(label: QLabel) -> None:
     label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
 
-def configure_table(table: QTableWidget) -> None:
+def configure_table(table: QTableView) -> None:
     table.setAlternatingRowColors(True)
     table.setWordWrap(False)
     table.setTextElideMode(Qt.ElideMiddle)
@@ -234,7 +234,7 @@ QTextBrowser,
 QComboBox,
 QSpinBox,
 QListWidget,
-QTableWidget {
+QTableView {
     background: #ffffff;
     border: 1px solid #8d8d8d;
     border-radius: 4px;
@@ -245,7 +245,7 @@ QTableWidget {
 QTextEdit,
 QTextBrowser,
 QListWidget,
-QTableWidget {
+QTableView {
     selection-background-color: #d9e7ff;
     selection-color: #111111;
 }
@@ -256,7 +256,7 @@ QTextBrowser:focus,
 QComboBox:focus,
 QSpinBox:focus,
 QListWidget:focus,
-QTableWidget:focus {
+QTableView:focus {
     border: 2px solid #0039a6;
 }
 
@@ -371,12 +371,12 @@ QHeaderView::section {
     font-weight: 800;
 }
 
-QTableWidget {
+QTableView {
     gridline-color: #d8d8d8;
     alternate-background-color: #f4f4f4;
 }
 
-QTableWidget::item {
+QTableView::item {
     padding: 6px;
 }
 

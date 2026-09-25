@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QSizePol
 
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project, ProjectData
+from gridlens.core.sensitivity import PatchedCase
 from gridlens.gui.analysis_tab import AnalysisTab
 from gridlens.gui.agent_tab import AgentTab
 from gridlens.gui.configuration_tab import ConfigurationTab
@@ -15,6 +16,7 @@ from gridlens.gui.notes_tab import NotesTab
 from gridlens.gui.project_tab import ProjectTab
 from gridlens.gui.results_tab import ResultsTab
 from gridlens.gui.run_tab import RunTab
+from gridlens.gui.sensitivity_tab import SensitivityTab
 
 
 class MainWindow(QMainWindow):
@@ -75,6 +77,7 @@ class MainWindow(QMainWindow):
         self.project_tab = ProjectTab(self.settings)
         self.configuration_tab = ConfigurationTab()
         self.run_tab = RunTab(self.settings)
+        self.sensitivity_tab = SensitivityTab()
         self.results_tab = ResultsTab()
         self.branch_analysis_tab = AnalysisTab()
         self.transformer_analysis_tab = AnalysisTab(transformer_analysis=True)
@@ -85,6 +88,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.project_tab, "Project")
         self.tabs.addTab(self.configuration_tab, "Configuration")
         self.tabs.addTab(self.run_tab, "Run")
+        self.tabs.addTab(self.sensitivity_tab, "Sensitivity Analysis")
         self.tabs.addTab(self.results_tab, "Results")
         self.tabs.addTab(self.branch_analysis_tab, "Branch Analysis")
         self.tabs.addTab(self.transformer_analysis_tab, "Transformer Analysis")
@@ -93,15 +97,18 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(0, "Create a project and add GridPACK input files.")
         self.tabs.setTabToolTip(1, "Generate or update the GridPACK XML configuration.")
         self.tabs.setTabToolTip(2, "Check Docker and run the selected case.")
-        self.tabs.setTabToolTip(3, "Review, open, or export completed runs.")
-        self.tabs.setTabToolTip(4, "Analyze non-transformer branch utilization.")
-        self.tabs.setTabToolTip(5, "Analyze transformer utilization.")
-        self.tabs.setTabToolTip(6, "Read analysis assumptions and data notes.")
-        self.tabs.setTabToolTip(7, "Ask the planning agent to set up, run, and analyze studies, or about any project file.")
+        self.tabs.setTabToolTip(
+            3, "Edit loads, generators, and branches, then run the edited case.")
+        self.tabs.setTabToolTip(4, "Review, open, or export completed runs.")
+        self.tabs.setTabToolTip(5, "Analyze non-transformer branch utilization.")
+        self.tabs.setTabToolTip(6, "Analyze transformer utilization.")
+        self.tabs.setTabToolTip(7, "Read analysis assumptions and data notes.")
+        self.tabs.setTabToolTip(8, "Ask the planning agent to set up, run, and analyze studies, or about any project file.")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.configuration_tab.project_changed.connect(self.on_project_changed)
         self.run_tab.run_finished.connect(self.on_run_finished)
+        self.sensitivity_tab.run_requested.connect(self.on_sensitivity_run)
         self.results_tab.run_selected.connect(self.branch_analysis_tab.select_run)
         self.results_tab.run_selected.connect(self.transformer_analysis_tab.select_run)
         self.results_tab.run_selected.connect(self.agent_tab.select_run)
@@ -115,12 +122,18 @@ class MainWindow(QMainWindow):
         self.project_tab.set_project(project, project_data)
         self.configuration_tab.set_project(project, project_data)
         self.run_tab.set_project(project, project_data)
+        self.sensitivity_tab.set_project(project, project_data)
         self.agent_tab.set_project(project)
         self.results_tab.set_project(project)
         self.branch_analysis_tab.set_project(project)
         self.transformer_analysis_tab.set_project(project)
         self.context_label.setText(f"{project_data.name}")
         self.statusBar().showMessage(f"Project loaded: {project_data.name}")
+
+    def on_sensitivity_run(self, case: PatchedCase) -> None:
+        """Run an edited case in the Run tab, where its log and progress show."""
+        self.tabs.setCurrentWidget(self.run_tab)
+        self.run_tab.start_sensitivity_run(case)
 
     def on_run_finished(self, run_dir: object) -> None:
         path = Path(str(run_dir))
