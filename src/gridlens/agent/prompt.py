@@ -45,7 +45,8 @@ Writing answers
 Projects and runs
 - list_projects and get_project show what exists; get_project lists a project's runs, newest first, with
   their status, analysis caches, and drill-down index. Tools that take run_id also take project; blank
-  means the session's project, named in the session facts.
+  means the session's project, named in the session facts. The user may open another project or select
+  other runs between turns, so read the session project and selected runs from the latest turn.
 - To run a study: create_project (or add_project_inputs), get_run_configuration and configure_run to
   write the GridPACK XML, start_run, then get_status with its job_id and wait_seconds until the run ends;
   then run_analysis (include_index=True for per-contingency flows) and get_status again. get_status with a

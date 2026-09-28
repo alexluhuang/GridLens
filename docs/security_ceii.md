@@ -48,12 +48,15 @@ The Agent tab is optional. These controls apply when someone uses it.
 
 ### Session folders
 
-Sessions live in `<project>/agent/sessions/<UTC timestamp>_<suffix>/`, or, for a conversation started with
-no project open, in `<projects folder>/.gridlens-agent/sessions/`. They hold CEII-derived material, so treat
-them as CEII. Each session folder holds:
+Sessions live in `<projects folder>/.gridlens-agent/sessions/<UTC timestamp>_<suffix>/`, outside any one
+project, because one conversation can work in several. Sessions written by earlier versions live in
+`<project>/agent/sessions/`. They hold CEII-derived material, so treat them as CEII. Each session folder
+holds:
 
-- `context.json`, with the project root (or none), the selected run IDs, the projects folder, the model,
-  the endpoint, the runtime, and the route.
+- `context.json`, with the project root (or none) and the run IDs selected when the session started, the
+  projects folder, the model, the endpoint, the runtime, and the route. It is written once.
+- `focus.json`, once the user has moved the conversation to another project or other runs, with the project
+  root and the run IDs of the latest turn. It never changes the route, the runtime, or the model.
 - `prompts/<nanoseconds>.txt`, the exact prompt text handed to the CLI.
 - `transcript.jsonl`, with the user's questions verbatim and the model's answers.
 - `runtime_events.jsonl`, the normalized runtime event stream and captured diagnostics.
@@ -66,9 +69,10 @@ them as CEII. Each session folder holds:
   output.
 - `script_executions.jsonl`.
 
-Directories are mode `0700` and files are mode `0600`. Session folders inherit the project's encryption,
-backup, retention, and deletion rules. Nothing leaves the project folder unless the user chooses **Export
-session audit**. That archive is an unencrypted ZIP written `0600`, it is a sensitive artifact, and it needs
+Directories are mode `0700` and files are mode `0600`. Session folders inherit the projects folder's
+encryption, backup, retention, and deletion rules, so apply to the projects folder the rules its projects
+need, and deleting a project does not delete the conversations about it. Nothing leaves the projects folder
+unless the user chooses **Export session audit**. That archive is an unencrypted ZIP written `0600`, it is a sensitive artifact, and it needs
 the same handling as any other CEII material. Sessions persist until an operator deletes the folder, under
 the same approved deletion procedure as run folders. Project-level `exports/` sits outside the session and
 outside the mounted run folder.

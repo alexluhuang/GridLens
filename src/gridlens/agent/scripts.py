@@ -25,7 +25,7 @@ from uuid import uuid4
 
 from gridlens.agent.policy import AgentError
 from gridlens.agent.process import minimal_environment, terminate_process
-from gridlens.agent.session import SessionContext, append_event, read_json, scoped_path, timestamp, write_json
+from gridlens.agent.session import SessionContext, append_event, find_project, read_json, resolve_run, scoped_path, timestamp, write_json
 
 
 MAX_SCRIPT_BYTES = 24 * 1024
@@ -107,7 +107,7 @@ def save_proposal(context: SessionContext, run_id: str, purpose: str, code: str)
     path = scoped_path(directory, identifier + ".py")
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
         handle.write(code)
-    record = {"proposal_id": identifier, "run_id": run_id, "purpose": purpose, "sha256": hashlib.sha256(code.encode()).hexdigest(), "created_at": timestamp(), "status": "awaiting_review"}
+    record = {"proposal_id": identifier, "project_root": str(context.project_root), "run_id": run_id, "purpose": purpose, "sha256": hashlib.sha256(code.encode()).hexdigest(), "created_at": timestamp(), "status": "awaiting_review"}
     write_json(directory / (identifier + ".json"), record, exclusive=True)
     return record
 
@@ -141,6 +141,17 @@ def missing_run_paths(code: str, run: Path) -> list[str]:
     return sorted(set(missing))
 
 
+def proposal_run(context: SessionContext, record: dict) -> Path:
+    """Return the run a proposal reads: a run of the project in focus when it was proposed.
+
+    The focus may have moved to another project since. A proposal saved before proposals named their
+    project reads a run of the project in focus now.
+    """
+    if not record.get("project_root"):
+        return context.run(record["run_id"])
+    return resolve_run(find_project(str(record["project_root"]), context.projects_folder), record["run_id"])
+
+
 def read_proposal(context: SessionContext, identifier: str) -> tuple[dict, Path, str]:
     """Load a saved proposal, refusing it if the bytes changed after review."""
     if not re.fullmatch(r"[a-f0-9]{32}", identifier):
@@ -152,7 +163,7 @@ def read_proposal(context: SessionContext, identifier: str) -> tuple[dict, Path,
         data = handle.read(MAX_SCRIPT_BYTES + 1)
     if len(data) > MAX_SCRIPT_BYTES or hashlib.sha256(data).hexdigest() != record["sha256"]:
         raise AgentError("PROPOSAL_CHANGED", "The script changed after it was saved. Request a new proposal and review it again.")
-    context.run(record["run_id"])
+    proposal_run(context, record)
     return record, path, data.decode("utf-8")
 
 
@@ -183,7 +194,7 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
     if executable is None:
         raise AgentError("DOCKER_UNAVAILABLE", "Install and configure Docker yourself before running a reviewed script.")
     name = "gridlens-analysis-" + uuid4().hex
-    run = context.run(record["run_id"])
+    run = proposal_run(context, record)
     # Validate the image ID and refuse to run as root before anything is written to the session folder.
     # The command used later is rebuilt against the snapshot, so this call is a preflight check only.
     sandbox_command(executable, name, image, run, script)

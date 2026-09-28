@@ -181,8 +181,14 @@ Expand a **Process** card to see tool names, arguments, audited row counts, trun
 paths. If the selected CLI supplies reasoning text, it appears there too. Hermes currently does not expose
 reasoning text through its event stream, so the card says when it is unavailable. Choose a saved session in
 the conversation selector to replay its messages and available process events, then ask a follow-up in that
-session. The selector stays on the active session after each turn. **New conversation** starts a fresh
-session. Changing the runtime, model, project, or run selection also starts a new conversation.
+session. The selector lists the conversations of every project, newest first, by the time each started and
+its first question, and stays on the active session after each turn. **New conversation** starts a fresh
+session. Changing the runtime or the model also starts a new conversation.
+
+A conversation is not tied to one project or run. Open another project, or select other runs, and the
+conversation stays; your next question goes to the project and runs shown then. So you can ask the agent to
+create and run a study, open the new project in the **Project** tab, and carry on in the same conversation.
+With no project open, a question goes to the project the conversation was last in.
 
 ### Let the agent run a study
 
@@ -248,8 +254,9 @@ GridLens records the output as untrusted, because no GridLens function has check
 
 ### Session files
 
-Each conversation writes a folder under `<project>/agent/sessions/`, or under
-`<projects folder>/.gridlens-agent/sessions/` when no project was open. Click **Open session folder** to see
+Each conversation writes a folder under `<projects folder>/.gridlens-agent/sessions/`. Conversations saved
+by earlier versions of GridLens under `<project>/agent/sessions/` are listed when that project is open.
+Click **Open session folder** to see
 the transcript, the runtime events, the tool audit, the saved results, and any proposed script. Click
 **Export session audit** for a ZIP of the same record. Each background job has a folder under
 `<project>/agent/jobs/` with its request, its status, and its output.

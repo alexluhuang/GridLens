@@ -146,10 +146,60 @@ def test_conversation_can_start_without_a_project_and_shows_tool_arguments(tmp_p
     app.processEvents()
 
 
+def test_conversation_continues_in_a_project_it_created(tmp_path, monkeypatch):
+    """Opening the project a conversation created keeps the conversation, lists it, and moves the next turn there."""
+    app = QApplication.instance() or QApplication([])
+    projects = tmp_path / "projects"
+    tab = AgentTab(AppSettings(default_projects_dir=projects))
+    tab.check_runtime = lambda: None
+    tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", "http://127.0.0.1:11434", ("test:model",)))
+    worker = MagicMock()
+    monkeypatch.setattr("gridlens.gui.agent_tab.AgentWorker", lambda *_args: worker)
+    tab.input.setPlainText("Create a project from /data/case.raw and run it.")
+    tab.send()
+    controller, directory = tab.controller, tab.session_directory
+    assert controller.context.project_root is None
+    tab.conversation.add_message("assistant", "Created Study and ran it.")
+    study = projects / "Study"
+    (study / "runs/run_1").mkdir(parents=True)
+    (study / "project.json").write_text(json.dumps({"name": "Study"}))
+    (study / "runs/run_1/status.json").write_text('{"status": "completed"}')
+    # The project opened during the turn is shown once the turn ends.
+    tab.set_project(Project("Study", study))
+    assert tab.project is None
+    tab.worker = SimpleNamespace(deleteLater=lambda: None)
+    tab.finish_turn()
+    assert tab.project.root_dir == study.resolve()
+    assert (tab.controller, tab.session_directory) == (controller, directory)
+    assert tab.history_combo.currentData() == str(directory)
+    assert tab.conversation.messages()[-1] == ("assistant", "Created Study and ran it.")
+    assert tab.run_combo.currentData() == "run_1"
+    tab.input.setPlainText("Which line is most loaded?")
+    assert tab.send_button.isEnabled()
+    tab.send()
+    assert tab.controller is controller
+    assert (controller.context.project_root, controller.context.run_ids) == (study.resolve(), ("run_1",))
+    assert SessionContext.load(directory / "context.json").project_root == study.resolve()
+    # The mocked worker ran neither turn; record them as the controller would.
+    for role, text in (("user", "Create a project from /data/case.raw and run it."), ("assistant", "Created Study and ran it."), ("user", "Which line is most loaded?")):
+        controller.context.message(role, text)
+    tab.worker = None
+    tab.new_session()
+    tab.refresh_history()
+    index = tab.history_combo.findData(str(directory))
+    assert tab.history_combo.itemText(index).endswith("Create a project from /data/case.raw and run it.")
+    tab.open_history(index)
+    assert sorted(text for _, text in tab.conversation.messages()) == ["Create a project from /data/case.raw and run it.", "Created Study and ran it.", "Which line is most loaded?"]
+    assert tab.controller.context.project_root == study.resolve()
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()
+
+
 def test_saved_conversation_replays_messages_and_tool_steps_in_order(agent_context, monkeypatch):
     """Reopen a saved audit with its tool steps, scope, and runtime continuation ready for another turn."""
     app = QApplication.instance() or QApplication([])
-    tab = AgentTab()
+    tab = AgentTab(AppSettings(default_projects_dir=agent_context.projects_folder))
     tab.set_project(Project("Synthetic Project", agent_context.project_root))
     tab.check_runtime = lambda: None
     messages = [

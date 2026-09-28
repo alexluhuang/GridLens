@@ -35,6 +35,7 @@ A regulator-facing project is stored under:
 
 ```text
 ~/GridLensProjects/
+  .gridlens-agent/sessions/   optional, created by the Agent tab
   Project_Name/
     project.json
     original_inputs/
@@ -47,7 +48,7 @@ A regulator-facing project is stored under:
         reports/
         exports/          optional, created by analysis export helpers
     exports/
-    agent/sessions/       optional, created by the Agent tab
+    agent/jobs/           optional, created by agent runs and analysis builds
 ```
 
 The `original_inputs/` directory stores the project input files. Every run copies those files into that run's
@@ -181,8 +182,9 @@ one tool server.
   described in [CEII security notes](security_ceii.md).
 - `agent/policy.py`: route classification. It resolves the inference endpoint and fails closed unless every
   resolved address is loopback.
-- `agent/session.py`: the immutable session record. `SessionContext` records the open project (or none),
-  the runs selected in the tab, the projects folder, the model, and the route. `find_project` and
+- `agent/session.py`: the session record. `SessionContext` records the projects folder, the model, and the
+  route, which never change, and the session's focus: the open project (or none) and the runs selected in
+  the tab, which move with the tab between turns. `find_project` and
   `resolve_run` turn project and run names into folders, and `scoped_path` rejects traversal and symlink
   escape.
 - `agent/controller.py`: owns the conversation, runs one turn at a time under a deadline and byte caps,
@@ -208,10 +210,13 @@ one tool server.
 - `agent/scripts.py`: saves a model-proposed Python script for review, and runs an approved one in the
   pinned sandbox described in `packaging/agent/README.md`.
 
-Each session writes an append-only record under `<project>/agent/sessions/<UTC timestamp>_<suffix>/`:
-`context.json` for the session record, `manifest.json` for the runtime and command template,
-`transcript.jsonl`, `runtime_events.jsonl`, `tool_calls.jsonl` for the tool audit and provenance, `results/`
-for the complete copies of large results, `usage.json`, `status.json`, and `generated/` for any proposed
-script. A session started with no project open lives in `<projects folder>/.gridlens-agent/sessions/`.
+Each session writes an append-only record under `<projects folder>/.gridlens-agent/sessions/<UTC
+timestamp>_<suffix>/`, outside any one project, because one conversation can create, run, and compare
+several projects: `context.json` for the session record, `focus.json` for the project and runs the latest
+turn started in, `manifest.json` for the runtime and command template, `transcript.jsonl`,
+`runtime_events.jsonl`, `tool_calls.jsonl` for the tool audit and provenance, `results/` for the complete
+copies of large results, `usage.json`, `status.json`, and `generated/` for any proposed script. A proposal
+records its project, so it reads the same run after the session moves. Sessions written by earlier versions
+under `<project>/agent/sessions/` are listed while that project is open and still open.
 Every answer cites the call IDs from `tool_calls.jsonl`, and the GUI marks a citation that does not appear
 there as invalid.

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from gridlens.agent.session import SessionContext
+from gridlens.agent.session import SessionContext, saved_sessions, session_title
 from gridlens.agent.tool_base import MAX_INLINE_BYTES, MAX_STRING_CHARS
 from gridlens.agent.tools import TOOL_NAMES, ToolService
 from gridlens.analysis.contingencies import SUMMARY_COLUMNS
@@ -130,6 +130,45 @@ def test_session_without_a_project_lives_in_the_projects_folder(tmp_path):
     assert ToolService(context).get_project()["error"]["code"] == "NO_PROJECT"
     with pytest.raises(ValueError, match="at most two"):
         SessionContext.create(None, ("run_a",), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path)
+
+
+def test_one_session_moves_between_projects_and_keeps_its_folder(agent_context, tmp_path):
+    """A session started in one project lives in the projects folder and can turn to a project created later."""
+    assert agent_context.directory.parent == (tmp_path / ".gridlens-agent/sessions").resolve()
+    created = tmp_path / "Created_Study"
+    (created / "runs/run_c").mkdir(parents=True)
+    (created / "project.json").write_text(json.dumps({"name": "Created Study"}))
+    (created / "runs/run_c/status.json").write_text('{"status": "completed"}')
+    moved = agent_context.refocus(created, ("run_c",))
+    assert (moved.project_root, moved.run_ids, moved.directory) == (created.resolve(), ("run_c",), agent_context.directory)
+    assert (moved.model, moved.route) == (agent_context.model, agent_context.route)
+    assert SessionContext.load(agent_context.directory / "context.json") == moved
+    assert ToolService(moved).get_project()["data"]["rows"][0]["run_id"] == "run_c"
+    assert json.loads((agent_context.directory / "context.json").read_text())["project_root"] == str(agent_context.project_root)
+    with pytest.raises(ValueError, match="at most two"):
+        moved.refocus(None, ("run_c",))
+    # A deleted focus project leaves the conversation readable, with no project in focus.
+    (created / "project.json").unlink()
+    assert SessionContext.load(agent_context.directory / "context.json").project_root is None
+
+
+def test_older_sessions_inside_a_project_are_listed_and_open(agent_project, tmp_path):
+    """Sessions written inside their project before sessions moved to the projects folder still open."""
+    current = SessionContext.create(None, (), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path)
+    older = agent_project / "agent/sessions/20260101T000000Z_0123456789ab"
+    older.mkdir(parents=True)
+    record = {
+        "project_root": str(agent_project.resolve()), "run_ids": ["run_a"], "model": "fixture:model", "endpoint": "http://127.0.0.1:11434",
+        "directory": str(older.resolve()), "session_id": older.name, "runtime": "hermes", "route": "loopback_only",
+        "remote_acknowledged": False, "projects_dir": str(tmp_path.resolve()),
+    }
+    (older / "context.json").write_text(json.dumps(record))
+    (older / "transcript.jsonl").write_text(json.dumps({"role": "user", "text": "Which   line is\nmost loaded?"}) + "\n")
+    assert saved_sessions(tmp_path.resolve()) == [current.directory]
+    assert saved_sessions(tmp_path.resolve(), agent_project.resolve()) == [current.directory, older.resolve()]
+    assert SessionContext.load(older / "context.json").run_ids == ("run_a",)
+    assert session_title(older).endswith("  ·  Which line is most loaded?")
+    assert session_title(current.directory) == session_title(current.directory).split("  ·  ")[0]
 
 
 def test_stale_cache_never_reads_flat_data(agent_context, monkeypatch):

@@ -67,6 +67,10 @@ class AgentController:
         """Ask the turn in flight to stop at its next checkpoint."""
         self.cancelled.set()
 
+    def refocus(self, project_root: Path | None, run_ids: tuple[str, ...]) -> None:
+        """Point the next turn at another project or other runs, keeping the conversation and its runtime."""
+        self.context = self.context.refocus(project_root, run_ids)
+
     def restore(self, messages: list[dict], events: list[dict]) -> None:
         """Load saved messages and events into this controller; open_history uses the state for another turn."""
         self.history = [

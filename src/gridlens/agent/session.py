@@ -1,9 +1,9 @@
 """The session record, project and run lookup, and the audit files.
 
-A session is one conversation. `SessionContext` is written once, at creation, and names the project that
-was open in GridLens (if any), the runs the user selected there, the GridLens projects folder, the model,
-and the route. The route is the security decision made here: it is fixed before any project text can
-reach a runtime.
+A session is one conversation. `SessionContext` is written once, at creation, and names the GridLens
+projects folder, the model, and the route. The route is the security decision made here: it is fixed
+before any project text can reach a runtime. The project open in GridLens and the runs selected there are
+the session's focus, which the user may change between turns; `focus.json` records the latest one.
 
 A session does not limit which projects or runs the tools may use. The agent can create projects, start
 runs, and read every file of a GridLens project, so tools name a project and a run, and `find_project`
@@ -12,7 +12,7 @@ inside the folder it was resolved against and never follows a symlink out of it.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 import os
@@ -31,10 +31,12 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 EXPORT_MAX_FILES = 10_000
 PROJECT_FILE = "project.json"
-# Sessions live inside the open project. With no project open they live in a hidden folder of the
-# projects folder, which is never mistaken for a project because it has no project.json.
-PROJECT_SESSIONS = Path("agent/sessions")
+# Sessions live in a hidden folder of the projects folder, which is never mistaken for a project because it
+# has no project.json, so one conversation can move between projects. Sessions written before that lived
+# inside the project open when they started, and are still listed and opened from there.
 WORKSPACE_SESSIONS = Path(".gridlens-agent/sessions")
+PROJECT_SESSIONS = Path("agent/sessions")
+FOCUS_FILE = "focus.json"
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 
 
@@ -109,7 +111,7 @@ def export_session(directory: Path, destination: Path) -> None:
     The export holds the session record, the audit, generated scripts, and the complete tool results in
     results/. A session larger than the export limit has to be reviewed in its folder.
     """
-    names = ("context.json", "manifest.json", "transcript.jsonl", "runtime_events.jsonl", "tool_calls.jsonl", "usage.json", "status.json", "script_executions.jsonl")
+    names = ("context.json", FOCUS_FILE, "manifest.json", "transcript.jsonl", "runtime_events.jsonl", "tool_calls.jsonl", "usage.json", "status.json", "script_executions.jsonl")
     paths = [scoped_path(directory, name) for name in names]
     for folder in ("generated", "results"):
         tree = scoped_path(directory, folder, directory=True)
@@ -183,21 +185,80 @@ def resolve_run(project_root: Path, run_id: str, *, completed: bool = True) -> P
     return path
 
 
-def sessions_location(project_root: Path | None, projects_dir: Path) -> tuple[Path, Path]:
-    """Return the folder a session folder is scoped to, and the sessions path relative to it."""
+def saved_sessions(projects_dir: Path, project_root: Path | None = None, *, limit: int = 100) -> list[Path]:
+    """Return the newest session folders of the projects folder, and the older ones kept inside project_root.
+
+    Session folder names begin with their UTC creation time, so sorting by name puts the newest first.
+    """
+    folders = []
+    for base, sessions in ((projects_dir, WORKSPACE_SESSIONS), (project_root, PROJECT_SESSIONS)):
+        if base is None:
+            continue
+        root = scoped_path(base, sessions, directory=True)
+        if root.is_dir():
+            folders.extend(path for path in root.iterdir() if path.is_dir() and not path.is_symlink())
+    return sorted(folders, key=lambda path: path.name, reverse=True)[:limit]
+
+
+def session_title(directory: Path, limit: int = 80) -> str:
+    """Return the session's creation time and its first question, for a list of saved conversations."""
+    stamp = directory.name.split("_", 1)[0]
+    try:
+        label = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        label = directory.name
+    try:
+        with scoped_path(directory, "transcript.jsonl").open("rb") as handle:
+            first = json.loads(handle.readline(64 * 1024) or b"{}")
+        question = " ".join(str(first.get("text", "")).split()) if first.get("role") == "user" else ""
+    except (AgentError, OSError, ValueError, AttributeError):
+        question = ""
+    if len(question) > limit:
+        question = question[:limit].rstrip() + "…"
+    return f"{label}  ·  {question}" if question else label
+
+
+def _validated_focus(project_root: Path | None, run_ids: tuple[str, ...]) -> tuple[Path | None, tuple[str, ...]]:
+    """Resolve a focus project and check its selected runs, or refuse the selection."""
+    root = None
     if project_root is not None:
-        return project_root, PROJECT_SESSIONS
-    return projects_dir, WORKSPACE_SESSIONS
+        root = project_root.expanduser().resolve(strict=True)
+        read_json(scoped_path(root, PROJECT_FILE))
+    run_ids = tuple(run_ids)
+    if len(run_ids) > 2 or len(set(run_ids)) != len(run_ids) or (run_ids and root is None):
+        raise AgentError("INVALID_SELECTION", "Select at most two different completed runs of the open project.")
+    for run_id in run_ids:
+        resolve_run(root, run_id)
+    return root, run_ids
+
+
+def _surviving_focus(project_root: Path | None, run_ids: tuple[str, ...]) -> tuple[Path | None, tuple[str, ...]]:
+    """Return the part of a saved focus that still exists, so a deleted project or run leaves a session readable."""
+    try:
+        root, _ = _validated_focus(project_root, ())
+    except (AgentError, OSError):
+        return None, ()
+    if root != project_root:
+        return None, ()
+    surviving = []
+    for run_id in dict.fromkeys(run_ids):
+        try:
+            resolve_run(root, run_id)
+            surviving.append(run_id)
+        except AgentError:
+            continue
+    return root, tuple(surviving)
 
 
 @dataclass(frozen=True)
 class SessionContext:
-    """The record of one conversation, written once and never amended.
+    """The record of one conversation. context.json is written once and never amended.
 
     Creating a context is the moment the route is decided, before any project text can reach a runtime.
-    project_root is the project that was open in GridLens, or None, and run_ids are the runs selected
-    there. Both only tell the agent where to start: tools may name any project and any run. Changing the
-    model or the runtime means starting a new session.
+    Changing the model or the runtime means starting a new session. project_root is the project open in
+    GridLens, or None, and run_ids are the runs selected there. They are the conversation's focus, not a
+    limit: tools may name any project and any run, and `refocus` moves the focus to another project or
+    other runs between turns, so one conversation can create, run, and compare several projects.
     """
 
     project_root: Path | None
@@ -222,6 +283,18 @@ class SessionContext:
             return self.project_root.parent
         raise AgentError("NO_PROJECTS_FOLDER", "Start a new session; this one records no projects folder.")
 
+    def refocus(self, project_root: Path | None, run_ids: tuple[str, ...]) -> "SessionContext":
+        """Record a new project and runs in focus for the next turn, and return the context that has them.
+
+        The focus is written to focus.json, which `load` applies over the fields context.json began with,
+        so the tool server of the next turn sees it. The route, runtime, and model do not change.
+        """
+        root, run_ids = _validated_focus(project_root, run_ids)
+        if (root, run_ids) == (self.project_root, self.run_ids):
+            return self
+        write_json(scoped_path(self.directory, FOCUS_FILE), {"project_root": str(root) if root else None, "run_ids": list(run_ids), "updated_at": timestamp()})
+        return replace(self, project_root=root, run_ids=run_ids)
+
     def run(self, run_id: str, *, completed: bool = True) -> Path:
         """Resolve a run of the session's project to its folder, or refuse the request."""
         if self.project_root is None:
@@ -233,18 +306,13 @@ class SessionContext:
         cls, project_root: Path | None, run_ids: tuple[str, ...], model: str, endpoint: str,
         *, runtime: str = DEFAULT_PROVIDER, remote_acknowledged: bool = False, projects_dir: Path | None = None,
     ) -> "SessionContext":
-        """Create the session folder and write its immutable record.
+        """Create the session folder in the projects folder and write its immutable record.
 
-        project_root may be None, for a conversation started before any project is open. The session
-        folder then lives in the projects folder, and the selected runs must be empty.
+        project_root may be None, for a conversation started before any project is open, and the selected
+        runs must then be empty.
         """
         projects = (projects_dir or default_projects_dir()).expanduser().resolve()
-        root = None
-        if project_root is not None:
-            root = project_root.expanduser().resolve(strict=True)
-            read_json(scoped_path(root, PROJECT_FILE))
-        if len(run_ids) > 2 or len(set(run_ids)) != len(run_ids) or (run_ids and root is None):
-            raise AgentError("INVALID_SELECTION", "Select at most two different completed runs of the open project.")
+        root, run_ids = _validated_focus(project_root, run_ids)
         if not model or len(model) > 256:
             raise AgentError("INVALID_MODEL", "Select a model for the chosen runtime.")
         # The route is decided here, before any user text or project name reaches a runtime process.
@@ -257,12 +325,9 @@ class SessionContext:
             endpoint = local_endpoint(endpoint)
             remote_acknowledged = False
         identifier = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ_") + uuid4().hex[:12]
-        base, sessions = sessions_location(root, projects)
-        base.mkdir(parents=True, exist_ok=True)
-        directory = scoped_path(base, sessions / identifier, directory=True)
-        context = cls(root, tuple(run_ids), model, endpoint, directory, identifier, runtime, route, remote_acknowledged, projects)
-        for run_id in run_ids:
-            context.run(run_id)
+        projects.mkdir(parents=True, exist_ok=True)
+        directory = scoped_path(projects, WORKSPACE_SESSIONS / identifier, directory=True)
+        context = cls(root, run_ids, model, endpoint, directory, identifier, runtime, route, remote_acknowledged, projects)
         directory.mkdir(parents=True, mode=0o700)
         os.chmod(directory, 0o700)
         value = asdict(context)
@@ -273,9 +338,11 @@ class SessionContext:
 
     @classmethod
     def load(cls, path: Path) -> "SessionContext":
-        """Load a context file, re-validating every field before trusting it.
+        """Load a context file and the latest focus, re-validating every field before trusting it.
 
-        A record written before sessions named their projects folder uses the project's parent folder.
+        A record written before sessions named their projects folder uses the project's parent folder. A
+        session folder is either in the projects folder or, for an older session, inside the project it
+        began with.
         """
         if path.is_symlink() or not path.is_file():
             raise AgentError("INVALID_SESSION", "Start a new session from the Agent tab.")
@@ -301,14 +368,21 @@ class SessionContext:
                 or len(context.run_ids) > 2 or (context.run_ids and root is None)
             ):
                 raise ValueError
-            base, sessions = sessions_location(root, projects)
-            if context.directory != scoped_path(base, sessions / context.session_id, directory=True):
-                raise ValueError
+            locations = [scoped_path(projects, WORKSPACE_SESSIONS / context.session_id, directory=True)]
             if root is not None:
-                read_json(scoped_path(root, PROJECT_FILE))
-            for run_id in context.run_ids:
-                context.run(run_id)
-            return context
+                locations.append(scoped_path(root, PROJECT_SESSIONS / context.session_id, directory=True))
+            if context.directory not in locations:
+                raise ValueError
+            run_ids = context.run_ids
+            focus_path = scoped_path(context.directory, FOCUS_FILE)
+            if focus_path.exists():
+                focus = read_json(focus_path)
+                root = Path(focus["project_root"]) if focus.get("project_root") else None
+                run_ids = tuple(str(run_id) for run_id in focus["run_ids"])
+                if (root is not None and not root.is_absolute()) or len(run_ids) > 2 or (run_ids and root is None):
+                    raise ValueError
+            root, run_ids = _surviving_focus(root, run_ids)
+            return replace(context, project_root=root, run_ids=run_ids)
         except (KeyError, TypeError, ValueError) as exc:
             raise AgentError("INVALID_SESSION", "The session context is invalid; start a new session.") from exc
 

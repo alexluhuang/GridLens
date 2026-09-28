@@ -120,8 +120,7 @@ def test_list_and_read_project_files(project_files, agent_context):
     assert kinds["runs/run_a/work/vmag_mm.txt"] == "gridpack_table"
     assert kinds["runs/run_a/work/input.xml"] == "xml"
     assert not any(path.startswith("agent/") for path in kinds)
-    sessions = project_files.list_files(folder="agent", pattern="context.json")["data"]["rows"]
-    assert [Path(row["absolute_path"]) for row in sessions] == [agent_context.directory / "context.json"]
+    assert project_files.list_files(folder="agent", pattern="context.json")["data"]["rows"] == []
     absolute = project_files.list_files(folder=str(agent_context.directory), pattern="context.json")["data"]["rows"]
     assert [Path(row["absolute_path"]) for row in absolute] == [agent_context.directory / "context.json"]
     flat = project_files.read_file("runs/run_a/work/case_flat.csv", limit=5)["data"]

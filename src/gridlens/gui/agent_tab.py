@@ -1,9 +1,10 @@
 """The Agent tab: a conversation with the planning agent about GridLens projects, runs, and files.
 
 A conversation can start with or without a project open. The open project and the runs selected here are
-where the agent starts; its tools can reach any project in the projects folder, create new ones, and start
-runs and analyses. After each turn the tab emits `turn_finished`, so the main window can refresh the run
-lists the agent may have changed.
+where each turn starts; its tools can reach any project in the projects folder, create new ones, and start
+runs and analyses. Opening another project or selecting other runs keeps the conversation and moves the
+next turn there, and the saved conversations of every project are listed together. After each turn the tab
+emits `turn_finished`, so the main window can refresh the run lists the agent may have changed.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from gridlens.agent.hermes import DEFAULT_ENDPOINT
 from gridlens.agent.policy import AgentError
 from gridlens.agent.providers import DESCRIPTORS, create_adapter, descriptor
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
-from gridlens.agent.session import SessionContext, export_session, scoped_path, sessions_location
+from gridlens.agent.session import SessionContext, export_session, saved_sessions, scoped_path, session_title
 from gridlens.agent.tools import TOOL_NAMES
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project
@@ -79,6 +80,8 @@ class AgentTab(QWidget):
         super().__init__()
         self.settings = settings or AppSettings.load()
         self.project: Project | None = None
+        # A project opened while a turn or an analysis runs, shown once it ends.
+        self._pending_project: Project | None = None
         self.controller: AgentController | None = None
         self.worker: AgentWorker | None = None
         self.probe_worker: RuntimeProbe | None = None
@@ -270,8 +273,9 @@ class AgentTab(QWidget):
         buttons.addStretch(1)
         composer.addLayout(buttons)
         layout.addLayout(composer)
-        for combo in (self.model_combo, self.run_combo, self.compare_combo):
-            combo.currentIndexChanged.connect(self.new_session)
+        self.model_combo.currentIndexChanged.connect(self.new_session)
+        for combo in (self.run_combo, self.compare_combo):
+            combo.currentIndexChanged.connect(self.update_controls)
         self.model_combo.editTextChanged.connect(self.new_session)
         self.runtime_combo.currentIndexChanged.connect(self.provider_changed)
         self.remote_acknowledgement.toggled.connect(self.update_controls)
@@ -303,9 +307,14 @@ class AgentTab(QWidget):
         self.audit_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
 
     def set_project(self, project: Project) -> None:
-        """Show a project and its runs when neither worker holds the current session."""
+        """Show a project and its runs, keeping the conversation; its next turn starts in this project.
+
+        While a turn or an analysis runs, the project is shown once it ends.
+        """
         if not self._can_retarget():
+            self._pending_project = project
             return
+        self._pending_project = None
         if self.project is not None and self.project.root_dir == project.root_dir:
             self.refresh_runs()
             return
@@ -316,8 +325,12 @@ class AgentTab(QWidget):
         self.run_combo.clear()
         self.run_combo.blockSignals(False)
         self.refresh_runs()
-        self.new_session()
         self.refresh_history()
+
+    def _show_pending_project(self) -> None:
+        """Show the project opened while a worker ran, once neither worker holds the session."""
+        if self._pending_project is not None and self._can_retarget():
+            self.set_project(self._pending_project)
 
     def refresh_runs(self, select_run: Path | None = None) -> None:
         """Refresh completed run choices without changing an active turn's scope."""
@@ -345,8 +358,6 @@ class AgentTab(QWidget):
         self.compare_combo.setCurrentIndex(max(0, self.compare_combo.findData(comparison)))
         for combo in (self.run_combo, self.compare_combo):
             combo.blockSignals(False)
-        if previous != self.run_combo.currentData():
-            self.new_session()
         self.update_controls()
 
     def select_run(self, run_dir: object) -> None:
@@ -355,7 +366,7 @@ class AgentTab(QWidget):
             self.refresh_runs(Path(str(run_dir)))
 
     def _can_retarget(self) -> bool:
-        """Return whether a new project or run can replace the current session."""
+        """Return whether the project or runs shown here can change, which they cannot while a worker runs."""
         return self.worker is None and self.analysis_worker is None
 
     def provider_changed(self, *_args, probe: bool = True) -> None:
@@ -452,7 +463,7 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def new_session(self, *_args) -> None:
-        """Clear the current conversation after a scope or model change."""
+        """Clear the current conversation, when asked to or after a runtime or model change."""
         if self.controller:
             self.controller.cancel()
         self.controller = None
@@ -468,13 +479,18 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def send(self) -> None:
-        """Create a session, with or without a project open, and launch one model turn for the user's prompt."""
+        """Launch one model turn for the user's prompt, in the open project and on the selected runs.
+
+        The first turn creates the session, with or without a project open. A later turn keeps the
+        conversation and moves it to the project and runs shown now; with no project open, it stays
+        where the conversation last was.
+        """
         if not self.send_button.isEnabled():
             return
         prompt = self.input.toPlainText().strip()
         try:
+            run_ids = self._selected_runs()
             if self.controller is None:
-                run_ids = tuple(dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value))
                 context = SessionContext.create(
                     self.project.root_dir if self.project else None, run_ids, self.model_combo.currentText(), self.runtime_status.endpoint,
                     runtime=self.runtime_combo.currentData(), remote_acknowledged=self.remote_acknowledgement.isChecked(),
@@ -482,6 +498,8 @@ class AgentTab(QWidget):
                 )
                 self.controller = AgentController(context, create_adapter(context.runtime, context.endpoint))
                 self.session_directory = context.directory
+            elif self.project is not None:
+                self.controller.refocus(self.project.root_dir, run_ids)
             self.controller.cancelled.clear()
             self._draft_label = None
             self._streamed_chars = 0
@@ -500,6 +518,10 @@ class AgentTab(QWidget):
         except (AgentError, OSError) as exc:
             self.activity.appendPlainText(str(exc))
             self.conversation.add_message("notice", str(exc))
+
+    def _selected_runs(self) -> tuple[str, ...]:
+        """Return the selected run and comparison run of the open project, without blanks or repeats."""
+        return tuple(dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value))
 
     def on_event(self, event: RuntimeEvent) -> None:
         """Place each runtime step in the active chat turn and refresh audited source details."""
@@ -591,6 +613,7 @@ class AgentTab(QWidget):
             worker.deleteLater()
         self.refresh_runs()
         self.refresh_history()
+        self._show_pending_project()
         self.update_controls()
         self.turn_finished.emit()
 
@@ -619,11 +642,10 @@ class AgentTab(QWidget):
         model = self.model_combo.currentText().strip()
         model_ready = not descriptor(self.runtime_combo.currentData()).enumerates_models or self.runtime_status is not None and model in self.runtime_status.models
         context = self.controller.context if self.controller else None
-        selected_runs = tuple(dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value))
+        # The project and runs may differ from the session's: the next turn moves the session to them.
         scope_matches = context is None or (
             context.runtime == self.runtime_combo.currentData() and context.model == model
             and context.endpoint == (self.runtime_status.endpoint if self.runtime_status else "")
-            and context.run_ids == selected_runs
         )
         self.send_button.setEnabled(bool(not busy and not probing and ready and acknowledged and model_ready and scope_matches and model and prompt and len(prompt) <= MAX_PROMPT_CHARS))
         self.folder_button.setEnabled(self.session_directory is not None)
@@ -661,8 +683,7 @@ class AgentTab(QWidget):
         if not self.build_button.isEnabled() or not self.project:
             return
         try:
-            run_ids = dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value)
-            runs = [scoped_path(self.project.root_dir, Path("runs") / run_id, directory=True) for run_id in run_ids]
+            runs = [scoped_path(self.project.root_dir, Path("runs") / run_id, directory=True) for run_id in self._selected_runs()]
             warning = next((text for run in runs if (text := cpu_dask_fallback_warning(run))), "")
             if warning:
                 QMessageBox.warning(self, "CPU Dask fallback", warning)
@@ -681,24 +702,25 @@ class AgentTab(QWidget):
         self.analysis_worker = None
         if worker:
             worker.deleteLater()
+        self._show_pending_project()
         self.update_controls()
 
     def refresh_history(self) -> None:
-        """List saved sessions and keep the displayed session selected after a completed turn."""
+        """List saved sessions of every project and keep the displayed session selected after a completed turn.
+
+        Older sessions kept inside the open project are listed with them.
+        """
         selected = str(self.session_directory) if self.session_directory else ""
         self.history_combo.clear()
         self.history_combo.addItem("New conversation", "")
-        base, sessions = sessions_location(self.project.root_dir if self.project else None, self.settings.default_projects_dir)
         try:
-            root = scoped_path(base, sessions, directory=True)
-            for path in sorted(root.iterdir(), reverse=True)[:100] if root.exists() else []:
-                if path.is_dir() and not path.is_symlink():
-                    self.history_combo.addItem(path.name, str(path))
-        except AgentError:
-            self.activity.appendPlainText("The project session folder is not a regular directory.")
+            for path in saved_sessions(self.settings.default_projects_dir, self.project.root_dir if self.project else None):
+                self.history_combo.addItem(session_title(path), str(path))
+        except (AgentError, OSError):
+            self.activity.appendPlainText("A session folder is not a regular directory.")
         index = self.history_combo.findData(selected)
         if selected and index < 0 and Path(selected).is_dir():
-            self.history_combo.addItem(Path(selected).name, selected)
+            self.history_combo.addItem(session_title(Path(selected)), selected)
             index = self.history_combo.count() - 1
         self.history_combo.setCurrentIndex(index if index >= 0 else 0)
 
@@ -738,12 +760,17 @@ class AgentTab(QWidget):
         self._shown_sources = len(records)
         self.update_sources()
         self.activity.setPlainText("Saved session loaded. Ask a follow-up once its runtime is ready.")
+        if self.project is not None and context.project_root not in (None, self.project.root_dir):
+            self.activity.appendPlainText(f"This conversation was last in {context.project_root}. The next question goes to {self.project.name}, the project open now.")
         self.history_combo.setCurrentIndex(index)
         self.check_runtime()
         self.update_controls()
 
     def _restore_session_controls(self, context: SessionContext) -> None:
-        """Apply context's provider, model, endpoint, and runs before open_history enables follow-ups."""
+        """Apply context's provider, model, endpoint, and runs before open_history enables follow-ups.
+
+        The runs are selected only when the conversation was last in the project open now.
+        """
         self.runtime_combo.blockSignals(True)
         self.runtime_combo.setCurrentIndex(self.runtime_combo.findData(context.runtime))
         self.runtime_combo.blockSignals(False)
@@ -754,6 +781,8 @@ class AgentTab(QWidget):
             self.model_combo.addItem(context.model)
         self.model_combo.setCurrentText(context.model)
         self.model_combo.blockSignals(False)
+        if self.project is None or context.project_root != self.project.root_dir:
+            return
         for combo, run_id in ((self.run_combo, context.run_ids[0] if context.run_ids else ""),
                               (self.compare_combo, context.run_ids[1] if len(context.run_ids) > 1 else "")):
             combo.blockSignals(True)

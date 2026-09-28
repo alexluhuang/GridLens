@@ -10,7 +10,7 @@ from zipfile import ZipFile
 import pytest
 
 from gridlens.agent.policy import AgentError
-from gridlens.agent.scripts import execute_proposal, read_proposal, sandbox_command, save_proposal
+from gridlens.agent.scripts import execute_proposal, proposal_run, read_proposal, sandbox_command, save_proposal
 from gridlens.agent.session import export_session
 from gridlens.agent.tools import ToolService
 
@@ -29,6 +29,19 @@ def test_proposal_never_executes_and_requires_exact_review(agent_context):
     with pytest.raises(AgentError, match="changed"):
         read_proposal(agent_context, proposal["proposal_id"])
     assert service.propose_analysis_script("run_a", "Invalid", "if")["error"]["code"] == "INVALID_PROPOSAL"
+
+
+def test_proposal_reads_its_own_project_after_the_session_moves(agent_context, tmp_path):
+    """A proposal names the project it was proposed in, so moving the session elsewhere cannot change its run."""
+    proposal = ToolService(agent_context).propose_analysis_script("run_a", "Count records", "print(1)")["data"]["rows"][0]
+    assert proposal["project_root"] == str(agent_context.project_root)
+    other = tmp_path / "Other_Study"
+    (other / "runs/run_a").mkdir(parents=True)
+    (other / "project.json").write_text(json.dumps({"name": "Other Study"}))
+    (other / "runs/run_a/status.json").write_text('{"status": "completed"}')
+    moved = agent_context.refocus(other, ("run_a",))
+    record, _, _ = read_proposal(moved, proposal["proposal_id"])
+    assert proposal_run(moved, record) == agent_context.run("run_a")
 
 
 def test_proposal_shows_the_sandbox_paths_and_flags_missing_ones(agent_context):
