@@ -7,7 +7,6 @@ import traceback
 from PySide6.QtCore import QThread, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
@@ -111,8 +110,6 @@ class RunTab(QWidget):
         configure_form_layout(form)
         self.image = QLineEdit(settings.default_gridpack_image)
         self.image.setToolTip("Docker image used to run GridPACK.")
-        self.executable = QLineEdit(settings.default_executable)
-        self.executable.setToolTip("Executable path or command inside the GridPACK container.")
         self.mpi_processes = QSpinBox()
         self.mpi_processes.setRange(1, 4096)
         self.mpi_processes.setValue(settings.default_mpi_processes)
@@ -129,25 +126,11 @@ class RunTab(QWidget):
         self.pull_policy.setCurrentText(settings.docker_pull_policy)
         self.pull_policy.setToolTip("Controls whether GridLens tries to pull the Docker image.")
 
-        self.network_none = QCheckBox("Disable network inside the run container")
-        self.network_none.setChecked(settings.docker_network_mode == "none")
-        self.network_none.setToolTip("Run the container with Docker network mode set to none.")
-        self.use_platform = QCheckBox("Use detected platform flag")
-        self.use_platform.setChecked(settings.use_platform_flag)
-        self.use_platform.setToolTip("Pass the detected Docker platform flag when needed.")
-        self.use_host_user = QCheckBox("Write output files as the current Linux user")
-        self.use_host_user.setChecked(settings.use_host_user)
-        self.use_host_user.setToolTip("Map container writes to the current Linux user.")
-
         form.addRow("Docker image", self.image)
-        form.addRow("GridPACK executable", self.executable)
         form.addRow("MPI processes", self.mpi_processes)
         form.addRow("Docker pull policy", self.pull_policy)
         form.addRow("Memory limit", self.memory_limit)
         form.addRow("Extra Docker args", self.extra_args)
-        form.addRow("", self.network_none)
-        form.addRow("", self.use_platform)
-        form.addRow("", self.use_host_user)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -355,12 +338,8 @@ class RunTab(QWidget):
     def _run_form_values(self) -> RunFormValues:
         return RunFormValues(
             image=self.image.text(),
-            executable=self.executable.text(),
             mpi_processes=self.mpi_processes.value(),
             pull_policy=self.pull_policy.currentText(),
-            network_disabled=self.network_none.isChecked(),
-            use_platform_flag=self.use_platform.isChecked(),
-            use_host_user=self.use_host_user.isChecked(),
             memory_limit=self.memory_limit.text(),
             extra_docker_args=self.extra_args.text(),
         )

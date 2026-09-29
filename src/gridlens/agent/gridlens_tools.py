@@ -145,10 +145,8 @@ def _user_turns(directory: Path) -> int:
 def _run_settings(settings: AppSettings) -> dict:
     """Return the Run tab's saved settings that start_run uses when the agent gives none."""
     return {
-        "image": settings.default_gridpack_image, "executable": settings.default_executable,
-        "mpi_processes": settings.default_mpi_processes, "pull_policy": settings.docker_pull_policy,
-        "network_disabled": settings.docker_network_mode == "none", "use_platform_flag": settings.use_platform_flag,
-        "use_host_user": settings.use_host_user, "memory_limit": settings.memory_limit, "extra_docker_args": settings.extra_docker_args,
+        "image": settings.default_gridpack_image, "mpi_processes": settings.default_mpi_processes,
+        "pull_policy": settings.docker_pull_policy, "memory_limit": settings.memory_limit, "extra_docker_args": settings.extra_docker_args,
     }
 
 
@@ -314,14 +312,14 @@ class GridLensTools(ToolBase):
         return {"rows": [{"setting": name, "value": value} for name, value in changes.items()], "xml_file": str(xml), "xml_text": xml.read_text(encoding="utf-8")}
 
     @tool
-    def start_run(self, project: str = "", image: str = "", executable: str = "", mpi_processes: int = 0, pull_policy: str = "", memory_limit: str = "", extra_docker_args: str = "", notes: str = "") -> dict:
-        """Start a GridPACK run of a project in Docker as a background job and return its run_id and job_id. Blank settings use the Run tab's saved settings."""
+    def start_run(self, project: str = "", image: str = "", mpi_processes: int = 0, pull_policy: str = "", memory_limit: str = "", extra_docker_args: str = "", notes: str = "") -> dict:
+        """Start a GridPACK contingency analysis (ca.x) of a project in Docker as a background job and return its run_id and job_id. Blank settings use the Run tab's saved settings."""
         root = self._project(project)
         project_record, data = _project_record(root)
         if not data.xml_file_name:
             raise AgentError("NO_CONFIGURATION", "The project has no XML configuration. Save one with configure_run first.")
         saved = _run_settings(AppSettings.load())
-        requested = {"image": image, "executable": executable, "mpi_processes": mpi_processes, "pull_policy": pull_policy, "memory_limit": memory_limit, "extra_docker_args": extra_docker_args}
+        requested = {"image": image, "mpi_processes": mpi_processes, "pull_policy": pull_policy, "memory_limit": memory_limit, "extra_docker_args": extra_docker_args}
         form = validate_run_form_values(RunFormValues(**{**saved, **{key: value for key, value in requested.items() if value}}))
         engine = docker_probe.docker_engine_available()
         if not engine.ok:

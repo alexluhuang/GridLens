@@ -9,26 +9,33 @@ from gridlens.core.project import ProjectData
 from gridlens.core.validation import (
     ValidationError,
     validate_docker_image,
-    validate_executable,
     validate_mpi_processes,
 )
 from gridlens.runner.gridpack_runner import GridpackRunRequest, effective_gridpack_container_name
 
 
 VALID_PULL_POLICIES = frozenset({"never", "missing", "always"})
+# GridLens runs GridPACK's contingency analysis, so every run uses its executable.
+GRIDPACK_EXECUTABLE = "ca.x"
 
 
 @dataclass(frozen=True, slots=True)
 class RunFormValues:
+    """The Run tab's settings for one GridPACK run.
+
+    Every run uses ca.x, with the container's network disabled, the detected platform flag, and output
+    files written as the current user. Those fields stay so that the form a job record saved still loads,
+    and validation resets them to these values whatever the record says.
+    """
     image: str
-    executable: str
     mpi_processes: int
     pull_policy: str
-    network_disabled: bool
-    use_platform_flag: bool
-    use_host_user: bool
     memory_limit: str = ""
     extra_docker_args: str = ""
+    executable: str = GRIDPACK_EXECUTABLE
+    network_disabled: bool = True
+    use_platform_flag: bool = True
+    use_host_user: bool = True
 
     @property
     def network_mode(self) -> str:
@@ -37,7 +44,6 @@ class RunFormValues:
 
 def validate_run_form_values(values: RunFormValues) -> RunFormValues:
     image = validate_docker_image(values.image)
-    executable = validate_executable(values.executable)
     mpi_processes = validate_mpi_processes(values.mpi_processes)
     pull_policy = values.pull_policy.strip()
     if pull_policy not in VALID_PULL_POLICIES:
@@ -46,12 +52,8 @@ def validate_run_form_values(values: RunFormValues) -> RunFormValues:
 
     return RunFormValues(
         image=image,
-        executable=executable,
         mpi_processes=mpi_processes,
         pull_policy=pull_policy,
-        network_disabled=values.network_disabled,
-        use_platform_flag=values.use_platform_flag,
-        use_host_user=values.use_host_user,
         memory_limit=values.memory_limit.strip(),
         extra_docker_args=values.extra_docker_args.strip(),
     )
@@ -60,14 +62,10 @@ def validate_run_form_values(values: RunFormValues) -> RunFormValues:
 def apply_run_form_values_to_settings(settings: AppSettings, values: RunFormValues) -> AppSettings:
     normalized = validate_run_form_values(values)
     settings.default_gridpack_image = normalized.image
-    settings.default_executable = normalized.executable
     settings.default_mpi_processes = normalized.mpi_processes
     settings.docker_pull_policy = normalized.pull_policy
-    settings.use_platform_flag = normalized.use_platform_flag
-    settings.use_host_user = normalized.use_host_user
     settings.memory_limit = normalized.memory_limit
     settings.extra_docker_args = normalized.extra_docker_args
-    settings.docker_network_mode = normalized.network_mode
     return settings
 
 
@@ -108,6 +106,7 @@ def build_sensitivity_run_request(
 
 
 __all__ = [
+    "GRIDPACK_EXECUTABLE",
     "RunFormValues",
     "apply_run_form_values_to_settings",
     "build_gridpack_run_request",

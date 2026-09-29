@@ -21,14 +21,10 @@ def _default_config_dir() -> Path:
 class AppSettings:
     app_name: str = "GridLens"
     default_gridpack_image: str = "pnnl/gridpack:latest"
-    default_executable: str = "ca.x"
     default_xml_file: str = "input.xml"
     default_mpi_processes: int = 4
     default_projects_dir: Path = field(default_factory=_default_projects_dir)
-    docker_network_mode: str = "none"
     docker_pull_policy: str = "never"
-    use_platform_flag: bool = True
-    use_host_user: bool = True
     memory_limit: str = ""
     extra_docker_args: str = ""
 

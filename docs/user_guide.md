@@ -28,10 +28,12 @@ it.
 
 1. Go to **Run**.
 2. Confirm the Docker image.
-3. Confirm the GridPACK executable, for example `ca.x` or `powerflow.x`.
-4. Choose the MPI process count.
-5. Click **Check Docker**.
-6. Click **Run GridPACK**.
+3. Choose the MPI process count.
+4. Click **Check Docker**.
+5. Click **Run GridPACK**.
+
+GridLens runs GridPACK's contingency analysis, `ca.x`, with the container's network disabled, the Docker
+platform flag matching this machine, and output files written as your user.
 
 The live log appears in the Run tab. The run folder contains:
 
