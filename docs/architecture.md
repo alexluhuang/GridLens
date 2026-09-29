@@ -205,7 +205,8 @@ one tool server.
   inputs, write the GridPACK XML, start runs, build analyses, report on runs and jobs, and stop either.
 - `agent/jobs.py`: background jobs. A GridPACK run or an analysis build runs as `gridlens --agent-job`, a
   separate process that outlives the turn. Its folder under `<project>/agent/jobs/` holds `job.json`, the
-  request and the live state, and `job.log`, a readable history the worker appends to.
+  request and the live state, and `job.log`, a readable history the worker appends to. A run job that
+  completes goes on to build the run's branch and transformer analysis, as the GUI does after a run.
 - `agent/conversation_log.py`: writes `conversation.md`, a readable record of a whole conversation, from
   the session's audit files after every turn.
 - `agent/setup.py`: finds Hermes Agent, Ollama, and the installed models, starts an installed Ollama, and,

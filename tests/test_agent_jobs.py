@@ -68,8 +68,23 @@ def test_gridpack_job_records_progress_and_outcome(agent_project, monkeypatch):
     assert (status["state"], status["result"]["return_code"]) == ("completed", 0)
     assert status["progress"]["total"] == 4
     assert status["request"]["notes"] == "from the agent"
-    assert "Completed: GridPACK exited with code 0." in (folder / "job.log").read_text()
+    assert "Completed: GridPACK exited with code 0. The branch and transformer analysis is ready." in (folder / "job.log").read_text()
     assert (seen[0].image, seen[0].mpi_processes, seen[0].network_mode, seen[0].notes) == ("pnnl/gridpack:test", 4, "none", "from the agent")
+    # A completed run goes on to prepare both analyses, as a run from the Run tab does.
+    assert (status["result"]["summaries"]["branch"]["facility_count"], status["result"]["summaries"]["transformer"]["facility_count"]) == (3, 1)
+    assert "Preparing the branch and transformer analysis." in (folder / "job.log").read_text()
+
+    import gridlens.analysis.service as service
+
+    def broken_build(*_args, **_kwargs):
+        raise RuntimeError("Traceback (most recent call last):\nValueError: run has no results")
+
+    monkeypatch.setattr(service.AnalysisService, "build", staticmethod(broken_build))
+    assert jobs.run_job(folder) == 0
+    status = json.loads((folder / "job.json").read_text())
+    # The run succeeded, so the job did too; the failed build is reported for run_analysis to retry.
+    assert (status["state"], status["result"]["analysis_error"]) == ("completed", "ValueError: run has no results")
+    assert "Preparing its analysis failed" in status["message"]
 
     def broken_run(request, log_callback=None):
         raise RuntimeError("docker is not running")

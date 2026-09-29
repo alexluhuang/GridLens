@@ -319,7 +319,7 @@ class GridLensTools(ToolBase):
 
     @tool
     def start_run(self, project: str = "", image: str = "", mpi_processes: int = 0, pull_policy: str = "", memory_limit: str = "", extra_docker_args: str = "", notes: str = "") -> dict:
-        """Start a GridPACK contingency analysis (ca.x) of a project in Docker as a background job and return its run_id and job_id. Blank settings use the Run tab's saved settings."""
+        """Start a GridPACK contingency analysis (ca.x) of a project in Docker as a background job and return its run_id and job_id. When the run completes, the job prepares its branch and transformer analysis. Blank settings use the Run tab's saved settings."""
         root = self._project(project)
         project_record, data = _project_record(root)
         if not data.xml_file_name:
@@ -334,7 +334,7 @@ class GridLensTools(ToolBase):
             raise AgentError("IMAGE_NOT_AVAILABLE", f"The image {form.image} is not on this machine and the pull policy is never. Load it first, or name an installed image.")
         run_dir = project_record.create_run_folder()
         job = jobs.start_job(root, "gridpack_run", run_dir, {"form": asdict(form), "notes": notes}, conversation=self.context.directory)
-        return {"rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "next_step": "Call get_status with this job_id and wait_seconds until the run ends."}
+        return {"rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "next_step": "Call get_status with this job_id and wait_seconds until the run ends. Once GridPACK finishes, the job also prepares the branch and transformer analysis, so the analysis tools work without run_analysis."}
 
     @tool
     def get_status(self, project: str = "", run_id: str = "", job_id: str = "", wait_seconds: int = 0, offset: int = 0, limit: int = 50) -> dict:

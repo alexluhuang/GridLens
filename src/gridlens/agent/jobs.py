@@ -16,6 +16,9 @@ Each job has a folder, `<project>/agent/jobs/<job_id>/`, holding two files:
 Jobs recorded by earlier versions of GridLens kept the state in a separate `status.json` and the worker's
 output in `output.log`; they are still read.
 
+A GridPACK run job that completes goes on to prepare the run's branch and transformer analysis, as a
+run from the Run tab does, so its results can be queried as soon as the job ends.
+
 The worker is `gridlens --agent-job <job folder>`, which runs `run_job`.
 """
 from __future__ import annotations
@@ -346,6 +349,27 @@ def _run_analysis(job: dict, folder: Path, cancelled: threading.Event) -> dict:
     return {"ok": True, "message": "The analysis cache is ready; query it with the analysis tools.", "summaries": summaries, "cpu_fallback_warning": warning}
 
 
+def _analyze_finished_run(job: dict, folder: Path, outcome: dict, cancelled: threading.Event) -> dict:
+    """Prepare the branch and transformer analysis of a run that completed, as the Run tab does.
+
+    The run has succeeded whatever happens here, so a failed build is reported in the outcome rather than
+    failing the job; run_analysis can retry it.
+    """
+    _log(folder, "GridPACK finished. Preparing the branch and transformer analysis.")
+    try:
+        analysis = _run_analysis({**job, "request": {"kinds": ["branch", "transformer"]}}, folder, cancelled)
+    except Exception as exc:
+        if cancelled.is_set():
+            return {**outcome, "message": outcome["message"] + " Preparing its analysis was stopped."}
+        _log(folder, f"Preparing the analysis failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+        detail = (str(exc).strip().splitlines() or [type(exc).__name__])[-1][:500]
+        return {**outcome, "message": outcome["message"] + " Preparing its analysis failed; run_analysis can retry it.", "analysis_error": detail}
+    return {
+        **outcome, "message": outcome["message"] + " The branch and transformer analysis is ready.",
+        "summaries": analysis["summaries"], "cpu_fallback_warning": analysis["cpu_fallback_warning"],
+    }
+
+
 def _outcome_lines(outcome: dict) -> str:
     """Describe a job's result for job.log, one line per item."""
     lines = []
@@ -367,9 +391,14 @@ def run_job(folder: Path) -> int:
     signal.signal(signal.SIGTERM, lambda *_: cancelled.set())
     _write_status(folder, "running", "Started.")
     _log(folder, f"Started the {job['kind']} job for run {job.get('run_id')} (worker pid {os.getpid()}).")
+    final = {}
     try:
         if job["kind"] == "gridpack_run":
             outcome = _run_gridpack(job, folder)
+            if outcome["ok"] and not cancelled.is_set():
+                # The record ends with how far GridPACK got, not with the analysis build's last phase.
+                final["progress"] = read_json(folder / JOB_FILE).get("progress")
+                outcome = _analyze_finished_run(job, folder, outcome, cancelled)
         elif job["kind"] == "analysis":
             outcome = _run_analysis(job, folder, cancelled)
         else:
@@ -381,7 +410,7 @@ def run_job(folder: Path) -> int:
         return 1
     state = "cancelled" if cancelled.is_set() else "completed" if outcome.pop("ok") else "failed"
     message = outcome.pop("message")
-    _write_status(folder, state, message, result=outcome)
+    _write_status(folder, state, message, result=outcome, **final)
     details = _outcome_lines(outcome)
     _log(folder, f"{state.capitalize()}: {message}" + (f"\n{details}" if details else ""))
     return 0 if state == "completed" else 1

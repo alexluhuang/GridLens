@@ -102,8 +102,10 @@ analysis build take minutes, so Clarke starts each one as a background job and w
 going after the turn ends, and even after GridLens closes; ask Clarke about it in a later turn. When a turn
 ends, the Results and Analysis tabs refresh their run lists, so a run Clarke started appears there too.
 
-A run's results have to be prepared for analysis before Clarke can read loadings from them. Ask Clarke to
-prepare the run, or use **Generate Graphs** in the Branch or Transformer Analysis tab. Questions about single
+A run's results have to be prepared for analysis before Clarke can read loadings from them. A run that
+completes, whether Clarke or the **Run** tab started it, is prepared by itself: Clarke's run job goes on to
+build the branch and transformer analysis once GridPACK finishes. For an older run, ask Clarke to prepare
+it, or use **Generate Graphs** in the Branch or Transformer Analysis tab. Questions about single
 contingencies also need the drill-down index; ask Clarke to build it.
 
 Before it stops a run, replaces an input file, or changes a project's XML, Clarke shows you what would change
