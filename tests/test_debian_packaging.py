@@ -14,6 +14,7 @@ def test_debian_control_downloads_docker_and_qt_runtime_dependencies() -> None:
     control = _read("packaging/deb/control")
 
     assert "docker.io | docker-ce" in control
+    assert "libc6 (>= @GLIBC_VERSION@)" in control
     assert "libxcb-cursor0" in control
     assert "libxkbcommon-x11-0" in control
 
@@ -31,6 +32,7 @@ def test_debian_build_script_bundles_full_python_stack() -> None:
 
     assert 'pip install -e "${ROOT_DIR}[dev,analysis]"' in build_script
     assert "dpkg --print-architecture" in build_script
+    assert "getconf GNU_LIBC_VERSION" in build_script
     assert '"${OUTPUT_DIR}/gridlens_${VERSION}_${ARCH}.deb"' in build_script
 
 

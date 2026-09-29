@@ -9,6 +9,10 @@ DIST_DIR="${GRIDLENS_BUNDLE_DIR:-${ROOT_DIR}/dist/GridLens}"
 PACKAGE_ROOT="${GRIDLENS_DEB_STAGING_DIR:-${ROOT_DIR}/build/deb/gridlens_${VERSION}_${ARCH}}"
 OUTPUT_DIR="${GRIDLENS_DEB_OUTPUT_DIR:-${ROOT_DIR}/dist}"
 VENV_DIR="${GRIDLENS_PACKAGE_VENV:-${ROOT_DIR}/.venv-packaging}"
+# The bundle's Python and PySide6 need the glibc of the build host, so the
+# package says so, and apt refuses it on an older system rather than letting
+# it fail at startup. Ubuntu 24.04 has glibc 2.39.
+GLIBC_VERSION="${GRIDLENS_DEB_GLIBC_VERSION:-$(getconf GNU_LIBC_VERSION | awk '{print $2}')}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-${ROOT_DIR}/build/matplotlib-cache}"
 mkdir -p "${MPLCONFIGDIR}"
 
@@ -37,6 +41,7 @@ cp -R "${DIST_DIR}/." "${PACKAGE_ROOT}/opt/gridlens/"
 sed \
   -e "s/^Version:.*/Version: ${VERSION}/" \
   -e "s/^Architecture:.*/Architecture: ${ARCH}/" \
+  -e "s/@GLIBC_VERSION@/${GLIBC_VERSION}/" \
   "${ROOT_DIR}/packaging/deb/control" > "${PACKAGE_ROOT}/DEBIAN/control"
 cp "${ROOT_DIR}/packaging/deb/postinst" "${PACKAGE_ROOT}/DEBIAN/postinst"
 cp "${ROOT_DIR}/packaging/deb/postrm" "${PACKAGE_ROOT}/DEBIAN/postrm"

@@ -5,6 +5,7 @@ Priority: optional
 Architecture: any
 Maintainer: GridLens Contributors
 Depends: adduser,
+ libc6 (>= @GLIBC_VERSION@),
  docker.io | docker-ce,
  desktop-file-utils,
  hicolor-icon-theme,
