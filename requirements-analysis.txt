@@ -1,14 +1,17 @@
-cuda-toolkit>=13.3,<14
-cudf-cu13>=26.6,<27
-cupy-cuda13x>=14.1,<15
-dask-cuda>=26.6,<27
-dask-cudf-cu13>=26.6,<27
+# The analysis stack of the `analysis` extra in pyproject.toml, which this file mirrors.
+# RAPIDS/cuDF is part of GridLens full functionality on Linux and must be present in
+# packaging builds for DGX Spark. It publishes Linux wheels only, so Windows installs
+# get the CPU stack alone.
 matplotlib>=3.8
-numba-cuda>=0.28
-nvidia-nccl-cu13>=2.27,<3
-pandas>=2.2
-dask[dataframe]>=2024.1
-distributed>=2024.1
-pyarrow>=15
-# RAPIDS/cuDF is part of GridLens full functionality and must be present in
-# packaging builds for DGX Spark.
+numpy>=1.26,<2.5
+pandas>=2.2,<2.4
+dask[dataframe]==2026.1.1
+distributed==2026.1.1
+pyarrow>=15,<24
+cuda-toolkit>=13.3,<14; sys_platform == 'linux'
+cudf-cu13==26.6.*; sys_platform == 'linux'
+cupy-cuda13x>=14.1,<15; sys_platform == 'linux'
+dask-cuda==26.6.*; sys_platform == 'linux'
+dask-cudf-cu13==26.6.*; sys_platform == 'linux'
+numba-cuda>=0.28; sys_platform == 'linux'
+nvidia-nccl-cu13>=2.27,<3; sys_platform == 'linux'

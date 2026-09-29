@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import tomllib
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - used on Python 3.10.
-    import tomli as tomllib
+from packaging.requirements import Requirement
 
 import gridlens
 
@@ -39,6 +37,47 @@ def test_runtime_requirements_mirror_project_dependencies() -> None:
     ]
 
     assert requirements == metadata["dependencies"]
+
+
+def _requirement_lines(relative_path: str) -> list[str]:
+    text = (ROOT / relative_path).read_text(encoding="utf-8")
+    lines = (line.strip() for line in text.splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def test_analysis_requirements_mirror_the_analysis_extra() -> None:
+    extras = _project_metadata()["optional-dependencies"]
+
+    mirrored = _requirement_lines("requirements-analysis.txt")
+    assert mirrored == extras["analysis"]
+
+
+def test_python_floor_is_the_one_rapids_and_numpy_need() -> None:
+    metadata = _project_metadata()
+
+    assert metadata["requires-python"] == ">=3.11"
+    classifiers = metadata["classifiers"]
+    assert "Programming Language :: Python :: 3.10" not in classifiers
+
+
+def test_gpu_extras_add_linux_only_rapids_to_the_cpu_stack() -> None:
+    extras = _project_metadata()["optional-dependencies"]
+    cpu = extras["analysis-cpu"]
+
+    for name in ("analysis", "analysis-cu12"):
+        stack = extras[name]
+        assert stack[: len(cpu)] == cpu, name
+        for text in stack[len(cpu):]:
+            marker = Requirement(text).marker
+            assert marker is not None, text
+            assert marker.evaluate({"sys_platform": "linux"}), text
+            assert not marker.evaluate({"sys_platform": "win32"}), text
+
+
+def test_cpu_stack_installs_on_every_platform() -> None:
+    cpu = _project_metadata()["optional-dependencies"]["analysis-cpu"]
+
+    assert all(Requirement(text).marker is None for text in cpu)
 
 
 def test_readme_local_documentation_links_exist() -> None:
