@@ -79,8 +79,9 @@ whose Agent tab fails only at MCP startup.
 The operator or the user supplies the rest:
 
 - The GridPACK solver image, through an approved internal registry or an offline tarball.
-- The Hermes Agent CLI, Ollama, and any local model. The user installs these. GridLens never installs a CLI,
-  signs a user in, or downloads a model.
+- The Hermes Agent CLI, Ollama, and any local model. The Agent tab offers to install them when they are
+  missing, from their official sites and only after the user agrees; see [Clarke](clarke.md). On an
+  offline machine, install them from approved media instead. GridLens never signs a user in.
 - The generated-analysis sandbox image. GridLens runs it with `--pull=never` and requires its immutable
   `sha256` image ID, so it has to exist locally on the machine running GridLens. Build it from the recipe
   under `packaging/agent/` before you open CEII inputs, and see [CEII security notes](security_ceii.md).

@@ -8,10 +8,11 @@ The Sensitivity Analysis tab runs what-if studies: it adds, removes, or changes 
 branches in a copy of a PSS/E RAW case of version 33, 34, or 35, and runs GridPACK N-1 analysis on the copy.
 It rewrites only the lines you edit, and the project's case stays as it is.
 
-The app also has an optional Agent tab: a planning agent that answers questions about any project file in
-plain language, and can set up projects, configure and start runs, and build analyses for you. It drives an
-AI command-line tool that you install yourself, and it only uses a model served on a loopback address.
-GridLens ships no model and no credentials.
+The app also has an optional Agent tab: Clarke, a planning agent that answers questions about any project
+file in plain language, and can set up projects, configure and start runs, and build analyses for you. It
+runs Hermes Agent against a model served by Ollama on this machine, and never sends project data online.
+GridLens ships no model and no credentials; the first time you open the tab, it offers to install Hermes,
+Ollama, and a model for you. See [Clarke, the planning agent](docs/clarke.md).
 
 The intended deployment target is NVIDIA DGX Spark on DGX OS 7, which is Ubuntu 24.04 on ARM64. On other
 architectures, the app detects the host and passes the matching Docker platform flag.

@@ -3,9 +3,16 @@
 GridLens runs locally with CEII data. It has no cloud services, no telemetry, no external crash reports, and
 no remote logging.
 
-GridLens ships no model, no inference engine, and no provider credentials, and it never installs a CLI or
-signs a user in. The optional Agent tab drives a CLI that the user installed, and only against an inference
-endpoint that resolves to loopback. Hosted providers are disabled in this build.
+GridLens ships no model, no inference engine, and no provider credentials, and it never signs a user in.
+The optional Agent tab drives the Hermes Agent CLI, only against an inference endpoint that resolves to
+loopback. Hosted providers are disabled in this build.
+
+When Hermes Agent, Ollama, or a model is missing, the Agent tab offers to install it, and installs nothing
+until the user agrees. It downloads Hermes's official installer from hermes-agent.nousresearch.com and runs
+it at the one validated commit, downloads Ollama from ollama.com into the user's data folder, and has the
+local Ollama service pull models from the Ollama library. These downloads send no project data. On a
+machine that must stay offline, install the three from approved media beforehand; GridLens then finds them
+and downloads nothing.
 
 ## Defaults
 
@@ -48,8 +55,9 @@ The Agent tab is optional. These controls apply when someone uses it.
 
 ### Session folders
 
-Sessions live in `<projects folder>/.gridlens-agent/sessions/<UTC timestamp>_<suffix>/`, outside any one
-project, because one conversation can work in several. Sessions written by earlier versions live in
+Sessions live in `<projects folder>/Clarke conversations/<UTC timestamp>_<suffix>/`, outside any one
+project, because one conversation can work in several. Sessions that earlier versions wrote to the hidden
+`<projects folder>/.gridlens-agent/sessions/` are moved there when the Agent tab opens; older ones live in
 `<project>/agent/sessions/`. They hold CEII-derived material, so treat them as CEII. Each session folder
 holds:
 
@@ -68,11 +76,12 @@ holds:
 - `generated/executions/*/script.py`, `result.json`, and `output.txt`, the approved bytes and the sandbox
   output.
 - `script_executions.jsonl`.
+- `conversation.md`, a readable copy of all of the above in order, including every tool result in full.
 
 Directories are mode `0700` and files are mode `0600`. Session folders inherit the projects folder's
 encryption, backup, retention, and deletion rules, so apply to the projects folder the rules its projects
 need, and deleting a project does not delete the conversations about it. Nothing leaves the projects folder
-unless the user chooses **Export session audit**. That archive is an unencrypted ZIP written `0600`, it is a sensitive artifact, and it needs
+unless the user chooses **Export session (ZIP)…**. That archive is an unencrypted ZIP written `0600`, it is a sensitive artifact, and it needs
 the same handling as any other CEII material. Sessions persist until an operator deletes the folder, under
 the same approved deletion procedure as run folders. Project-level `exports/` sits outside the session and
 outside the mounted run folder.
@@ -81,8 +90,9 @@ outside the mounted run folder.
 
 A GridPACK run or an analysis build that the agent starts runs as a separate GridLens process, which keeps
 running after the turn ends and after GridLens closes. Each job has a folder,
-`<project>/agent/jobs/<job id>/`, holding `job.json` (the request and the worker's process ID),
-`status.json`, and `output.log`. Treat job folders as CEII, like session folders. To stop a job, ask the
+`<project>/agent/jobs/<job id>/`, holding `job.json` (the request, the conversation that started it, the
+worker's process ID, and the job's state and result) and `job.log` (a timestamped history of the job and
+anything the worker printed). Treat job folders as CEII, like session folders. To stop a job, ask the
 agent to cancel it, or stop a run's container with `docker stop gridlens-<run id>`.
 
 ### Egress audit scope

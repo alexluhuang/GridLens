@@ -98,14 +98,22 @@ On a minimal Ubuntu system, Qt may also need desktop libraries that IT installs 
 
 ## Agent tab
 
-The tab states the remedy for most problems in its diagnostics line. The entries here cover what it cannot
-tell you from inside the app.
+The tab states the remedy for most problems in the line above the conversation, next to **Set up
+Clarke…**. The entries here cover what it cannot tell you from inside the app.
+
+### Set up Clarke stops while installing
+
+The window's log shows the installer's own output. The Hermes installer needs `git`, and unpacking Ollama
+on Linux needs `zstd`; install them (`sudo apt install git zstd`) and press the install button again. Both
+downloads need internet access to hermes-agent.nousresearch.com, github.com, and ollama.com. On a machine
+without it, install Hermes Agent 0.21.4, Ollama, and a model from approved media, and GridLens uses them.
 
 ### The runtime check reports a version it does not support
 
 Each adapter is pinned to the CLI version it was tested against and refuses anything else rather than guess
 at a changed output format. Upgrading Hermes therefore disables the tab until someone validates the adapter
-against the new version. Either reinstall the supported version or open an issue with the version you have.
+against the new version. **Set up Clarke…** reinstalls the supported version; note that it updates the
+Hermes checkout in `~/.hermes/hermes-agent` for every use of Hermes on this account.
 
 ### Ollama is running, but no models are listed
 
@@ -116,7 +124,8 @@ what Ollama offers:
 curl -s http://127.0.0.1:11434/api/tags
 ```
 
-If a model you expect is missing from that output, pull it yourself. If it appears there but not in
+If a model you expect is missing from that output, install it from **Install or remove models…** at the end
+of the **Local model** list. If it appears there but not in
 GridLens, it does not advertise the `tools` capability and cannot drive the agent.
 
 ### The endpoint is refused even though Ollama answers
@@ -128,13 +137,14 @@ that would redirect local inference. Use `http://127.0.0.1:11434`.
 ### Answers stop at "analysis is not built"
 
 The tools read the compact analysis cache, never the multi-gigabyte flat result, and they refuse a stale
-cache rather than quote numbers from it. Click **Build / refresh analysis** in the Agent tab. A cache built
-by an older GridLens version counts as stale, so a run that used to work needs rebuilding after an upgrade.
+cache rather than quote numbers from it. Ask Clarke to prepare the run for analysis, or click **Generate
+Graphs** in the Branch or Transformer Analysis tab. A cache built by an older GridLens version counts as
+stale, so a run that used to work needs rebuilding after an upgrade.
 
 ### Contingency drill-down says the index is missing or stale
 
-The per-contingency and per-branch tools need the optional Parquet index. Select **Include contingency
-drill-down index**, then click **Build / refresh analysis**. The index records the size and modification
+The per-contingency and per-branch tools need the optional Parquet index. Ask Clarke to build the run's
+contingency drill-down index. The index records the size and modification
 time of the flat result it was built from, so re-running the case invalidates it and you have to rebuild.
 
 ### Approving a script reports that the sandbox image is required
@@ -148,3 +158,9 @@ dialog, as described in `packaging/agent/README.md`. GridLens rejects a tag or a
 Codex and Claude Code are disabled in this build. Sending project-derived data to an online model conflicts
 with the local-only rule, and turning that rule off is a written governance decision rather than a setting.
 See [CEII security notes](security_ceii.md).
+
+### A cufile.log file appears
+
+The GPU file reader used by the analysis writes a diagnostic log. GridLens sends it to
+`~/.cache/gridlens/cufile.log`, or under `$XDG_CACHE_HOME`, so it no longer appears beside run or job files.
+Set `CUFILE_LOGFILE_PATH` to put it somewhere else.

@@ -35,7 +35,7 @@ A regulator-facing project is stored under:
 
 ```text
 ~/GridLensProjects/
-  .gridlens-agent/sessions/   optional, created by the Agent tab
+  Clarke conversations/      optional, one folder per Agent tab conversation
   Project_Name/
     project.json
     original_inputs/
@@ -203,20 +203,29 @@ one tool server.
 - `agent/gridlens_tools.py`: tools that list and describe projects and their runs, create projects, import
   inputs, write the GridPACK XML, start runs, build analyses, report on runs and jobs, and stop either.
 - `agent/jobs.py`: background jobs. A GridPACK run or an analysis build runs as `gridlens --agent-job`, a
-  separate process that outlives the turn and records its state under `<project>/agent/jobs/`.
+  separate process that outlives the turn. Its folder under `<project>/agent/jobs/` holds `job.json`, the
+  request and the live state, and `job.log`, a readable history the worker appends to.
+- `agent/conversation_log.py`: writes `conversation.md`, a readable record of a whole conversation, from
+  the session's audit files after every turn.
+- `agent/setup.py`: finds Hermes Agent, Ollama, and the installed models, starts an installed Ollama, and,
+  once the user agrees in the Set up Clarke window (`gui/agent_setup.py`), installs Hermes at the validated
+  commit, installs Ollama into GridLens's data folder, and pulls or removes models through the local
+  Ollama service.
 - `agent/mcp_server.py`: serves those tools over stdio using the official MCP Python SDK, marking the tools
   that write. `main.py` dispatches `--mcp-server` and `--agent-job` before it imports Qt, so neither needs a
   GUI.
 - `agent/scripts.py`: saves a model-proposed Python script for review, and runs an approved one in the
   pinned sandbox described in `packaging/agent/README.md`.
 
-Each session writes an append-only record under `<projects folder>/.gridlens-agent/sessions/<UTC
+Each session writes an append-only record under `<projects folder>/Clarke conversations/<UTC
 timestamp>_<suffix>/`, outside any one project, because one conversation can create, run, and compare
 several projects: `context.json` for the session record, `focus.json` for the project and runs the latest
 turn started in, `manifest.json` for the runtime and command template, `transcript.jsonl`,
 `runtime_events.jsonl`, `tool_calls.jsonl` for the tool audit and provenance, `results/` for the complete
-copies of large results, `usage.json`, `status.json`, and `generated/` for any proposed script. A proposal
-records its project, so it reads the same run after the session moves. Sessions written by earlier versions
-under `<project>/agent/sessions/` are listed while that project is open and still open.
+copies of large results, `usage.json`, `status.json`, and `generated/` for any proposed script, and
+`conversation.md`, the readable record written from all of them. A proposal records its project, so it
+reads the same run after the session moves. Sessions written by earlier versions in the hidden
+`<projects folder>/.gridlens-agent/sessions/` are moved into `Clarke conversations/` when the Agent tab
+opens; those under `<project>/agent/sessions/` are listed while that project is open and still open.
 Every answer cites the call IDs from `tool_calls.jsonl`, and the GUI marks a citation that does not appear
 there as invalid.
