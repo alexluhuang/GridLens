@@ -9,7 +9,9 @@ from pathlib import Path
 import shutil
 import xml.etree.ElementTree as ET
 
-from gridlens.core.validation import ValidationError, sanitize_project_name
+from gridlens.core.validation import (
+    ValidationError, is_windows_reserved_name, sanitize_project_name)
+from gridlens.system import processes
 
 
 PROJECT_FILE_NAME = "project.json"
@@ -29,7 +31,11 @@ def safe_folder_name(name: str) -> str:
             safe.append(char)
         elif char.isspace():
             safe.append("_")
-    return "".join(safe).strip("_") or "GridPACK_Project"
+    folder = "".join(safe).strip("_") or "GridPACK_Project"
+    # A project named CON or NUL gets a folder Windows can create too.
+    if is_windows_reserved_name(folder):
+        folder += "_Project"
+    return folder
 
 
 def is_gridpack_configuration_root(root: ET.Element) -> bool:
@@ -67,7 +73,18 @@ def file_sha256(path: Path) -> str:
 
 
 def validate_project_root_dir(root_dir: str | Path) -> Path:
-    resolved = Path(root_dir).expanduser().resolve()
+    requested = Path(root_dir).expanduser()
+    resolved = requested.resolve()
+    if processes.WINDOWS and is_windows_reserved_name(resolved.name):
+        raise ValidationError(
+            f"Windows reserves the name {resolved.name} for a device. "
+            "Choose another project folder name.")
+    if _differs_only_in_case(requested.name, resolved.name):
+        raise ValidationError(
+            f"The folder {resolved} already exists. This system does not "
+            f"tell {requested.name} and {resolved.name} apart, so a project "
+            "there would be the existing one. Choose another project name "
+            "or folder.")
     if resolved.name in RESERVED_PROJECT_ROOT_NAMES:
         raise ValidationError(
             f"Project folder cannot be the managed `{resolved.name}` folder. "
@@ -87,6 +104,16 @@ def validate_project_root_dir(root_dir: str | Path) -> Path:
             )
 
     return resolved
+
+
+def _differs_only_in_case(requested: str, actual: str) -> bool:
+    """Return True when a case-insensitive file system gave another spelling.
+
+    Resolving a path on Windows or macOS returns the spelling of the folder
+    already on disk, so a requested name that differs from it only in case
+    names that existing folder.
+    """
+    return requested != actual and requested.casefold() == actual.casefold()
 
 
 @dataclass(slots=True)

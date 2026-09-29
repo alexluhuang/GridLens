@@ -5,6 +5,13 @@ from pathlib import Path
 
 
 _PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_. -]{0,98}[A-Za-z0-9])?$")
+# Windows reserves these names for devices, with or without an extension, in
+# any case, so no file or folder there can have one.
+WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{digit}" for digit in range(1, 10)}
+    | {f"LPT{digit}" for digit in range(1, 10)}
+)
 
 
 class ValidationError(ValueError):
@@ -21,6 +28,12 @@ def sanitize_project_name(name: str) -> str:
             "letters, numbers, spaces, dots, underscores, and hyphens."
         )
     return cleaned
+
+
+def is_windows_reserved_name(name: str) -> bool:
+    """Return True for a file or folder name that Windows cannot create."""
+    stem = name.split(".", 1)[0].rstrip(" ")
+    return stem.upper() in WINDOWS_RESERVED_NAMES
 
 
 def validate_existing_file(path: str | Path, label: str = "File") -> Path:
