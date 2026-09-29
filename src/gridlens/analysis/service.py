@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import multiprocessing
 import os
 from pathlib import Path
@@ -12,6 +11,7 @@ import traceback
 from gridlens.analysis.interactive import build_interactive_analysis_result
 from gridlens.analysis.progress import AnalysisProgress
 from gridlens.analysis.utilization import UtilizationBranchOptions
+from gridlens.system import files, paths
 
 
 def _build(run_dir, options, messages, indexed, rebuild):
@@ -44,24 +44,37 @@ def _terminate_group(process) -> None:
     process.join()
 
 
+def _lock_path() -> Path:
+    """Return the lock file that lets one analysis build run at a time.
+
+    Every GridLens process of the user, the GUI and the job workers alike,
+    must name the same file.
+    """
+    if os.name == "nt":
+        return paths.shared_temp_dir() / "gridlens-analysis.lock"
+    return paths.shared_temp_dir() / f"gridlens-analysis-{os.getuid()}.lock"
+
+
+def _wait_for_lock(lock: files.FileLock, progress,
+                   cancelled: threading.Event) -> None:
+    """Take the build lock, reporting the wait and giving up if cancelled."""
+    waiting = AnalysisProgress("parse", "Waiting for another analysis build…")
+    while not lock.acquire(blocking=False):
+        if progress:
+            progress(waiting)
+        if cancelled.wait(0.2):
+            raise RuntimeError("Analysis cancelled.")
+
+
 class AnalysisService:
     """Serialize analysis builds across GUI tabs and processes, with cancellable workers."""
 
     @staticmethod
     def build(run_dir: Path, options: UtilizationBranchOptions, progress=None, cancelled=None, *, indexed: bool = False, rebuild: bool = False):
         cancelled = cancelled or threading.Event()
-        lock_path = Path("/tmp") / f"gridlens-analysis-{os.getuid()}.lock"
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(descriptor, "w") as lock:
-            while True:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if progress:
-                        progress(AnalysisProgress("parse", "Waiting for another analysis build…"))
-                    if cancelled.wait(0.2):
-                        raise RuntimeError("Analysis cancelled.")
+        lock = files.FileLock(_lock_path())
+        _wait_for_lock(lock, progress, cancelled)
+        try:
             if cancelled.is_set():
                 raise RuntimeError("Analysis cancelled.")
             context = multiprocessing.get_context("spawn")
@@ -87,3 +100,5 @@ class AnalysisService:
             finally:
                 _terminate_group(process)
                 messages.close()
+        finally:
+            lock.release()

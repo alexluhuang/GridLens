@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import CONVERSATION_LOG, FOCUS_FILE, scoped_path
+from gridlens.system import files
 
 
 # An audit file larger than this is not merged into the log; the log says so and names the file.
@@ -241,7 +241,7 @@ def write_conversation_log(directory: Path) -> Path:
     temporary = scoped_path(directory, CONVERSATION_LOG + ".tmp")
     text = render_conversation_log(directory)
     temporary.unlink(missing_ok=True)
-    with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "w", encoding="utf-8") as handle:
+    with files.open_private(temporary, "x") as handle:
         handle.write(text)
-    os.replace(temporary, path)
+    files.replace(temporary, path)
     return path

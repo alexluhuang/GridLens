@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from gridlens.analysis.distribution_stats import ORDER_STATISTICS, GroupAccumulator
 from gridlens.analysis.progress import AnalysisProgress
+from gridlens.system import files
 
 
 # 2026.09.24 stores flows, voltages, and angles as numbers; earlier indexes hold them as text.
@@ -138,7 +139,7 @@ def build_event_index(run_dir: Path, *, progress=None, output_dir: Path | None =
         manifest = {"version": INDEX_VERSION, "layout": layout, "generation": generation, "source": str(source.relative_to(run_dir)), "source_bytes": source_stat.st_size, "source_mtime_ns": source_stat.st_mtime_ns, "rows": rows, "seconds": round(time.monotonic() - started, 3), "parquet_bytes": sum(path.stat().st_size for path in build_dir.glob("*.parquet"))}
         temporary = destination / f"{generation}.json"
         temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        temporary.replace(destination / "manifest.json")
+        files.replace(temporary, destination / "manifest.json")
         return manifest
     except BaseException:
         for writer in writers.values():

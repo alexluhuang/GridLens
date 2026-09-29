@@ -27,6 +27,7 @@ from gridlens.agent.prompt import session_facts, turn_prompt
 from gridlens.agent.runtime import RuntimeAdapter, RuntimeEvent
 from gridlens.agent.session import SessionContext, append_event, scoped_path, write_json
 from gridlens.agent.tools import ToolService
+from gridlens.system import files
 
 
 MAX_PROMPT_CHARS = 12_000
@@ -98,7 +99,7 @@ class AgentController:
         prompt_path = scoped_path(prompt_dir, f"{time.time_ns()}.txt")
         replay = [] if getattr(self.adapter, "supports_continuation", True) and self.continuation else self.history[-MAX_REPLAY_TURNS:]
         content = turn_prompt(tuple(self.context.run_ids), prompt, replay, session_facts(self.context))
-        with os.fdopen(os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
+        with files.open_private(prompt_path, "x") as handle:
             handle.write(content)
         return prompt_path
 

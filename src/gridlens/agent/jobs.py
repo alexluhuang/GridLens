@@ -39,6 +39,7 @@ from uuid import uuid4
 from gridlens.agent.policy import AgentError
 from gridlens.agent.process import gridlens_command
 from gridlens.agent.session import PROJECT_FILE, read_json, scoped_path, timestamp, write_json
+from gridlens.system import files
 
 
 JOBS_FOLDER = Path("agent/jobs")
@@ -72,10 +73,10 @@ def _replace_record(folder: Path, record: dict) -> None:
     """Replace job.json in one step, so a reader never sees a half-written file."""
     temporary = folder / f"{JOB_FILE}.{os.getpid()}.tmp"
     temporary.unlink(missing_ok=True)
-    with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "w", encoding="utf-8") as handle:
+    with files.open_private(temporary, "x") as handle:
         json.dump(record, handle, indent=2, ensure_ascii=False, default=str)
         handle.write("\n")
-    os.replace(temporary, folder / JOB_FILE)
+    files.replace(temporary, folder / JOB_FILE)
 
 
 def _write_status(folder: Path, state: str, message: str, **details: object) -> None:

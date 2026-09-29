@@ -27,6 +27,7 @@ from gridlens.agent.policy import AgentError
 from gridlens.agent.process import minimal_environment, terminate_process
 from gridlens.agent.conversation_log import write_conversation_log
 from gridlens.agent.session import SessionContext, append_event, find_project, read_json, resolve_run, scoped_path, timestamp, write_json
+from gridlens.system import files
 
 
 MAX_SCRIPT_BYTES = 24 * 1024
@@ -106,7 +107,8 @@ def save_proposal(context: SessionContext, run_id: str, purpose: str, code: str)
         raise AgentError("SESSION_LIMIT", "Start a new session before proposing more scripts.")
     identifier = uuid4().hex
     path = scoped_path(directory, identifier + ".py")
-    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
+    # Written byte for byte, so the file hashes to the SHA-256 recorded below.
+    with files.open_private(path, "x") as handle:
         handle.write(code)
     record = {"proposal_id": identifier, "project_root": str(context.project_root), "run_id": run_id, "purpose": purpose, "sha256": hashlib.sha256(code.encode()).hexdigest(), "created_at": timestamp(), "status": "awaiting_review"}
     write_json(directory / (identifier + ".json"), record, exclusive=True)
@@ -206,7 +208,7 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
     execution.mkdir(parents=True, mode=0o700)
     # Execute the reviewed bytes, even if the original proposal is subsequently edited.
     snapshot = execution / "script.py"
-    with os.fdopen(os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
+    with files.open_private(snapshot, "x") as handle:
         handle.write(code)
     command = sandbox_command(executable, name, image, run, snapshot)
     result = {"proposal_id": identifier, "script_sha256": approved_hash, "image": image, "approved_at": timestamp(), "command": command, "status": "running", "exit_code": None, "untrusted": True}
@@ -234,7 +236,8 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
             terminate_process(process)
             process.stdout.close()
         result.update(ended_at=timestamp(), stdout_sha256=hashlib.sha256(output).hexdigest(), stdout_bytes=len(output), output_excerpt=output.decode(errors="replace")[:16000], execution_id=execution.name)
-        with os.fdopen(os.open(execution / "output.txt", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+        output_path = execution / "output.txt"
+        with files.open_private(output_path, "x", binary=True) as handle:
             handle.write(output)
         write_json(execution / "result.json", result)
         append_event(context.directory, "script_executions.jsonl", {"phase": "completed", **result})

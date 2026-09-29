@@ -14,7 +14,6 @@ code tools, or pages with offset, so nothing a tool computed is lost.
 from __future__ import annotations
 
 import csv
-import fcntl
 from functools import wraps
 import inspect
 import json
@@ -30,6 +29,7 @@ from gridlens.agent.session import (
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.parser_models import PARSER_VERSION
 from gridlens.core.validation import ValidationError
+from gridlens.system import files
 
 
 # Runtimes spill tool results of roughly 50,000 characters to their own files, measured after they embed
@@ -47,6 +47,10 @@ OVERSIZE_SOURCE_LIMIT = 20
 OVERSIZE_WARNING_LIMIT = 10
 METRIC_VERSION = "2026.09.21"
 RESULTS_FOLDER = "results"
+AUDIT_FILE = "tool_calls.jsonl"
+# The lock that numbers calls one at a time. It is a separate file, because a
+# lock on the audit itself would stop the GUI reading it on Windows.
+AUDIT_LOCK_FILE = "tool_calls.jsonl.lock"
 PAGE_FIELDS = ("returned", "total_matching", "offset", "limit", "truncated", "next_offset")
 
 
@@ -164,9 +168,10 @@ class ToolBase:
         call's offset and limit. A tool that pages its own rows, because it streams a file too large to
         hold, returns the page fields itself and is left as it is.
         """
-        audit = scoped_path(self.context.directory, "tool_calls.jsonl")
-        with os.fdopen(os.open(audit, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a+", encoding="utf-8") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+        audit = scoped_path(self.context.directory, AUDIT_FILE)
+        lock_path = scoped_path(self.context.directory, AUDIT_LOCK_FILE)
+        lock = files.FileLock(lock_path)
+        with lock, files.open_private(audit, "a+") as handle:
             if os.fstat(handle.fileno()).st_size > MAX_AUDIT_BYTES:
                 raise AgentError("SESSION_LIMIT", "Start a new session; the tool audit has reached its size limit.")
             handle.seek(0)
@@ -264,7 +269,7 @@ class ToolBase:
             return str(json_path), None
         csv_path = scoped_path(folder, f"{result['call_id']}.csv")
         columns = list(dict.fromkeys(key for row in rows for key in row))
-        with os.fdopen(os.open(csv_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600), "w", encoding="utf-8", newline="") as handle:
+        with files.open_private(csv_path, "w") as handle:
             writer = csv.DictWriter(handle, fieldnames=columns)
             writer.writeheader()
             for row in rows:

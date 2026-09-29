@@ -25,6 +25,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from gridlens.agent.policy import AgentError, local_endpoint
 from gridlens.agent.providers import DEFAULT_PROVIDER, PROVIDER_IDS, route_for
+from gridlens.system import files
 
 
 MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -68,7 +69,7 @@ def scoped_path(root: Path, relative: str | Path, *, directory: bool = False) ->
     path = root
     for part in relative.parts:
         path = path / part
-        if path.is_symlink():
+        if files.is_link(path):
             raise AgentError("PATH_OUTSIDE_SESSION", "Symlinked agent artifacts are not supported.")
     if not path.resolve().is_relative_to(root.resolve()):
         raise AgentError("PATH_OUTSIDE_SESSION", "The artifact is outside the selected run.")
@@ -96,8 +97,7 @@ def read_json(path: Path) -> dict:
 
 def write_json(path: Path, value: object, *, exclusive: bool = False) -> None:
     """Write JSON at mode 0600, through a descriptor that never follows a symlink."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if exclusive else os.O_TRUNC)
-    with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8") as handle:
+    with files.open_private(path, "x" if exclusive else "w") as handle:
         json.dump(safe_utf8(value), handle, indent=2, ensure_ascii=False, allow_nan=False)
         handle.write("\n")
 
@@ -105,7 +105,7 @@ def write_json(path: Path, value: object, *, exclusive: bool = False) -> None:
 def append_event(directory: Path, name: str, value: dict) -> None:
     """Append one timestamped JSON line to a session audit file."""
     path = scoped_path(directory, name)
-    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a", encoding="utf-8") as handle:
+    with files.open_private(path, "a") as handle:
         handle.write(json.dumps(safe_utf8({"timestamp": timestamp(), **value}), ensure_ascii=False, allow_nan=False) + "\n")
 
 
@@ -131,7 +131,7 @@ def export_session(directory: Path, destination: Path) -> None:
                 archive.write(path, str(path.relative_to(directory)))
         # Copy through a new inode; never follow an existing destination symlink.
         os.chmod(archive_path, 0o600)
-        os.replace(archive_path, destination)
+        files.replace(archive_path, destination)
 
 
 def default_projects_dir() -> Path:
@@ -258,7 +258,7 @@ def migrate_legacy_sessions(projects_dir: Path) -> list[Path]:
             temporary = scoped_path(destination, "context.json.tmp")
             temporary.unlink(missing_ok=True)
             write_json(temporary, value, exclusive=True)
-            os.replace(temporary, destination / "context.json")
+            files.replace(temporary, destination / "context.json")
         except (AgentError, OSError, ValueError):
             # A folder whose record cannot follow it goes back, so it stays readable where it was.
             try:

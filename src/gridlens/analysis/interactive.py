@@ -20,6 +20,7 @@ from gridlens.analysis.progress import (
 )
 from gridlens.analysis.table_helpers import cell_value
 from gridlens.analysis.utilization import UtilizationBranchOptions
+from gridlens.system import files
 from gridlens.analysis.loading import (
     max_line_utilization_rows,
     summarize_control_area_utilization,
@@ -200,7 +201,7 @@ def _write_cached_interactive_dataset(dataset: RunAnalysisDataset) -> None:
     }
     temporary = report_dir / (_INTERACTIVE_MANIFEST + ".tmp")
     temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    temporary.replace(report_dir / _INTERACTIVE_MANIFEST)
+    files.replace(temporary, report_dir / _INTERACTIVE_MANIFEST)
 
 
 def _read_optional_cached_table(table_name: str, table_info: dict[str, object]) -> ParsedTable | None:
