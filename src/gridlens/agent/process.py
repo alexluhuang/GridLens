@@ -15,6 +15,8 @@ from gridlens.system import processes
 
 
 PROBE_TIMEOUT_SECONDS = 10
+# The console executable a frozen Windows build ships beside GridLens.exe.
+CONSOLE_EXECUTABLE = "gridlens-cli.exe"
 PROBE_OUTPUT_LIMIT = 16 * 1024
 # The host variables a command-line program needs to start, find its own
 # files, and reach the network. Nothing else of the host environment is
@@ -54,8 +56,22 @@ def minimal_environment(*, loopback_only: bool = True) -> dict[str, str]:
 def gridlens_command(*arguments: str) -> list[str]:
     """Return the argv that runs GridLens with arguments, for the source and frozen entry points."""
     if getattr(sys, "frozen", False):
-        return [sys.executable, *arguments]
+        return [_frozen_executable(), *arguments]
     return [sys.executable, "-m", "gridlens", *arguments]
+
+
+def _frozen_executable() -> str:
+    """Return the frozen executable that runs GridLens's stdio entry points.
+
+    A windowed Windows executable has no reliable standard streams, so a
+    frozen Windows build runs the MCP server, job workers, and the tool CLI
+    from its console executable, which GridLens starts with no window.
+    """
+    if processes.WINDOWS:
+        helper = Path(sys.executable).with_name(CONSOLE_EXECUTABLE)
+        if helper.is_file():
+            return str(helper)
+    return sys.executable
 
 
 def mcp_command() -> list[str]:

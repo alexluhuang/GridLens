@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import re
+import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs, copy_metadata
 import importlib.util
 
 project_root = Path.cwd()
+# RAPIDS publishes Linux wheels only, so a Windows bundle carries the CPU
+# analysis stack. Windows also needs a console executable for the entry
+# points that talk over stdio, an .ico icon, and a version resource.
+WINDOWS = sys.platform == "win32"
+ICON = project_root / "build" / "gridlens.ico"
 
 
 def _runtime_submodule(module_name):
@@ -151,23 +158,70 @@ hidden_imports = [
 metadata_files = []
 data_files = []
 binary_files = []
-for package in rapids_packages:
-    datas, binaries, collected_hidden_imports = _collect_all(package)
-    data_files += datas
-    binary_files += binaries
-    hidden_imports += collected_hidden_imports
-for package in native_library_packages:
-    binary_files += _collect_dynamic_libs(package, destdir=".")
-for package in rapids_loader_library_packages:
-    data_files += _collect_data_files(package, includes=["VERSION", "GIT_COMMIT"])
-    binary_files += _collect_dynamic_libs(package)
-binary_files += _collect_package_relative_files("numba_cuda", ["**/*.so"])
-binary_files += _collect_package_relative_files("cuda", ["**/*.so"])
-binary_files += _collect_library_globs("nvidia.cu13", ["lib/lib*.so*"])
-binary_files += _collect_library_globs("nvidia.libnvcomp", ["lib64/lib*.so*"])
-binary_files += _collect_library_globs("nvidia.nccl", ["lib/lib*.so*", "lib64/lib*.so*"])
+if not WINDOWS:
+    for package in rapids_packages:
+        datas, binaries, collected_hidden_imports = _collect_all(package)
+        data_files += datas
+        binary_files += binaries
+        hidden_imports += collected_hidden_imports
+    for package in native_library_packages:
+        binary_files += _collect_dynamic_libs(package, destdir=".")
+    for package in rapids_loader_library_packages:
+        data_files += _collect_data_files(
+            package, includes=["VERSION", "GIT_COMMIT"])
+        binary_files += _collect_dynamic_libs(package)
+    binary_files += _collect_package_relative_files("numba_cuda", ["**/*.so"])
+    binary_files += _collect_package_relative_files("cuda", ["**/*.so"])
+    binary_files += _collect_library_globs("nvidia.cu13", ["lib/lib*.so*"])
+    binary_files += _collect_library_globs(
+        "nvidia.libnvcomp", ["lib64/lib*.so*"])
+    binary_files += _collect_library_globs(
+        "nvidia.nccl", ["lib/lib*.so*", "lib64/lib*.so*"])
 for package in metadata_packages:
     metadata_files += _copy_metadata(package)
+# numba-cuda's runtime hook imports its redirector, so it runs only where
+# numba-cuda is installed; a bundle without it would fail at startup.
+runtime_hooks = []
+if importlib.util.find_spec("_numba_cuda_redirector"):
+    hooks = project_root / "packaging" / "pyinstaller" / "runtime_hooks"
+    runtime_hooks.append(str(hooks / "numba_cuda_redirector.py"))
+else:
+    hidden_imports.remove("_numba_cuda_redirector")
+
+
+def _version_resource():
+    """Return the Windows version resource for the project's version."""
+    from PyInstaller.utils.win32 import versioninfo
+
+    text = (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    version = re.search(r'^version = "([^"]+)"', text, re.MULTILINE).group(1)
+    numbers = tuple(int(part) for part in re.findall(r"\d+", version)[:4])
+    numbers += (0,) * (4 - len(numbers))
+    strings = [
+        versioninfo.StringStruct("CompanyName", "GridLens Contributors"),
+        versioninfo.StringStruct("FileDescription", "GridLens"),
+        versioninfo.StringStruct("FileVersion", version),
+        versioninfo.StringStruct("LegalCopyright", "GPL-3.0-only"),
+        versioninfo.StringStruct("ProductName", "GridLens"),
+        versioninfo.StringStruct("ProductVersion", version),
+    ]
+    # US English, Unicode: the language and code page the strings are in.
+    table = versioninfo.StringTable("040904B0", strings)
+    translation = versioninfo.VarStruct("Translation", [1033, 1200])
+    return versioninfo.VSVersionInfo(
+        ffi=versioninfo.FixedFileInfo(filevers=numbers, prodvers=numbers),
+        kids=[
+            versioninfo.StringFileInfo([table]),
+            versioninfo.VarFileInfo([translation]),
+        ],
+    )
+
+
+windows_options = {}
+if WINDOWS:
+    windows_options["version"] = _version_resource()
+    if ICON.is_file():
+        windows_options["icon"] = str(ICON)
 
 a = Analysis(
     [str(project_root / "src" / "gridlens" / "main.py")],
@@ -184,9 +238,7 @@ a = Analysis(
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[
-        str(project_root / "packaging" / "pyinstaller" / "runtime_hooks" / "numba_cuda_redirector.py"),
-    ],
+    runtime_hooks=runtime_hooks,
     excludes=[
         "matplotlib.tests",
         "pandas.tests",
@@ -197,6 +249,7 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# UPX breaks Qt's DLLs and makes antivirus tools flag the executables.
 exe = EXE(
     pyz,
     a.scripts,
@@ -206,15 +259,34 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
+    **windows_options,
 )
+executables = [exe]
+if WINDOWS:
+    # The MCP server, job workers, and the tool CLI talk over stdio, which a
+    # windowed Windows executable does not reliably have. They run from this
+    # console executable instead, which GridLens starts with no window.
+    executables.append(EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="gridlens-cli",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=True,
+        **windows_options,
+    ))
 coll = COLLECT(
-    exe,
+    *executables,
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="GridLens",
 )
