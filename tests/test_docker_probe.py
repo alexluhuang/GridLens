@@ -4,6 +4,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+from gridlens.runner import docker_probe
 from gridlens.runner.docker_probe import (
     docker_client_available, docker_engine_available, image_exists,
     run_command)
@@ -81,3 +82,34 @@ def test_undecodable_probe_output_is_replaced_rather_than_raised() -> None:
     result = run_command([sys.executable, "-c", code])
 
     assert result.stdout == "ok \ufffd"
+
+
+def test_docker_engine_running_windows_containers_is_a_problem() -> None:
+    windows = completed(["docker"], 0, stdout="29.2.1 windows\n")
+    with patch("gridlens.runner.docker_probe.run_command",
+               return_value=windows):
+        result = docker_engine_available()
+
+    assert result.ok is False
+    assert "switch Docker Desktop to Linux containers" in result.message
+
+
+def test_docker_engine_running_linux_containers_is_ready() -> None:
+    linux = completed(["docker"], 0, stdout="29.2.1 linux\n")
+    with patch("gridlens.runner.docker_probe.run_command",
+               return_value=linux):
+        result = docker_engine_available()
+
+    assert (result.ok, result.message) == (True, "Docker Engine 29.2.1")
+
+
+def test_unreachable_engine_on_windows_says_to_start_docker_desktop(
+        monkeypatch) -> None:
+    monkeypatch.setattr(docker_probe.processes, "WINDOWS", True)
+    unreachable = completed(["docker"], 1, stderr="error during connect")
+    with patch("gridlens.runner.docker_probe.run_command",
+               return_value=unreachable):
+        result = docker_engine_available()
+
+    assert result.ok is False
+    assert result.message.endswith(docker_probe.START_DOCKER_DESKTOP)

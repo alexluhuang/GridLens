@@ -7,6 +7,7 @@ from gridlens.runner.docker_command import (
     CONTAINER_WORKSPACE,
     DOCKER_BASE_COMMAND,
     MPI_EXECUTABLE,
+    bind_mount,
     build_gridpack_docker_command,
     docker_container_name_from_args,
 )
@@ -30,8 +31,11 @@ class DockerCommandTests(unittest.TestCase):
         self.assertIn("--pull=never", command)
         self.assertIn("--network", command)
         self.assertIn("none", command)
-        self.assertIn("-v", command)
-        self.assertIn(f"{Path.cwd().resolve()}:{CONTAINER_WORKSPACE}", command)
+        mount = command[command.index("--mount") + 1]
+        self.assertEqual(
+            mount,
+            f"type=bind,source={Path.cwd().resolve()},"
+            f"target={CONTAINER_WORKSPACE}")
         self.assertIn("-w", command)
         self.assertIn(CONTAINER_WORKSPACE, command)
         self.assertIn("pnnl/gridpack:latest", command)
@@ -121,3 +125,18 @@ class DockerCommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_bind_mount_names_a_windows_folder_without_misreading_its_drive():
+    mount = bind_mount("C:\\Users\\planner\\run\\work", "/app/workspace")
+
+    assert mount == ("type=bind,source=C:\\Users\\planner\\run\\work,"
+                     "target=/app/workspace")
+
+
+def test_bind_mount_quotes_a_folder_with_a_comma_or_a_quote():
+    mount = bind_mount('/data/a,b "c"', "/app/workspace")
+
+    assert mount == ('type=bind,"source=/data/a,b ""c""",'
+                     "target=/app/workspace")
+

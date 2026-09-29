@@ -26,6 +26,25 @@ def _split_extra_args(extra_docker_args: str | list[str] | None) -> list[str]:
     return shlex.split(extra_docker_args)
 
 
+def bind_mount(source: str | Path, target: str) -> str:
+    """Return a --mount value that binds the host folder source at target.
+
+    --mount reads its value as one CSV record, so a field holding a comma or
+    a quote is quoted. Unlike -v, it cannot mistake the colon of a Windows
+    drive letter for the end of the host path.
+    """
+    fields = ("type=bind", f"source={source}", f"target={target}")
+    return ",".join(_csv_field(field) for field in fields)
+
+
+def _csv_field(field: str) -> str:
+    """Quote one field of a --mount value, as CSV does, when it needs it."""
+    if "," not in field and '"' not in field:
+        return field
+    escaped = field.replace('"', '""')
+    return f'"{escaped}"'
+
+
 def docker_container_name_from_args(extra_docker_args: str | list[str] | None) -> str:
     args = _split_extra_args(extra_docker_args)
     for index, arg in enumerate(args):
@@ -88,8 +107,8 @@ def build_gridpack_docker_command(
 
     cmd += extra_args
     cmd += [
-        "-v",
-        f"{resolved_work_dir}:{CONTAINER_WORKSPACE}",
+        "--mount",
+        bind_mount(resolved_work_dir, CONTAINER_WORKSPACE),
         "-w",
         CONTAINER_WORKSPACE,
         image,

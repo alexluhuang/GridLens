@@ -14,6 +14,7 @@ class ProbeResult:
 
 
 SuccessMessage = Callable[[str], str]
+START_DOCKER_DESKTOP = "Start Docker Desktop, then check again."
 
 
 def run_command(command: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
@@ -59,12 +60,31 @@ def docker_client_available() -> ProbeResult:
 
 
 def docker_engine_available() -> ProbeResult:
-    return _probe_docker_command(
-        ["docker", "version", "--format", "{{.Server.Version}}"],
+    """Report whether the Docker engine answers and runs Linux containers.
+
+    GridPACK images are Linux images, and Docker Desktop can be switched to
+    Windows containers, where every one of them fails.
+    """
+    result = _probe_docker_command(
+        ["docker", "version", "--format",
+         "{{.Server.Version}} {{.Server.Os}}"],
         timeout_message="Docker engine check timed out.",
-        success_message=lambda output: f"Docker Engine {output}",
+        success_message=lambda output: output,
         failure_message="Docker Engine is not reachable.",
     )
+    if not result.ok:
+        if processes.WINDOWS:
+            message = f"{result.message} {START_DOCKER_DESKTOP}"
+            return ProbeResult(False, message)
+        return result
+    version, _, server_os = result.message.partition(" ")
+    if server_os.strip() not in ("", "linux"):
+        return ProbeResult(
+            False,
+            f"Docker Engine {version} runs {server_os.strip()} containers. "
+            "GridPACK needs Linux containers: switch Docker Desktop to "
+            "Linux containers.")
+    return ProbeResult(True, f"Docker Engine {version}")
 
 
 def image_exists(image: str) -> ProbeResult:
