@@ -89,6 +89,10 @@ def test_a_run_finishing_during_a_build_is_analyzed_next(agent_project, monkeypa
 def test_an_automatic_build_that_fails_says_so_in_the_status_line(agent_project, monkeypatch):
     app = QApplication.instance() or QApplication([])
     shown = _no_dialogs(monkeypatch)
+    # Without a usable GPU, a build first warns that it falls back to CPU
+    # Dask; this test is about the failure.
+    monkeypatch.setattr(
+        analysis_tab, "cpu_dask_fallback_warning", lambda run_dir: "")
 
     def fail(*_args):
         # AnalysisService re-raises the build worker's traceback as the message.

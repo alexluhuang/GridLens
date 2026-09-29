@@ -5,6 +5,7 @@ import json
 import pytest
 
 from gridlens.analysis.event_index import IndexColumnsMissing, IndexStale, build_event_index, case_key, group_cases, scan_cases
+from gridlens.analysis import gpu
 from gridlens.analysis.parsers import parse_all_output_tables
 
 
@@ -155,6 +156,8 @@ def test_index_stores_flows_voltages_and_angles_as_numbers(tmp_path):
 
 def test_contingency_summary_matches_gpu_reduction(indexed_run, monkeypatch):
     pytest.importorskip("cudf")
+    if not gpu.cuda_device_available():
+        pytest.skip("cuDF is installed, but no CUDA device is usable")
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "python")
     expected = parse_all_output_tables(indexed_run)["contingency_summary"].rows
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "cudf")

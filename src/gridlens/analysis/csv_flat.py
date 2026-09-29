@@ -11,6 +11,7 @@ import threading
 import time
 from typing import Callable, Iterable
 
+from gridlens.analysis import gpu
 from gridlens.analysis.parser_models import ParsedTable
 from gridlens.analysis.contingencies import SUMMARY_NAME, attach_convergence, summary_frames, summary_from_records, summary_table, update_summary
 from gridlens.analysis.progress import PHASE_PARSE, ProgressCallback, report
@@ -31,6 +32,8 @@ CSV_FLAT_DEFAULT_CLUSTER = "auto"
 CSV_FLAT_DEFAULT_DASK_TEMP_DIR = "/tmp/gridlens-dask"
 CSV_FLAT_DEFAULT_DEVICE_MEMORY_LIMIT = "auto"
 CSV_FLAT_ALLOW_CPU_DASK_ENV = "GRIDLENS_ALLOW_CPU_DASK"
+GPU_BACKENDS = ("cudf", "dask_cudf")
+NO_GPU_REASON = "no usable NVIDIA GPU; check the driver with nvidia-smi"
 CSV_FLAT_CUDF_MEMORY_FRACTION = 0.75
 CSV_FLAT_MEMORY_HEADROOM = 0.95
 CSV_FLAT_MIN_BLOCKSIZE_BYTES = 64 * 1024**2
@@ -1022,6 +1025,9 @@ def _lazy_backend(csv_path: Path | None = None) -> _LazyBackend:
     for backend_name in backend_order:
         if backend_name == "python":
             break
+        if backend_name in GPU_BACKENDS and not gpu.cuda_device_available():
+            errors.append(f"{backend_name}: {NO_GPU_REASON}")
+            continue
         if backend_name == "dask":
             if not _cpu_dask_allowed():
                 errors.append("dask: CPU Dask fallback requires user acknowledgement")
@@ -1070,7 +1076,7 @@ def _largest_existing_path(paths: Iterable[Path]) -> Path | None:
 
 
 def _should_partition_with_dask_cudf(csv_path: Path | None) -> bool:
-    available = _available_memory_limit()
+    available = _gpu_memory_limit()
     if csv_path is None or available is None:
         return False
     try:
@@ -1086,6 +1092,13 @@ def _cpu_dask_allowed() -> bool:
 
 
 def _gpu_backends_unavailable() -> bool:
+    """Return True when no GPU backend can run.
+
+    That is when no CUDA device is usable, or when neither cuDF module
+    imports.
+    """
+    if not gpu.cuda_device_available():
+        return True
     return not _backend_importable("cudf") and not _backend_importable("dask_cudf")
 
 
@@ -1193,6 +1206,20 @@ def _available_memory_limit() -> int | None:
     distributed_limit = _distributed_memory_limit()
     candidates = [value for value in (proc_available, distributed_limit) if value is not None and value > 0]
     return min(candidates) if candidates else None
+
+
+def _gpu_memory_limit() -> int | None:
+    """Return the memory a single-GPU cuDF read can use.
+
+    A GPU that shares the host's memory, such as DGX Spark's GB10, can use
+    what the host has available. A GPU with its own memory, such as Grace
+    Hopper's or a PCIe card's, is limited by its free device memory too.
+    """
+    host = _available_memory_limit()
+    device = gpu.device_memory()
+    if device is None or device.integrated:
+        return host
+    return device.free_bytes if host is None else min(host, device.free_bytes)
 
 
 def _proc_mem_available() -> int | None:

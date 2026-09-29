@@ -8,6 +8,7 @@ import types
 import pytest
 
 from gridlens.analysis import csv_flat
+from gridlens.analysis import gpu
 from gridlens.analysis import parsers
 from gridlens.analysis.dataset import build_run_analysis
 from gridlens.analysis.enrichment import enrich_with_bus_metadata
@@ -187,7 +188,29 @@ def test_csv_flat_thermal_overload_counts_leave_out_violation_flags(tmp_path, mo
     assert [(events[event]["violation_count"], events[event]["thermal_overload_count"]) for event in (1, 2, 3, 4)] == [(1, 0), (0, 1), (1, 1), (1, 0)]
 
 
-def test_csv_flat_auto_prefers_cudf_when_available(monkeypatch) -> None:
+@pytest.fixture
+def usable_gpu(monkeypatch):
+    """Report a usable CUDA device, whatever machine runs the test."""
+    monkeypatch.setattr(gpu, "cuda_device_available", lambda: True)
+
+
+@pytest.fixture
+def integrated_gpu(monkeypatch):
+    """Report a GPU that shares the host's memory, as DGX Spark's GB10 does."""
+    shared = gpu.DeviceMemory(free_bytes=10**15, integrated=True)
+    monkeypatch.setattr(gpu, "cuda_device_available", lambda: True)
+    monkeypatch.setattr(gpu, "device_memory", lambda: shared)
+
+
+@pytest.fixture
+def no_usable_gpu(monkeypatch):
+    """Report no usable CUDA device, as with a driver too old for CUDA."""
+    monkeypatch.setattr(gpu, "cuda_device_available", lambda: False)
+    monkeypatch.setattr(gpu, "device_memory", lambda: None)
+
+
+def test_csv_flat_auto_prefers_cudf_when_available(
+        monkeypatch, usable_gpu) -> None:
     fake_cudf = types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "cudf", fake_cudf)
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
@@ -198,7 +221,8 @@ def test_csv_flat_auto_prefers_cudf_when_available(monkeypatch) -> None:
     assert backend.module is fake_cudf
 
 
-def test_csv_flat_auto_uses_dask_cudf_before_cpu_dask(monkeypatch) -> None:
+def test_csv_flat_auto_uses_dask_cudf_before_cpu_dask(
+        monkeypatch, usable_gpu) -> None:
     fake_dask_cudf = types.SimpleNamespace()
     original_import = builtins.__import__
 
@@ -218,7 +242,8 @@ def test_csv_flat_auto_uses_dask_cudf_before_cpu_dask(monkeypatch) -> None:
     assert backend.module is fake_dask_cudf
 
 
-def test_csv_flat_auto_uses_cudf_for_csv_below_memory_threshold(tmp_path, monkeypatch) -> None:
+def test_csv_flat_auto_uses_cudf_for_csv_below_memory_threshold(
+        tmp_path, monkeypatch, integrated_gpu) -> None:
     csv_path = tmp_path / "small.csv"
     csv_path.write_bytes(b"x" * 74)
     monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 100)
@@ -226,7 +251,8 @@ def test_csv_flat_auto_uses_cudf_for_csv_below_memory_threshold(tmp_path, monkey
     assert csv_flat._auto_backend_order(csv_path) == ("cudf", "dask_cudf", "dask")
 
 
-def test_csv_flat_auto_uses_dask_cudf_for_csv_above_memory_threshold(tmp_path, monkeypatch) -> None:
+def test_csv_flat_auto_uses_dask_cudf_for_csv_above_memory_threshold(
+        tmp_path, monkeypatch, integrated_gpu) -> None:
     csv_path = tmp_path / "large.csv"
     csv_path.write_bytes(b"x" * 76)
     monkeypatch.setattr(csv_flat, "_available_memory_limit", lambda: 100)
@@ -457,3 +483,65 @@ def _csv_flat_run(root) -> object:
         encoding="utf-8",
     )
     return run_dir
+
+
+def test_gpu_backends_are_skipped_when_no_gpu_is_usable(
+        monkeypatch, no_usable_gpu) -> None:
+    monkeypatch.setitem(sys.modules, "cudf", types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "dask_cudf", types.SimpleNamespace())
+    monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
+
+    assert csv_flat._gpu_backends_unavailable()
+    assert csv_flat._lazy_backend().name == "dask"
+
+
+def test_required_gpu_backend_says_no_gpu_is_usable(
+        monkeypatch, no_usable_gpu) -> None:
+    monkeypatch.setitem(sys.modules, "cudf", types.SimpleNamespace())
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "cudf")
+
+    with pytest.raises(RuntimeError, match="no usable NVIDIA GPU"):
+        csv_flat._lazy_backend()
+
+
+def test_cpu_dask_fallback_warning_appears_when_no_gpu_is_usable(
+        tmp_path, monkeypatch, no_usable_gpu) -> None:
+    run_dir = _csv_flat_run(tmp_path)
+    monkeypatch.setitem(sys.modules, "cudf", types.SimpleNamespace())
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
+
+    assert "CPU Dask" in csv_flat.cpu_dask_fallback_warning(run_dir)
+
+
+PARTITIONED = ("dask_cudf", "dask")
+SINGLE_GPU = ("cudf", "dask_cudf", "dask")
+
+
+@pytest.mark.parametrize(
+    ("host_bytes", "device_bytes", "integrated", "expected"),
+    [
+        # A discrete GPU, such as Grace Hopper's or a PCIe card, is limited
+        # by its own free memory.
+        (1000, 100, False, PARTITIONED),
+        # A discrete GPU with more memory than the host has available is
+        # limited by the host.
+        (100, 1000, False, PARTITIONED),
+        (1000, 1000, False, SINGLE_GPU),
+        # DGX Spark's GB10 shares the host's memory, so the host's available
+        # memory decides.
+        (1000, 100, True, SINGLE_GPU),
+    ],
+)
+def test_single_gpu_reads_fit_the_memory_the_gpu_can_use(
+        tmp_path, monkeypatch, host_bytes, device_bytes, integrated,
+        expected) -> None:
+    csv_path = tmp_path / "flat.csv"
+    csv_path.write_bytes(b"x" * 76)
+    device = gpu.DeviceMemory(device_bytes, integrated)
+    monkeypatch.setattr(csv_flat, "_available_memory_limit",
+                        lambda: host_bytes)
+    monkeypatch.setattr(gpu, "device_memory", lambda: device)
+
+    assert csv_flat._auto_backend_order(csv_path) == expected
+
