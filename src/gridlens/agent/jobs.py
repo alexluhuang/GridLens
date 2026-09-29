@@ -48,6 +48,11 @@ FINAL_STATES = ("completed", "failed", "cancelled")
 JOB_ID_PATTERN = re.compile(r"\d{8}T\d{6}Z_[a-f0-9]{8}")
 JOB_FILE = "job.json"
 LOG_FILE = "job.log"
+# cancel_job leaves this file for the worker, which checks for it every
+# CANCEL_POLL_SECONDS. It is how Windows, which cannot send the worker a
+# signal it can handle, asks a job to stop.
+CANCEL_FILE = "cancel.request"
+CANCEL_POLL_SECONDS = 0.5
 # Jobs written before the record and the state shared one file.
 LEGACY_STATUS_FILE = "status.json"
 LEGACY_LOG_FILE = "output.log"
@@ -214,11 +219,29 @@ def wait_for_job(project_root: Path, job_id: str, seconds: float) -> dict:
         time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
 
 
-def cancel_job(project_root: Path, job_id: str) -> dict:
-    """Stop a job: signal its worker's process group, and stop the GridPACK container of a run job.
+def _request_cancel(folder: Path) -> None:
+    """Leave the cancellation request that the job's worker watches for."""
+    with files.open_private(scoped_path(folder, CANCEL_FILE), "w") as handle:
+        handle.write(timestamp() + "\n")
 
-    The worker records the cancellation itself when it can. One that exits without doing so, within
-    CANCEL_WAIT_SECONDS, is recorded as cancelled here, once it is gone.
+
+def _watch_for_cancel(folder: Path, cancelled: threading.Event) -> None:
+    """Set cancelled once cancel_job leaves its request in the job folder."""
+    request = folder / CANCEL_FILE
+    while not cancelled.wait(CANCEL_POLL_SECONDS):
+        if request.exists():
+            cancelled.set()
+
+
+def cancel_job(project_root: Path, job_id: str) -> dict:
+    """Ask a job's worker to stop, and stop the container of a run job.
+
+    The request is a file in the job folder and, on POSIX, SIGTERM to the
+    worker's process group. The worker records the cancellation itself when
+    it can. One that exits without doing so, within CANCEL_WAIT_SECONDS, is
+    recorded as cancelled here, once it is gone. On Windows a worker still
+    running then is killed with its process tree, because no signal can
+    have reached it.
     """
     from gridlens.runner.gridpack_runner import effective_gridpack_container_name, terminate_gridpack_run
 
@@ -226,6 +249,7 @@ def cancel_job(project_root: Path, job_id: str) -> dict:
     job = read_json(folder / JOB_FILE)
     if _state(folder, job).get("state") in FINAL_STATES:
         return read_job(project_root, job_id)
+    _request_cancel(folder)
     if not processes.WINDOWS and _alive(job):
         # The worker leads its own process group; SIGTERM asks it to stop.
         try:
@@ -238,6 +262,8 @@ def cancel_job(project_root: Path, job_id: str) -> dict:
     deadline = time.monotonic() + CANCEL_WAIT_SECONDS
     while _alive(job) and time.monotonic() < deadline:
         time.sleep(0.1)
+    if processes.WINDOWS and _alive(job):
+        processes.kill_tree(int(job["pid"]))
     state = _state(folder, read_json(folder / JOB_FILE)).get("state")
     if not _alive(job) and state not in FINAL_STATES:
         if (folder / LEGACY_STATUS_FILE).is_file() and "state" not in job:
@@ -387,6 +413,9 @@ def run_job(folder: Path) -> int:
     job = read_json(folder / JOB_FILE)
     cancelled = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: cancelled.set())
+    watcher = threading.Thread(
+        target=_watch_for_cancel, args=(folder, cancelled), daemon=True)
+    watcher.start()
     _write_status(folder, "running", "Started.")
     _log(folder, f"Started the {job['kind']} job for run {job.get('run_id')} (worker pid {os.getpid()}).")
     final = {}

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -110,8 +111,38 @@ def test_lost_workers_are_reported_and_cancelling_stops_the_worker(agent_project
     started = jobs.start_job(agent_project, "analysis", agent_project / "runs/run_a", {"kinds": ["branch"]})
     cancelled = jobs.cancel_job(agent_project, started["job_id"])
     assert cancelled["state"] == "cancelled"
+    started_folder = agent_project / jobs.JOBS_FOLDER / started["job_id"]
+    assert (started_folder / jobs.CANCEL_FILE).is_file()
     assert jobs.cancel_job(agent_project, started["job_id"])["state"] == "cancelled"
     assert "Cancelled" in (agent_project / jobs.JOBS_FOLDER / started["job_id"] / "job.log").read_text()
+
+
+def test_a_worker_notices_a_cancel_request(tmp_path):
+    cancelled = threading.Event()
+    watcher = threading.Thread(
+        target=jobs._watch_for_cancel, args=(tmp_path, cancelled), daemon=True)
+    watcher.start()
+
+    (tmp_path / jobs.CANCEL_FILE).write_text("now")
+
+    assert cancelled.wait(5 * jobs.CANCEL_POLL_SECONDS)
+
+
+def test_cancelling_on_windows_kills_a_worker_that_does_not_stop(
+        agent_project, monkeypatch):
+    """No signal reaches a Windows worker; one ignoring the request dies."""
+    ignores = [sys.executable, "-c", "import time; time.sleep(60)"]
+    monkeypatch.setattr(jobs, "gridlens_command", lambda *arguments: ignores)
+    run = agent_project / "runs/run_a"
+    request = {"kinds": ["branch"]}
+    started = jobs.start_job(agent_project, "analysis", run, request)
+    monkeypatch.setattr(jobs.processes, "WINDOWS", True)
+    monkeypatch.setattr(jobs, "CANCEL_WAIT_SECONDS", 0.3)
+
+    cancelled = jobs.cancel_job(agent_project, started["job_id"])
+
+    assert cancelled["state"] == "cancelled"
+    assert not jobs.processes.pid_alive(started["pid"], started["pid_started"])
 
 
 def test_legacy_job_folders_are_still_read(agent_project):

@@ -167,7 +167,8 @@ def _posix_alive(pid: int) -> bool:
 def _windows_alive(pid: int) -> bool:
     """Return whether pid is running, on Windows."""
     try:
-        return psutil.Process(pid).is_running()
+        process = psutil.Process(pid)
+        return process.status() != psutil.STATUS_ZOMBIE
     except psutil.Error:
         return False
 
