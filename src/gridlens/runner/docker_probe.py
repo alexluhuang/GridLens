@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import os
 import subprocess
 
 from gridlens.system import processes
@@ -14,6 +15,13 @@ class ProbeResult:
 
 
 SuccessMessage = Callable[[str], str]
+# Where the docker CLI finds the daemon when nothing else names one.
+DEFAULT_ENDPOINT = (
+    "npipe:////./pipe/docker_engine" if processes.WINDOWS
+    else "unix:///var/run/docker.sock")
+# A daemon reached through one of these runs on this machine, so the files a
+# container mounts are this machine's files.
+LOCAL_SCHEMES = ("unix://", "npipe://")
 START_DOCKER_DESKTOP = "Start Docker Desktop, then check again."
 
 
@@ -85,6 +93,33 @@ def docker_engine_available() -> ProbeResult:
             "GridPACK needs Linux containers: switch Docker Desktop to "
             "Linux containers.")
     return ProbeResult(True, f"Docker Engine {version}")
+
+
+def local_docker_endpoint() -> str:
+    """Return the endpoint of the Docker daemon this user's CLI talks to.
+
+    DOCKER_HOST wins, as it does for the CLI; then the endpoint of the
+    current docker context; then the platform's default. Raises ValueError
+    when the daemon is reached over the network, because a container there
+    would mount another machine's files.
+    """
+    endpoint = os.environ.get("DOCKER_HOST", "").strip()
+    if not endpoint:
+        endpoint = _context_endpoint() or DEFAULT_ENDPOINT
+    if not endpoint.startswith(LOCAL_SCHEMES):
+        raise ValueError(f"Docker is reached over the network ({endpoint}).")
+    return endpoint
+
+
+def _context_endpoint() -> str:
+    """Return the Docker endpoint of the current docker context, or ""."""
+    command = ["docker", "context", "inspect", "--format",
+               "{{.Endpoints.docker.Host}}"]
+    try:
+        result = run_command(command, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def image_exists(image: str) -> ProbeResult:

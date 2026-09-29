@@ -10,6 +10,7 @@ from zipfile import ZipFile
 import pytest
 
 from gridlens.agent.policy import AgentError
+from gridlens.agent import scripts
 from gridlens.agent.scripts import execute_proposal, proposal_run, read_proposal, sandbox_command, save_proposal
 from gridlens.agent.session import export_session
 from gridlens.agent.tools import ToolService
@@ -69,6 +70,43 @@ def test_sandbox_command_enforces_limits_and_mounts(agent_context):
     assert image in command and "--pull=never" in command
     with pytest.raises(AgentError, match="immutable"):
         sandbox_command("docker", "test", "mutable:latest", agent_context.run("run_a"), Path("code.py"))
+
+
+def test_sandbox_runs_on_the_resolved_endpoint(agent_context):
+    image = "sha256:" + "a" * 64
+    host = "unix:///run/user/1000/docker.sock"
+    run = agent_context.run("run_a")
+    script = agent_context.directory / "code.py"
+
+    command = sandbox_command("docker", "test", image, run, script, host)
+
+    assert command[1:3] == ["--host", host]
+
+
+def test_windows_scripts_run_as_nobody(agent_context, monkeypatch):
+    monkeypatch.setattr(scripts.processes, "WINDOWS", True)
+    image = "sha256:" + "a" * 64
+    run = agent_context.run("run_a")
+    script = agent_context.directory / "code.py"
+
+    command = sandbox_command("docker", "test", image, run, script)
+
+    assert command[command.index("--user") + 1] == scripts.NOBODY
+
+
+def test_scripts_never_run_on_a_remote_docker_daemon(
+        agent_context, monkeypatch):
+    monkeypatch.setenv("DOCKER_HOST", "tcp://10.0.0.5:2376")
+    monkeypatch.setattr(scripts.shutil, "which", lambda name: "docker")
+    proposal = save_proposal(agent_context, "run_a", "Remote", "print(1)")
+    identifier, approved = proposal["proposal_id"], proposal["sha256"]
+
+    with pytest.raises(AgentError) as caught:
+        execute_proposal(agent_context, identifier, approved,
+                         "sha256:" + "a" * 64)
+
+    assert caught.value.code == "DOCKER_NOT_LOCAL"
+    assert not (agent_context.directory / "generated/executions").exists()
 
 
 def test_export_is_separate_and_excludes_runtime_credentials(agent_context, tmp_path):

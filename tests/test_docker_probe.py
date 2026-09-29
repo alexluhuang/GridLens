@@ -4,6 +4,8 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+import pytest
+
 from gridlens.runner import docker_probe
 from gridlens.runner.docker_probe import (
     docker_client_available, docker_engine_available, image_exists,
@@ -113,3 +115,41 @@ def test_unreachable_engine_on_windows_says_to_start_docker_desktop(
 
     assert result.ok is False
     assert result.message.endswith(docker_probe.START_DOCKER_DESKTOP)
+
+
+@pytest.mark.parametrize("host", [
+    "unix:///run/user/1000/docker.sock", "npipe:////./pipe/docker_engine"])
+def test_a_local_docker_host_is_used_as_given(monkeypatch, host) -> None:
+    monkeypatch.setenv("DOCKER_HOST", host)
+
+    assert docker_probe.local_docker_endpoint() == host
+
+
+@pytest.mark.parametrize("host", [
+    "tcp://10.0.0.5:2376", "ssh://builder@remote"])
+def test_a_docker_host_on_another_machine_is_refused(
+        monkeypatch, host) -> None:
+    monkeypatch.setenv("DOCKER_HOST", host)
+
+    with pytest.raises(ValueError, match="over the network"):
+        docker_probe.local_docker_endpoint()
+
+
+def test_the_current_docker_context_names_the_endpoint(monkeypatch) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    rootless = "unix:///run/user/1000/docker.sock\n"
+    with patch("gridlens.runner.docker_probe.run_command",
+               return_value=completed(["docker"], 0, stdout=rootless)):
+        endpoint = docker_probe.local_docker_endpoint()
+
+    assert endpoint == "unix:///run/user/1000/docker.sock"
+
+
+def test_the_platform_default_is_used_without_a_context(monkeypatch) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    with patch("gridlens.runner.docker_probe.run_command",
+               side_effect=FileNotFoundError):
+        endpoint = docker_probe.local_docker_endpoint()
+
+    assert endpoint == docker_probe.DEFAULT_ENDPOINT
+

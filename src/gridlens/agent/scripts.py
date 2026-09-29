@@ -26,12 +26,15 @@ from gridlens.agent.policy import AgentError
 from gridlens.agent.process import minimal_environment, terminate_process
 from gridlens.agent.conversation_log import write_conversation_log
 from gridlens.agent.session import SessionContext, append_event, find_project, read_json, resolve_run, scoped_path, timestamp, write_json
+from gridlens.runner import docker_probe
 from gridlens.system import files, processes
 
 
 MAX_SCRIPT_BYTES = 24 * 1024
 MAX_OUTPUT_BYTES = 256 * 1024
-DOCKER_HOST = "unix:///var/run/docker.sock"
+# The user a script runs as where the host has no user ids to pass on: on
+# Windows the container runs in Docker Desktop's VM, and nobody suffices.
+NOBODY = "65534:65534"
 
 
 READ_CHUNK_BYTES = 8192
@@ -41,14 +44,38 @@ REMOVE_TIMEOUT_SECONDS = 15
 POLL_SECONDS = 0.1
 
 
-def _require_sandbox_image(executable: str, image: str, environment: dict) -> None:
+def _sandbox_endpoint() -> str:
+    """Return the local Docker endpoint that approved scripts run on.
+
+    The endpoint is fixed for the whole execution, and it must be on this
+    machine, so the run folder a script mounts is the one that was reviewed.
+    """
+    try:
+        return docker_probe.local_docker_endpoint()
+    except ValueError as exc:
+        raise AgentError(
+            "DOCKER_NOT_LOCAL",
+            f"{exc} Approved scripts run only on a Docker daemon on this "
+            "machine.") from exc
+
+
+def _container_user() -> str:
+    """Return the --user of a script container: the host user on POSIX."""
+    if processes.WINDOWS:
+        return NOBODY
+    return f"{os.getuid()}:{os.getgid()}"
+
+
+def _require_sandbox_image(executable: str, image: str, environment: dict,
+                           host: str) -> None:
     """Refuse any image that is not the separately prepared analysis sandbox.
 
     The label is the check, not the name. GridLens passes --pull=never, so an image that is absent or was
     built for another purpose has to be rejected here rather than discovered inside the container.
     """
     inspection = subprocess.run(
-        [executable, "--host", DOCKER_HOST, "image", "inspect", image, "--format", '{{index .Config.Labels "org.gridlens.purpose"}}'],
+        [executable, "--host", host, "image", "inspect", image, "--format",
+         '{{index .Config.Labels "org.gridlens.purpose"}}'],
         capture_output=True, timeout=INSPECT_TIMEOUT_SECONDS, env=environment,
         **processes.no_window_options(),
     )
@@ -80,11 +107,12 @@ def _stream_bounded_output(process, output: bytearray, cancelled, deadline: floa
                     "OUTPUT_LIMIT", "The script exceeded its output limit.")
 
 
-def _remove_container(executable: str, name: str, environment: dict) -> bool:
+def _remove_container(executable: str, name: str, environment: dict,
+                      host: str) -> bool:
     """Remove the container and report whether it is gone. Never raises, so cleanup cannot mask a result."""
     try:
         removal = subprocess.run(
-            [executable, "--host", DOCKER_HOST, "rm", "--force", name],
+            [executable, "--host", host, "rm", "--force", name],
             capture_output=True, timeout=REMOVE_TIMEOUT_SECONDS, env=environment,
             **processes.no_window_options(),
         )
@@ -171,22 +199,33 @@ def read_proposal(context: SessionContext, identifier: str) -> tuple[dict, Path,
     return record, path, data.decode("utf-8")
 
 
-def sandbox_command(executable: str, name: str, image: str, run: Path, script: Path) -> list[str]:
+def sandbox_command(executable: str, name: str, image: str, run: Path,
+                    script: Path,
+                    host: str = docker_probe.DEFAULT_ENDPOINT) -> list[str]:
     """Build the docker create argument list for one approved script."""
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", image):
         raise AgentError("INVALID_IMAGE", "Use the immutable sha256 image ID of a separately prepared analysis sandbox.")
-    if os.getuid() == 0:
+    if not processes.WINDOWS and os.getuid() == 0:
         raise AgentError("ROOT_NOT_ALLOWED", "Run GridLens as a normal user to execute a reviewed script.")
     if any("," in str(path) for path in (run, script)):
         raise AgentError("UNSUPPORTED_PATH", "Docker bind mount paths cannot contain commas.")
-    return [executable, "--host", DOCKER_HOST, "create", "--name", name, "--pull=never", "--runtime", "runc",
-            "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-            "--user", f"{os.getuid()}:{os.getgid()}", "--cpus", "2", "--memory", "1g", "--memory-swap", "1g",
-            "--pids-limit", "64", "--ulimit", "nofile=256:256", "--ulimit", "fsize=16777216:16777216", "--ulimit", "cpu=120:120",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m,mode=1777", "--tmpfs", "/output:rw,noexec,nosuid,size=32m,mode=1777",
-            "--mount", f"type=bind,src={run},dst=/run-data,readonly", "--mount", f"type=bind,src={script},dst=/analysis.py,readonly",
-            "--workdir", "/output", "--env", "NVIDIA_VISIBLE_DEVICES=void", "--env", "PYTHONDONTWRITEBYTECODE=1",
-            "--env", "PYTHONUNBUFFERED=1", "--entrypoint", "python", image, "-I", "-B", "/analysis.py"]
+    return [
+        executable, "--host", host, "create", "--name", name,
+        "--pull=never", "--runtime", "runc",
+        "--network", "none", "--read-only", "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges:true",
+        "--user", _container_user(),
+        "--cpus", "2", "--memory", "1g", "--memory-swap", "1g",
+        "--pids-limit", "64", "--ulimit", "nofile=256:256",
+        "--ulimit", "fsize=16777216:16777216", "--ulimit", "cpu=120:120",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m,mode=1777",
+        "--tmpfs", "/output:rw,noexec,nosuid,size=32m,mode=1777",
+        "--mount", f"type=bind,src={run},dst=/run-data,readonly",
+        "--mount", f"type=bind,src={script},dst=/analysis.py,readonly",
+        "--workdir", "/output", "--env", "NVIDIA_VISIBLE_DEVICES=void",
+        "--env", "PYTHONDONTWRITEBYTECODE=1", "--env", "PYTHONUNBUFFERED=1",
+        "--entrypoint", "python", image, "-I", "-B", "/analysis.py",
+    ]
 
 
 def execute_proposal(context: SessionContext, identifier: str, approved_hash: str, image: str, *, cancelled=None, timeout: float = 120) -> dict:
@@ -199,11 +238,12 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
         raise AgentError("DOCKER_UNAVAILABLE", "Install and configure Docker yourself before running a reviewed script.")
     name = "gridlens-analysis-" + uuid4().hex
     run = proposal_run(context, record)
+    host = _sandbox_endpoint()
     # Validate the image ID and refuse to run as root before anything is written to the session folder.
     # The command used later is rebuilt against the snapshot, so this call is a preflight check only.
-    sandbox_command(executable, name, image, run, script)
+    sandbox_command(executable, name, image, run, script, host)
     environment = minimal_environment()
-    _require_sandbox_image(executable, image, environment)
+    _require_sandbox_image(executable, image, environment, host)
     cancelled = cancelled or threading.Event()
     execution = scoped_path(context.directory, Path("generated/executions") / uuid4().hex, directory=True)
     execution.mkdir(parents=True, mode=0o700)
@@ -211,7 +251,7 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
     snapshot = execution / "script.py"
     with files.open_private(snapshot, "x") as handle:
         handle.write(code)
-    command = sandbox_command(executable, name, image, run, snapshot)
+    command = sandbox_command(executable, name, image, run, snapshot, host)
     result = {"proposal_id": identifier, "script_sha256": approved_hash, "image": image, "approved_at": timestamp(), "command": command, "status": "running", "exit_code": None, "untrusted": True}
     write_json(execution / "result.json", result)
     append_event(context.directory, "script_executions.jsonl", {"phase": "approved", **result})
@@ -226,7 +266,7 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
         if cancelled.is_set():
             raise AgentError("CANCELLED", "Script execution cancelled.")
         process = subprocess.Popen(
-            [executable, "--host", DOCKER_HOST, "start", "--attach", name],
+            [executable, "--host", host, "start", "--attach", name],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment,
             **processes.new_group_options())
         deadline = time.monotonic() + timeout
@@ -236,7 +276,7 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
     except (AgentError, OSError, subprocess.SubprocessError) as exc:
         result.update(status="failed", error=exc.code if isinstance(exc, AgentError) else "SANDBOX_FAILED", detail=str(exc)[:2000])
     finally:
-        if not _remove_container(executable, name, environment):
+        if not _remove_container(executable, name, environment, host):
             result["cleanup_warning"] = "Check Docker for the recorded GridLens container name."
         if process:
             terminate_process(process)
