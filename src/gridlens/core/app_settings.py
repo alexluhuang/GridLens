@@ -2,19 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
 import json
-import os
 from pathlib import Path
+
+from gridlens.system import paths
 
 
 def _default_projects_dir() -> Path:
     return Path.home() / "GridLensProjects"
-
-
-def _default_config_dir() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME")
-    if base:
-        return Path(base) / "gridlens"
-    return Path.home() / ".config" / "gridlens"
 
 
 @dataclass(slots=True)
@@ -30,7 +24,7 @@ class AppSettings:
 
     @classmethod
     def config_path(cls) -> Path:
-        return _default_config_dir() / "settings.json"
+        return paths.config_dir() / "settings.json"
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppSettings":

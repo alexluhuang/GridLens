@@ -8,9 +8,11 @@ import re
 from gridlens.analysis.distribution_stats import distribution_summary_row
 from gridlens.analysis.gpu_pandas import get_pandas
 from gridlens.analysis.master import UTILIZATION_COLUMNS, ensure_branch_master_exports
+from gridlens.system import paths
 
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/gridlens-matplotlib")
+os.environ.setdefault(
+    "MPLCONFIGDIR", str(paths.shared_temp_dir() / "gridlens-matplotlib"))
 
 
 DISTRIBUTION_CODE_PATH = Path(__file__).resolve()

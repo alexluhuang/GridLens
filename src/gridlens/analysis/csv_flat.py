@@ -17,6 +17,7 @@ from gridlens.analysis.contingencies import SUMMARY_NAME, attach_convergence, su
 from gridlens.analysis.progress import PHASE_PARSE, ProgressCallback, report
 from gridlens.analysis.raw_parsers import AREA_METADATA_COLUMNS, BRANCH_METADATA_COLUMNS, BUS_METADATA_COLUMNS
 from gridlens.analysis.utilization import NONTRANSFORMER_BRANCH
+from gridlens.system import paths
 
 
 CSV_FLAT_PREVIEW_LIMIT = 200
@@ -29,7 +30,7 @@ CSV_FLAT_DEFAULT_BLOCKSIZE = "256MB"
 CSV_FLAT_DEFAULT_SCHEDULER = "threads"
 CSV_FLAT_MEMORY_TARGET = "160GB"
 CSV_FLAT_DEFAULT_CLUSTER = "auto"
-CSV_FLAT_DEFAULT_DASK_TEMP_DIR = "/tmp/gridlens-dask"
+CSV_FLAT_DEFAULT_DASK_TEMP_DIR = str(paths.shared_temp_dir() / "gridlens-dask")
 CSV_FLAT_DEFAULT_DEVICE_MEMORY_LIMIT = "auto"
 CSV_FLAT_ALLOW_CPU_DASK_ENV = "GRIDLENS_ALLOW_CPU_DASK"
 GPU_BACKENDS = ("cudf", "dask_cudf")

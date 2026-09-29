@@ -15,6 +15,7 @@ from gridlens.gui.configuration_view_models import (
     default_input_configuration_values,
     render_input_configuration_xml,
 )
+from gridlens.system import paths
 
 
 @pytest.fixture(autouse=True)
@@ -22,9 +23,12 @@ def isolated_settings(tmp_path_factory, monkeypatch):
     """Point GridLens settings at a temporary projects folder, so no test writes to the user's projects."""
     config = tmp_path_factory.mktemp("config")
     projects = tmp_path_factory.mktemp("projects")
-    (config / "gridlens").mkdir()
-    (config / "gridlens" / "settings.json").write_text(json.dumps({"default_projects_dir": str(projects)}))
+    # Settings live under XDG_CONFIG_HOME on Linux and LOCALAPPDATA on Windows.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.setenv("LOCALAPPDATA", str(config))
+    paths.config_dir().mkdir()
+    settings = paths.config_dir() / "settings.json"
+    settings.write_text(json.dumps({"default_projects_dir": str(projects)}))
     return projects
 
 

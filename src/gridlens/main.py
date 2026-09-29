@@ -3,9 +3,10 @@ from __future__ import annotations
 import importlib
 from multiprocessing import freeze_support
 import os
-from pathlib import Path
 import sys
 import traceback
+
+from gridlens.system import paths
 
 
 def _run_import_diagnostics() -> int:
@@ -30,18 +31,12 @@ def _run_import_diagnostics() -> int:
 CUFILE_LOG_ENV = "CUFILE_LOGFILE_PATH"
 
 
-def _cache_dir() -> Path:
-    """Return GridLens's cache folder, under XDG_CACHE_HOME when it is set."""
-    base = os.environ.get("XDG_CACHE_HOME")
-    return (Path(base) if base else Path.home() / ".cache") / "gridlens"
-
-
 def _redirect_cufile_log() -> None:
     """Point cuFile's log at the GridLens cache, unless the user chose a place for it."""
     if os.environ.get(CUFILE_LOG_ENV):
         return
     try:
-        folder = _cache_dir()
+        folder = paths.cache_dir()
         folder.mkdir(parents=True, exist_ok=True)
     except OSError:
         return

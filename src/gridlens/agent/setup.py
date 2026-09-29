@@ -32,6 +32,7 @@ from urllib.request import ProxyHandler, Request, build_opener, urlopen
 from gridlens.agent.hermes import DEFAULT_ENDPOINT, SUPPORTED_HERMES, SUPPORTED_HERMES_COMMIT, VERSION_PATTERN, hermes_executable
 from gridlens.agent.policy import AgentError, local_endpoint, ollama_json
 from gridlens.agent.process import probe_version
+from gridlens.system import paths
 
 
 HERMES_INSTALLER_POSIX = "https://hermes-agent.nousresearch.com/install.sh"
@@ -125,10 +126,7 @@ class SetupStatus:
 
 def data_folder() -> Path:
     """Return the folder GridLens installs its own copy of Ollama into."""
-    if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "GridLens"
-    base = os.environ.get("XDG_DATA_HOME")
-    return (Path(base) if base else Path.home() / ".local" / "share") / "gridlens"
+    return paths.data_dir()
 
 
 def managed_ollama() -> Path:

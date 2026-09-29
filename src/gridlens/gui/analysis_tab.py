@@ -23,7 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/gridlens-matplotlib")
+from gridlens.system import paths
+
+os.environ.setdefault(
+    "MPLCONFIGDIR", str(paths.shared_temp_dir() / "gridlens-matplotlib"))
 
 try:  # Matplotlib is an optional analysis dependency.
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
