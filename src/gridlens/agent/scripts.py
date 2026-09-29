@@ -25,6 +25,7 @@ from uuid import uuid4
 
 from gridlens.agent.policy import AgentError
 from gridlens.agent.process import minimal_environment, terminate_process
+from gridlens.agent.conversation_log import write_conversation_log
 from gridlens.agent.session import SessionContext, append_event, find_project, read_json, resolve_run, scoped_path, timestamp, write_json
 
 
@@ -237,4 +238,8 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
             handle.write(output)
         write_json(execution / "result.json", result)
         append_event(context.directory, "script_executions.jsonl", {"phase": "completed", **result})
+        try:
+            write_conversation_log(context.directory)
+        except (AgentError, OSError, ValueError):
+            pass  # The readable record is derived; the execution record above is what counts.
     return result

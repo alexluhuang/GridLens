@@ -21,6 +21,7 @@ import threading
 import time
 from typing import Callable
 
+from gridlens.agent.conversation_log import write_conversation_log
 from gridlens.agent.policy import AgentError
 from gridlens.agent.prompt import session_facts, turn_prompt
 from gridlens.agent.runtime import RuntimeAdapter, RuntimeEvent
@@ -234,6 +235,10 @@ class AgentController:
                 process.stderr.close()
             if buffers["stderr"]:
                 append_event(self.context.directory, "runtime_events.jsonl", {"kind": "diagnostic", "text": buffers["stderr"].decode("utf-8", errors="replace")})
+            try:
+                write_conversation_log(self.context.directory)
+            except (AgentError, OSError, ValueError):
+                pass  # The readable record is derived from the audit files; failing to write it must not fail the turn.
 
 
 def session_sources(directory: Path) -> list[dict]:

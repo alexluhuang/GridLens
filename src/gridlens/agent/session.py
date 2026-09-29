@@ -31,11 +31,15 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 EXPORT_MAX_FILES = 10_000
 PROJECT_FILE = "project.json"
-# Sessions live in a hidden folder of the projects folder, which is never mistaken for a project because it
-# has no project.json, so one conversation can move between projects. Sessions written before that lived
-# inside the project open when they started, and are still listed and opened from there.
-WORKSPACE_SESSIONS = Path(".gridlens-agent/sessions")
+# Sessions live in a folder of the projects folder, which is never mistaken for a project because it has no
+# project.json, so one conversation can move between projects. The folder is visible, so a user can find a
+# conversation's record in a file browser. Earlier versions kept sessions in a hidden folder of the projects
+# folder, and before that inside the project open when they started; both are still listed and opened, and
+# `migrate_legacy_sessions` moves the hidden ones into the visible folder.
+WORKSPACE_SESSIONS = Path("Clarke conversations")
+LEGACY_WORKSPACE_SESSIONS = Path(".gridlens-agent/sessions")
 PROJECT_SESSIONS = Path("agent/sessions")
+CONVERSATION_LOG = "conversation.md"
 FOCUS_FILE = "focus.json"
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 
@@ -111,7 +115,7 @@ def export_session(directory: Path, destination: Path) -> None:
     The export holds the session record, the audit, generated scripts, and the complete tool results in
     results/. A session larger than the export limit has to be reviewed in its folder.
     """
-    names = ("context.json", FOCUS_FILE, "manifest.json", "transcript.jsonl", "runtime_events.jsonl", "tool_calls.jsonl", "usage.json", "status.json", "script_executions.jsonl")
+    names = (CONVERSATION_LOG, "context.json", FOCUS_FILE, "manifest.json", "transcript.jsonl", "runtime_events.jsonl", "tool_calls.jsonl", "usage.json", "status.json", "script_executions.jsonl")
     paths = [scoped_path(directory, name) for name in names]
     for folder in ("generated", "results"):
         tree = scoped_path(directory, folder, directory=True)
@@ -191,7 +195,7 @@ def saved_sessions(projects_dir: Path, project_root: Path | None = None, *, limi
     Session folder names begin with their UTC creation time, so sorting by name puts the newest first.
     """
     folders = []
-    for base, sessions in ((projects_dir, WORKSPACE_SESSIONS), (project_root, PROJECT_SESSIONS)):
+    for base, sessions in ((projects_dir, WORKSPACE_SESSIONS), (projects_dir, LEGACY_WORKSPACE_SESSIONS), (project_root, PROJECT_SESSIONS)):
         if base is None:
             continue
         root = scoped_path(base, sessions, directory=True)
@@ -216,6 +220,63 @@ def session_title(directory: Path, limit: int = 80) -> str:
     if len(question) > limit:
         question = question[:limit].rstrip() + "…"
     return f"{label}  ·  {question}" if question else label
+
+
+def migrate_legacy_sessions(projects_dir: Path) -> list[Path]:
+    """Move the sessions kept in the hidden folder of earlier versions into the visible one; return their new folders.
+
+    Each folder is renamed within the projects folder, and the `directory` its context.json records is
+    rewritten to match: the one change ever made to a context.json after it is written. A session that
+    cannot be moved, such as one whose name is taken, stays where it was and is still listed from there.
+    The hidden folder is removed once it is empty. Running this again moves nothing.
+    """
+    from gridlens.agent.conversation_log import write_conversation_log
+
+    projects = projects_dir.expanduser()
+    try:
+        legacy = scoped_path(projects, LEGACY_WORKSPACE_SESSIONS, directory=True)
+        target = scoped_path(projects, WORKSPACE_SESSIONS, directory=True)
+    except AgentError:
+        return []
+    if not legacy.is_dir():
+        return []
+    moved = []
+    for folder in sorted(legacy.iterdir()):
+        destination = target / folder.name
+        if folder.is_symlink() or not folder.is_dir() or not re.fullmatch(r"[A-Za-z0-9_]+", folder.name) or destination.exists():
+            continue
+        try:
+            context_path = scoped_path(folder, "context.json")
+            value = read_json(context_path)
+            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.rename(folder, destination)
+        except (AgentError, OSError):
+            continue
+        try:
+            # The session now lives in this projects folder, so that is the one it records, even if the folder was moved.
+            value.update(directory=str(destination.resolve()), projects_dir=str(projects.resolve()))
+            temporary = scoped_path(destination, "context.json.tmp")
+            temporary.unlink(missing_ok=True)
+            write_json(temporary, value, exclusive=True)
+            os.replace(temporary, destination / "context.json")
+        except (AgentError, OSError, ValueError):
+            # A folder whose record cannot follow it goes back, so it stays readable where it was.
+            try:
+                os.rename(destination, folder)
+            except OSError:
+                pass
+            continue
+        try:
+            write_conversation_log(destination)
+        except (AgentError, OSError, ValueError):
+            pass
+        moved.append(destination)
+    for empty in (legacy, legacy.parent):
+        try:
+            empty.rmdir()
+        except OSError:
+            break
+    return moved
 
 
 def _validated_focus(project_root: Path | None, run_ids: tuple[str, ...]) -> tuple[Path | None, tuple[str, ...]]:
@@ -368,7 +429,7 @@ class SessionContext:
                 or len(context.run_ids) > 2 or (context.run_ids and root is None)
             ):
                 raise ValueError
-            locations = [scoped_path(projects, WORKSPACE_SESSIONS / context.session_id, directory=True)]
+            locations = [scoped_path(projects, folder / context.session_id, directory=True) for folder in (WORKSPACE_SESSIONS, LEGACY_WORKSPACE_SESSIONS)]
             if root is not None:
                 locations.append(scoped_path(root, PROJECT_SESSIONS / context.session_id, directory=True))
             if context.directory not in locations:

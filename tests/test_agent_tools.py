@@ -125,7 +125,7 @@ def test_any_run_and_any_project_is_reachable(agent_project, tmp_path):
 def test_session_without_a_project_lives_in_the_projects_folder(tmp_path):
     """A conversation can start before any project exists; tools then need an explicit project."""
     context = SessionContext.create(None, (), "fixture:model", "http://127.0.0.1:11434", projects_dir=tmp_path / "projects")
-    assert context.directory.parent == (tmp_path / "projects/.gridlens-agent/sessions").resolve()
+    assert context.directory.parent == (tmp_path / "projects/Clarke conversations").resolve()
     assert SessionContext.load(context.directory / "context.json") == context
     assert ToolService(context).get_project()["error"]["code"] == "NO_PROJECT"
     with pytest.raises(ValueError, match="at most two"):
@@ -134,7 +134,7 @@ def test_session_without_a_project_lives_in_the_projects_folder(tmp_path):
 
 def test_one_session_moves_between_projects_and_keeps_its_folder(agent_context, tmp_path):
     """A session started in one project lives in the projects folder and can turn to a project created later."""
-    assert agent_context.directory.parent == (tmp_path / ".gridlens-agent/sessions").resolve()
+    assert agent_context.directory.parent == (tmp_path / "Clarke conversations").resolve()
     created = tmp_path / "Created_Study"
     (created / "runs/run_c").mkdir(parents=True)
     (created / "project.json").write_text(json.dumps({"name": "Created Study"}))

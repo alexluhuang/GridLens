@@ -28,7 +28,7 @@ from typing import Iterable, Iterator, Literal, NotRequired, TypedDict, get_args
 import xml.etree.ElementTree as ET
 
 from gridlens.agent.policy import AgentError
-from gridlens.agent.session import PROJECT_FILE, scoped_path
+from gridlens.agent.session import PROJECT_FILE, WORKSPACE_SESSIONS, scoped_path
 from gridlens.agent.tool_base import ToolBase, page_result, tool
 from gridlens.analysis.distribution_stats import GROUP_STATISTICS, ORDER_STATISTICS, GroupAccumulator, GroupStatistic
 from gridlens.analysis.raw_sections import find_section, read_raw_sections
@@ -365,7 +365,7 @@ def _group_label(value: object) -> str:
 
 def _generated_output(path: Path) -> bool:
     """Return whether path lies in an agent session's generated folder, where scripts and their output are."""
-    return "generated" in path.parts and "sessions" in path.parts
+    return "generated" in path.parts and any(name in path.parts for name in ("sessions", WORKSPACE_SESSIONS.name))
 
 
 @contextmanager
