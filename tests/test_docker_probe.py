@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from unittest.mock import patch
 
-from gridlens.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
+from gridlens.runner.docker_probe import (
+    docker_client_available, docker_engine_available, image_exists,
+    run_command)
 
 
 def completed(command: list[str], returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
@@ -60,3 +63,21 @@ def test_image_exists_reports_local_image_success() -> None:
 
     assert result.ok is True
     assert result.message == "Image is available locally: pnnl/gridpack:latest"
+
+
+def test_probe_output_is_decoded_as_utf8_whatever_the_locale() -> None:
+    # U+00C1 is C3 81 in UTF-8, and 0x81 is undefined in Windows-1252.
+    text = "\u00c5ngstr\u00f6m \u00c1 \u2026"
+    code = f"import sys; sys.stdout.buffer.write({text!r}.encode('utf-8'))"
+
+    result = run_command([sys.executable, "-c", code])
+
+    assert result.stdout == text
+
+
+def test_undecodable_probe_output_is_replaced_rather_than_raised() -> None:
+    code = "import sys; sys.stdout.buffer.write(b'ok \\xff')"
+
+    result = run_command([sys.executable, "-c", code])
+
+    assert result.stdout == "ok \ufffd"

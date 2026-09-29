@@ -11,10 +11,15 @@ from typing import Callable
 from gridlens.core.project import ProjectData, copy_project_inputs_to_run, file_sha256
 from gridlens.core.run_manifest import ManifestInputFile, RunManifest
 from gridlens.runner.docker_command import build_gridpack_docker_command, docker_container_name_from_args
+from gridlens.system import processes
 
 
 LogCallback = Callable[[str], None]
 TERMINATE_GRACE_SECONDS = 10
+# Docker and GridPACK write UTF-8. Decoding it explicitly keeps Windows, whose
+# default is the ANSI code page, from garbling it or failing on a byte that
+# the code page leaves undefined.
+OUTPUT_TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
 
 @dataclass(slots=True)
@@ -131,9 +136,10 @@ def terminate_gridpack_run(container_name: str, grace_seconds: int = TERMINATE_G
         stopped = subprocess.run(
             stop_command,
             capture_output=True,
-            text=True,
             timeout=grace_seconds + 5,
             check=False,
+            **OUTPUT_TEXT,
+            **processes.no_window_options(),
         )
     except subprocess.TimeoutExpired:
         return _kill_gridpack_container(name, f"Docker stop did not finish within {grace_seconds} seconds.")
@@ -154,9 +160,10 @@ def _kill_gridpack_container(container_name: str, reason: str) -> GridpackTermin
     killed = subprocess.run(
         ["docker", "kill", container_name],
         capture_output=True,
-        text=True,
         timeout=15,
         check=False,
+        **OUTPUT_TEXT,
+        **processes.no_window_options(),
     )
     if killed.returncode == 0:
         return GridpackTerminationResult(
@@ -233,8 +240,9 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
                 cwd=str(files.work_dir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
                 bufsize=1,
+                **OUTPUT_TEXT,
+                **processes.no_window_options(),
             )
         except Exception as exc:
             failure_message = f"Docker run could not be started: {exc}\n"

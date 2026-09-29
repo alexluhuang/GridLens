@@ -54,6 +54,17 @@ class GridpackRunnerTests(unittest.TestCase):
         )
         return request, run_dir
 
+    def test_gridpack_output_is_read_as_utf8(self) -> None:
+        with TemporaryDirectory() as tmp:
+            request, _run_dir = self._make_request(Path(tmp))
+            with patch("gridlens.runner.gridpack_runner.subprocess.Popen",
+                       return_value=FakeProcess()) as popen:
+                run_gridpack_case(request)
+
+            options = popen.call_args.kwargs
+            self.assertEqual(
+                (options["encoding"], options["errors"]), ("utf-8", "replace"))
+
     def test_terminal_output_is_teed_into_work_outputs(self) -> None:
         with TemporaryDirectory() as tmp:
             request, run_dir = self._make_request(Path(tmp))

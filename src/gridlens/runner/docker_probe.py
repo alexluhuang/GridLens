@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import subprocess
 
+from gridlens.system import processes
+
 
 @dataclass(slots=True)
 class ProbeResult:
@@ -20,8 +22,11 @@ def run_command(command: list[str], timeout: int = 30) -> subprocess.CompletedPr
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         timeout=timeout,
+        **processes.no_window_options(),
     )
 
 
