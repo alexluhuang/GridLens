@@ -27,7 +27,7 @@ from gridlens.agent.policy import AgentError
 from gridlens.agent.process import minimal_environment, terminate_process
 from gridlens.agent.conversation_log import write_conversation_log
 from gridlens.agent.session import SessionContext, append_event, find_project, read_json, resolve_run, scoped_path, timestamp, write_json
-from gridlens.system import files
+from gridlens.system import files, processes
 
 
 MAX_SCRIPT_BYTES = 24 * 1024
@@ -51,6 +51,7 @@ def _require_sandbox_image(executable: str, image: str, environment: dict) -> No
     inspection = subprocess.run(
         [executable, "--host", DOCKER_HOST, "image", "inspect", image, "--format", '{{index .Config.Labels "org.gridlens.purpose"}}'],
         capture_output=True, timeout=INSPECT_TIMEOUT_SECONDS, env=environment,
+        **processes.no_window_options(),
     )
     if inspection.returncode or inspection.stdout.strip() != b"generated-analysis":
         raise AgentError("SANDBOX_IMAGE_REQUIRED", "Prepare a pinned image from packaging/agent/Dockerfile (source checkout) or /usr/share/doc/gridlens/agent-sandbox/Dockerfile (installed package). GridLens never pulls an image for script execution.")
@@ -86,6 +87,7 @@ def _remove_container(executable: str, name: str, environment: dict) -> bool:
         removal = subprocess.run(
             [executable, "--host", DOCKER_HOST, "rm", "--force", name],
             capture_output=True, timeout=REMOVE_TIMEOUT_SECONDS, env=environment,
+            **processes.no_window_options(),
         )
         return removal.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -217,12 +219,17 @@ def execute_proposal(context: SessionContext, identifier: str, approved_hash: st
     process = None
     output = bytearray()
     try:
-        created = subprocess.run(command, capture_output=True, timeout=CREATE_TIMEOUT_SECONDS, env=environment)
+        created = subprocess.run(
+            command, capture_output=True, timeout=CREATE_TIMEOUT_SECONDS,
+            env=environment, **processes.no_window_options())
         if created.returncode:
             raise AgentError("SANDBOX_FAILED", created.stderr.decode(errors="replace")[:2000])
         if cancelled.is_set():
             raise AgentError("CANCELLED", "Script execution cancelled.")
-        process = subprocess.Popen([executable, "--host", DOCKER_HOST, "start", "--attach", name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment, start_new_session=True)
+        process = subprocess.Popen(
+            [executable, "--host", DOCKER_HOST, "start", "--attach", name],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment,
+            **processes.new_group_options())
         deadline = time.monotonic() + timeout
         _stream_bounded_output(process, output, cancelled, deadline)
         result["exit_code"] = process.wait(timeout=2)

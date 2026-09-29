@@ -30,6 +30,7 @@ from gridlens.agent.prompt import SYSTEM_PROMPT
 from gridlens.agent.runtime import PreparedRuntime, RuntimeEvent, RuntimeStatus
 from gridlens.agent.session import SessionContext, scoped_path, write_json
 from gridlens.agent.tools import TOOL_NAMES
+from gridlens.system import processes
 
 
 SUPPORTED_HERMES = "0.21.4"
@@ -172,7 +173,10 @@ class HermesAdapter:
             if not re.fullmatch(r"[A-Za-z0-9_.:-]+", continuation):
                 raise AgentError("INVALID_CONTINUATION", "Start a new session; the runtime returned an invalid continuation ID.")
             argv.extend(["--resume", continuation])
-        return subprocess.Popen(argv, cwd=prepared.cwd, env=prepared.environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        return subprocess.Popen(
+            argv, cwd=prepared.cwd, env=prepared.environment,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, **processes.new_group_options())
 
     def parse_event(self, line: str) -> RuntimeEvent:
         """Normalize one Hermes stream-json event, refusing any non-GridLens tool."""

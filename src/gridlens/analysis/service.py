@@ -11,11 +11,11 @@ import traceback
 from gridlens.analysis.interactive import build_interactive_analysis_result
 from gridlens.analysis.progress import AnalysisProgress
 from gridlens.analysis.utilization import UtilizationBranchOptions
-from gridlens.system import files, paths
+from gridlens.system import files, paths, processes
 
 
 def _build(run_dir, options, messages, indexed, rebuild):
-    os.setsid()
+    processes.own_process_group()
     try:
         result = build_interactive_analysis_result(run_dir, options, lambda update: messages.put(("progress", update)), rebuild=rebuild)
         if indexed:
@@ -28,8 +28,15 @@ def _build(run_dir, options, messages, indexed, rebuild):
 
 
 def _terminate_group(process) -> None:
-    # _build calls os.setsid(), so the worker pid is also its group id: signal the whole group so a
-    # grandchild (an index writer, a helper subprocess) cannot outlive a cancelled build.
+    # On POSIX _build calls os.setsid(), so the worker pid is also its group
+    # id: signal the whole group so a grandchild (an index writer, a helper
+    # subprocess) cannot outlive a cancelled build. Windows has no such
+    # groups, so the worker's process tree is killed instead.
+    if processes.WINDOWS:
+        if process.is_alive():
+            processes.kill_tree(process.pid)
+        process.join()
+        return
     if process.is_alive():
         try:
             os.killpg(process.pid, signal.SIGTERM)

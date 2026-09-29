@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import signal
 import subprocess
 import sys
+
+from gridlens.system import processes
 
 
 PROBE_TIMEOUT_SECONDS = 10
@@ -52,29 +53,15 @@ def mcp_server_environment(session_directory: Path) -> dict[str, str]:
 
 def terminate_process(process: subprocess.Popen) -> None:
     """Terminate the CLI and its MCP children, including after the parent has exited."""
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        pass
+    processes.terminate(process)
 
 
 def run_probe(argv: list[str], *, timeout: float = PROBE_TIMEOUT_SECONDS, loopback_only: bool = True) -> tuple[int, bytes]:
     """Run a bounded, non-interactive version or login probe. Never records credentials."""
     process = subprocess.Popen(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        env=minimal_environment(loopback_only=loopback_only), start_new_session=True,
+        env=minimal_environment(loopback_only=loopback_only),
+        **processes.new_group_options(),
     )
     try:
         output, _ = process.communicate(timeout=timeout)

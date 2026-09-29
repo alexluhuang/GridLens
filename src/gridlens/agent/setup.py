@@ -32,7 +32,7 @@ from urllib.request import ProxyHandler, Request, build_opener, urlopen
 from gridlens.agent.hermes import DEFAULT_ENDPOINT, SUPPORTED_HERMES, SUPPORTED_HERMES_COMMIT, VERSION_PATTERN, hermes_executable
 from gridlens.agent.policy import AgentError, local_endpoint, ollama_json
 from gridlens.agent.process import probe_version
-from gridlens.system import paths
+from gridlens.system import paths, processes
 
 
 HERMES_INSTALLER_POSIX = "https://hermes-agent.nousresearch.com/install.sh"
@@ -226,15 +226,18 @@ def _download(url: str, destination: Path, progress: Progress | None, cancelled:
 
 def _run_logged(argv: list[str], log: Log, cancelled: threading.Event, *, env: dict | None = None, cwd: Path | None = None) -> None:
     """Run an installer, passing each line it prints to log; stop it when cancelled or stuck."""
-    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}
-    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd, **options)
+    process = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, env=env, cwd=cwd,
+        **processes.new_group_options())
     last_output = [time.monotonic()]
 
     def watch() -> None:
         """Stop the installer when the user cancels or it goes silent for too long."""
         while process.poll() is None:
             if cancelled.is_set() or time.monotonic() - last_output[0] > INSTALL_TIMEOUT_SECONDS:
-                process.terminate()
+                # Stop the installer with the downloads and tools it started.
+                processes.terminate(process)
                 return
             time.sleep(0.2)
 

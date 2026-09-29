@@ -39,7 +39,7 @@ from uuid import uuid4
 from gridlens.agent.policy import AgentError
 from gridlens.agent.process import gridlens_command
 from gridlens.agent.session import PROJECT_FILE, read_json, scoped_path, timestamp, write_json
-from gridlens.system import files
+from gridlens.system import files, processes
 
 
 JOBS_FOLDER = Path("agent/jobs")
@@ -104,7 +104,9 @@ def _wait_for_pid(folder: Path) -> None:
         time.sleep(0.05)
     record = read_json(folder / JOB_FILE)
     if record.get("pid") is None:
-        _replace_record(folder, {**record, "pid": os.getpid()})
+        started = processes.start_time(os.getpid())
+        mine = {"pid": os.getpid(), "pid_started": started}
+        _replace_record(folder, {**record, **mine})
 
 
 def job_folder(project_root: Path, job_id: str) -> Path:
@@ -126,27 +128,14 @@ def log_tail(path: Path, lines: int = LOG_TAIL_LINES) -> list[str]:
         return handle.read().decode("utf-8", errors="replace").splitlines()[-lines:]
 
 
-def _alive(pid: object) -> bool:
-    """Return whether the worker with this pid is still running.
+def _alive(record: dict) -> bool:
+    """Return whether a job's worker is still running.
 
-    The process that started a worker is its parent until it exits, so a finished worker lingers as a
-    zombie there; reaping it first keeps a stopped worker from looking alive.
+    The start time recorded with the pid keeps another process that later
+    receives the same pid from counting as the worker. Jobs recorded before
+    start times were kept are checked by pid alone.
     """
-    try:
-        finished, _ = os.waitpid(int(pid), os.WNOHANG)
-        if finished:
-            return False
-    except ChildProcessError:
-        pass
-    except (TypeError, ValueError):
-        return False
-    try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return processes.pid_alive(record.get("pid"), record.get("pid_started"))
 
 
 def _state(folder: Path, record: dict) -> dict:
@@ -169,7 +158,8 @@ def read_job(project_root: Path, job_id: str) -> dict:
     record = read_json(folder / JOB_FILE)
     status = _state(folder, record)
     starting = status.get("state") == "queued" and record.get("pid") is None and not (folder / LEGACY_STATUS_FILE).is_file()
-    if status.get("state") not in FINAL_STATES and not starting and not _alive(record.get("pid")):
+    unfinished = status.get("state") not in FINAL_STATES and not starting
+    if unfinished and not _alive(record):
         status = {**status, "state": "failed", "message": "The job's worker process ended without recording a result. See log_tail."}
     log = folder / (LOG_FILE if (folder / LOG_FILE).is_file() or not (folder / LEGACY_LOG_FILE).is_file() else LEGACY_LOG_FILE)
     request = {key: value for key, value in record.items() if key not in STATE_FIELDS}
@@ -204,9 +194,13 @@ def start_job(project_root: Path, kind: str, run_dir: Path, request: dict, *, co
     _replace_record(folder, record)
     _log(folder, f"Queued {kind} job for run {run_dir.name}." + (f" Started by the conversation in {conversation}." if conversation else ""))
     with (folder / LOG_FILE).open("ab") as log:
-        worker = subprocess.Popen(gridlens_command("--agent-job", str(folder)), cwd=folder, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        worker = processes.start_detached(
+            gridlens_command("--agent-job", str(folder)), cwd=folder,
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     # The worker waits for this pid before it writes job.json, so this is the starter's only write after the spawn.
-    _replace_record(folder, {**record, "pid": worker.pid})
+    started = processes.start_time(worker.pid)
+    worker_record = {"pid": worker.pid, "pid_started": started}
+    _replace_record(folder, {**record, **worker_record})
     return read_job(project_root, job_id)
 
 
@@ -232,17 +226,20 @@ def cancel_job(project_root: Path, job_id: str) -> dict:
     job = read_json(folder / JOB_FILE)
     if _state(folder, job).get("state") in FINAL_STATES:
         return read_job(project_root, job_id)
-    try:
-        os.killpg(int(job["pid"]), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, KeyError, TypeError, ValueError):
-        pass
+    if not processes.WINDOWS and _alive(job):
+        # The worker leads its own process group; SIGTERM asks it to stop.
+        try:
+            os.killpg(int(job["pid"]), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
     if job["kind"] == "gridpack_run":
         extra = (job.get("request") or {}).get("form", {}).get("extra_docker_args", "")
         terminate_gridpack_run(effective_gridpack_container_name(job["run_dir"], extra))
     deadline = time.monotonic() + CANCEL_WAIT_SECONDS
-    while _alive(job.get("pid")) and time.monotonic() < deadline:
+    while _alive(job) and time.monotonic() < deadline:
         time.sleep(0.1)
-    if not _alive(job.get("pid")) and _state(folder, read_json(folder / JOB_FILE)).get("state") not in FINAL_STATES:
+    state = _state(folder, read_json(folder / JOB_FILE)).get("state")
+    if not _alive(job) and state not in FINAL_STATES:
         if (folder / LEGACY_STATUS_FILE).is_file() and "state" not in job:
             write_json(folder / LEGACY_STATUS_FILE, {"state": "cancelled", "message": "The job was stopped before it finished.", "updated_at": timestamp()})
         else:

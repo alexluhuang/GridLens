@@ -31,6 +31,7 @@ from gridlens.agent.prompt import SYSTEM_PROMPT
 from gridlens.agent.runtime import PreparedRuntime, RuntimeEvent, RuntimeStatus
 from gridlens.agent.session import SessionContext, scoped_path, write_json
 from gridlens.agent.tools import TOOL_NAMES
+from gridlens.system import processes
 
 
 SUPPORTED_CLAUDE_CODE = "2.1.278"
@@ -157,7 +158,8 @@ class ClaudeCodeAdapter:
         with prompt_path.open("rb") as handle:
             return subprocess.Popen(
                 argv, cwd=prepared.cwd, env=prepared.environment, stdin=handle,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                **processes.new_group_options(),
             )
 
     def parse_event(self, line: str) -> RuntimeEvent:
