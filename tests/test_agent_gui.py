@@ -14,9 +14,10 @@ from gridlens.agent.controller import AgentController
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
 from gridlens.agent.session import SessionContext
+from gridlens.agent.setup import PREFERRED_MODEL, SetupStatus
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project
-from gridlens.gui.agent_tab import AgentTab, cited_answer
+from gridlens.gui.agent_tab import CLARKE_DOCS_URL, MANAGE_MODELS, AgentTab, cited_answer
 
 
 def test_agent_tab_scope_plain_text_and_provider_guidance(agent_project):
@@ -24,27 +25,31 @@ def test_agent_tab_scope_plain_text_and_provider_guidance(agent_project):
     app = QApplication.instance() or QApplication([])
     tab = AgentTab()
     tab.set_project(Project("Synthetic Project", agent_project))
-    assert [tab.run_combo.itemData(index) for index in range(tab.run_combo.count())] == ["", "run_b", "run_a"]
-    assert tab.run_combo.currentData() == "run_b"
+    assert tab.focus_run == "run_b"
+    assert "starting from run run_b" in tab.project_label.text()
     assert [tab.runtime_combo.itemData(index) for index in range(tab.runtime_combo.count())] == ["hermes", "claude", "codex"]
-    assert "CEII" in tab.runtime_policy.text()
+    for index in (1, 2):
+        assert tab.runtime_combo.itemText(index).endswith("(under development, currently unavailable)")
+        assert not tab.runtime_combo.model().item(index).isEnabled()
+    assert tab.runtime_combo.model().item(0).isEnabled()
+    assert CLARKE_DOCS_URL in tab.docs_link.text() and "To learn more about Clarke" in tab.docs_link.text()
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", "http://127.0.0.1:11434", ("test:model",)))
+    assert tab.notice.isHidden()
+    assert [tab.model_combo.itemData(index) for index in range(tab.model_combo.count()) if tab.model_combo.itemData(index)] == ["test:model", MANAGE_MODELS]
     tab.input.setPlainText("Where are files?")
     assert tab.send_button.isEnabled()
     bubble = tab.conversation.add_message("assistant", '<img src="https://remote.invalid/data"> [T999]')
-    assert bubble.textFormat() == Qt.PlainText
+    assert bubble.textFormat() == Qt.RichText
+    assert "<img" not in bubble.rendered()
     assert '<img src="https://remote.invalid/data">' in bubble.text()
     tab.runtime_combo.blockSignals(True)
     tab.runtime_combo.setCurrentIndex(1)
     tab.runtime_combo.blockSignals(False)
     tab.provider_changed(probe=False)
-    assert tab.route_badge.text() == "Remote"
-    assert not tab.endpoint.isVisible()
     assert tab.model_combo.isEditable()
     tab.on_probed(RuntimeStatus(False, "Sign in", "/bin/claude", "2.1.278", provider="claude", route="remote", authenticated=False, login_command="claude auth login", docs_url="https://code.claude.com/docs/en/cli-usage"))
-    assert tab.setup_command.text() == "claude auth login"
-    assert "Sign in" in tab.setup_message.text()
-    assert "CEII" in tab.runtime_policy.text()
+    assert "Sign in" in tab.notice_label.text()
+    assert not tab.notice.isHidden()
     assert not tab.send_button.isEnabled()
     tab.on_probed(RuntimeStatus(True, "Ready", "/bin/claude", "2.1.278", models=("default",), provider="claude", route="remote", authenticated=True, docs_url="https://code.claude.com/docs/en/cli-usage"))
     tab.input.setPlainText("Where are files?")
@@ -106,10 +111,11 @@ def test_refresh_runs_does_not_retarget_active_turn(agent_context):
     app = QApplication.instance() or QApplication([])
     tab = AgentTab()
     tab.set_project(Project("Synthetic Project", agent_context.project_root))
-    selected = tab.run_combo.currentData()
+    tab.select_run(agent_context.project_root / "runs" / "run_a")
+    assert tab.focus_run == "run_a"
     tab.worker = SimpleNamespace(controller=SimpleNamespace(cancel=lambda: None))
     tab.select_run(agent_context.project_root / "runs" / "run_b")
-    assert tab.run_combo.currentData() == selected
+    assert tab.focus_run == "run_a"
     tab.worker = None
     assert tab.shutdown()
     tab.deleteLater()
@@ -126,7 +132,6 @@ def test_conversation_can_start_without_a_project_and_shows_tool_arguments(tmp_p
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", "http://127.0.0.1:11434", ("test:model",)))
     tab.input.setPlainText("Create a project from /data/case.raw and run it.")
     assert tab.send_button.isEnabled()
-    assert not tab.build_button.isEnabled()
     controller = AgentController(context, HermesAdapter(context.endpoint))
     tab.controller = controller
     tab.session_directory = context.directory
@@ -173,7 +178,7 @@ def test_conversation_continues_in_a_project_it_created(tmp_path, monkeypatch):
     assert (tab.controller, tab.session_directory) == (controller, directory)
     assert tab.history_combo.currentData() == str(directory)
     assert tab.conversation.messages()[-1] == ("assistant", "Created Study and ran it.")
-    assert tab.run_combo.currentData() == "run_1"
+    assert tab.focus_run == "run_1"
     tab.input.setPlainText("Which line is most loaded?")
     assert tab.send_button.isEnabled()
     tab.send()
@@ -222,8 +227,8 @@ def test_saved_conversation_replays_messages_and_tool_steps_in_order(agent_conte
     assert "[T1] 1 of 3 rows returned; result truncated" in tab.conversation.processes()[0].plain_text()
     assert tab.controller.context.directory == agent_context.directory
     assert tab.controller.continuation == "hermes-123"
-    assert (tab.run_combo.currentData(), tab.compare_combo.currentData()) == ("run_a", "run_b")
-    assert tab.model_combo.currentText() == "fixture:model"
+    assert tab.focus_run == "run_a"
+    assert tab.selected_model() == "fixture:model"
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", agent_context.endpoint, ("fixture:model",)))
     tab.input.setPlainText("What about the next line?")
     assert tab.send_button.isEnabled()
@@ -246,8 +251,6 @@ def test_finished_turn_keeps_active_conversation_selected_and_continuable(agent_
     app = QApplication.instance() or QApplication([])
     tab = AgentTab()
     tab.set_project(Project("Synthetic Project", agent_context.project_root))
-    for combo, run_id in ((tab.run_combo, "run_a"), (tab.compare_combo, "run_b")):
-        combo.setCurrentIndex(combo.findData(run_id))
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", agent_context.endpoint, ("fixture:model",)))
     controller = AgentController(agent_context, HermesAdapter(agent_context.endpoint))
     tab.controller = controller
@@ -282,8 +285,6 @@ def test_runtime_recheck_keeps_chat_when_saved_model_is_unavailable(agent_contex
     tab = AgentTab()
     tab.set_project(Project("Synthetic Project", agent_context.project_root))
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", agent_context.endpoint, ("fixture:model",)))
-    for combo, run_id in ((tab.run_combo, "run_a"), (tab.compare_combo, "run_b")):
-        combo.setCurrentIndex(combo.findData(run_id))
     tab.controller = AgentController(agent_context, HermesAdapter(agent_context.endpoint))
     tab.session_directory = agent_context.directory
     tab.conversation.add_message("user", "First question")
@@ -292,8 +293,8 @@ def test_runtime_recheck_keeps_chat_when_saved_model_is_unavailable(agent_contex
     assert tab.send_button.isEnabled()
     tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", agent_context.endpoint, ("other:model",)))
     assert tab.conversation.messages() == [("user", "First question"), ("assistant", "First answer")]
-    assert tab.model_combo.currentText() == "fixture:model"
-    assert "unavailable" in tab.setup_message.text()
+    assert tab.selected_model() == "fixture:model"
+    assert "no longer installed" in tab.notice_label.text()
     assert not tab.send_button.isEnabled()
     assert tab.shutdown()
     tab.deleteLater()
@@ -328,3 +329,63 @@ def test_live_tool_results_keep_their_own_audited_source_when_events_queue(agent
 def test_unknown_citations_are_marked():
     assert cited_answer("120% [T1], claim [T999]", [{"call_id": "T1"}]) == "120% [T1], claim [T999: invalid source]"
     assert cited_answer("120% [Call\u202fT1]", [{"call_id": "T1"}]) == "120% [T1]"
+
+
+def test_model_list_prefers_clarkes_model_and_its_last_entry_opens_setup(agent_context, monkeypatch):
+    """The preferred model is chosen by default; the manage entry opens Set up Clarke and keeps the chat."""
+    app = QApplication.instance() or QApplication([])
+    tab = AgentTab()
+    opened = []
+    monkeypatch.setattr(tab, "open_setup", lambda *_args: opened.append(True))
+    tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4", agent_context.endpoint, ("gpt-oss:20b", PREFERRED_MODEL)))
+    assert tab.selected_model() == PREFERRED_MODEL
+    assert tab.model_combo.currentText() == f"{PREFERRED_MODEL}  (preferred)"
+    tab.conversation.add_message("user", "Keep me")
+    tab.model_combo.setCurrentIndex(tab.model_combo.findData(MANAGE_MODELS))
+    app.processEvents()
+    assert opened == [True]
+    assert tab.selected_model() == PREFERRED_MODEL
+    assert tab.conversation.messages() == [("user", "Keep me")]
+    tab.model_combo.setCurrentIndex(tab.model_combo.findData("gpt-oss:20b"))
+    assert tab.selected_model() == "gpt-oss:20b"
+    assert tab.conversation.messages() == []
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()
+
+
+def test_missing_setup_opens_the_setup_dialog_and_ready_setup_does_not(monkeypatch):
+    """The first check opens Set up Clarke only when Hermes, Ollama, or a model is missing."""
+    app = QApplication.instance() or QApplication([])
+    tab = AgentTab()
+    opened, probed = [], []
+    monkeypatch.setattr(tab, "open_setup", lambda status=None: opened.append(status))
+    monkeypatch.setattr(tab, "check_runtime", lambda: probed.append(True))
+    ready = SetupStatus("/bin/hermes", "0.21.4", "/bin/ollama", True, ("test:model",))
+    tab.on_setup_checked(ready)
+    assert opened == [] and probed == [True]
+    missing = SetupStatus("", "", "/bin/ollama", True, ("test:model",))
+    tab.on_setup_checked(missing)
+    assert opened == [missing] and probed == [True, True]
+    tab.on_setup_checked(SetupStatus("/bin/hermes", "0.21.4", "/bin/ollama", True, ("test:model",), started_ollama=True))
+    assert "GridLens started it" in tab.activity.toPlainText()
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()
+
+
+def test_review_button_counts_proposed_scripts(agent_context):
+    """Review proposed scripts is offered only when the conversation has proposed a script."""
+    app = QApplication.instance() or QApplication([])
+    tab = AgentTab()
+    tab.session_directory = agent_context.directory
+    tab.update_controls()
+    assert not tab.review_button.isEnabled()
+    (agent_context.directory / "generated").mkdir()
+    (agent_context.directory / "generated" / "abc.json").write_text("{}")
+    tab.update_controls()
+    assert tab.review_button.isEnabled()
+    assert tab.review_button.text() == "Review proposed scripts (1)"
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()

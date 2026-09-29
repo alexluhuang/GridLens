@@ -146,7 +146,7 @@ def test_uncited_model_answer_reports_only_current_successful_sources():
     both = [{"call_id": call_id, "tool": "rank", "arguments": {"object": "both"}, "result": {"data": top}} for call_id in ("T2", "T3")]
     assert disclose_truncated_results("120%", both).endswith("The lists from [T2] and [T3] each show 3 of 8,442 lines and transformers; ask for a larger number, or for all of them, to see the rest.")
     assert disclose_truncated_results("120%", [{"call_id": "T1", "tool": "list_files", "result": {"data": {**top, "result_file": "/s/T1.json"}}}]) == "120%"
-    assert "Build / refresh analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
+    assert "prepare the run for analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
     assert qualify_capacity_answer("20 percentage points", "How much extra capacity?").endswith("takes a separate power-flow or transfer study.")
 
 

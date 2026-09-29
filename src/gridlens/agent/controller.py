@@ -336,7 +336,7 @@ def disclose_tool_failures(answer: str, turn_sources: list[dict]) -> str:
     """Return an answer with a rebuild note for stale-cache turn_sources in run_turn."""
     ids = [row["call_id"] for row in turn_sources if ((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT"]
     if ids:
-        return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " could not read this run's loadings, because its results have not been prepared for analysis yet. This does not mean nothing is congested. Preparing them takes a few minutes: ask for it here, or use Build / refresh analysis, and then ask again."
+        return answer.rstrip() + "\n\nGridLens note: " + ", ".join(f"[{call_id}]" for call_id in ids[:10]) + " could not read this run's loadings, because its results have not been prepared for analysis yet. This does not mean nothing is congested. Preparing them takes a few minutes: ask Clarke to prepare the run for analysis, or generate its graphs in the Branch Analysis tab, and then ask again."
     return answer
 
 
@@ -400,7 +400,7 @@ def verified_group_mean_answer(answer: str, question: str, turn_sources: list[di
     matching = [row for row in turn_sources if group_mean_source(row, group_by, facility) and row["arguments"].get("run_id") == run_ids[0]]
     if not matching:
         if any(((row.get("result") or {}).get("error") or {}).get("code") == "ANALYSIS_NOT_BUILT" for row in turn_sources):
-            return "This run's results have not been prepared for analysis yet, so its loadings cannot be averaged. Preparing them takes a few minutes: use Build / refresh analysis, and then ask again."
+            return "This run's results have not been prepared for analysis yet, so its loadings cannot be averaged. Preparing them takes a few minutes: ask Clarke to prepare the run for analysis, and then ask again."
         ranked = [row for row in turn_sources if row.get("tool") == "rank" and row.get("outcome") == "ok"]
         if ranked:
             data = ranked[-1]["result"]["data"]
@@ -463,7 +463,7 @@ def verified_top_line_areas(answer: str, question: str, turn_sources: list[dict]
         return answer
     source = ranked_line_source(turn_sources, run_ids[0], count)
     if source is None:
-        return "I cannot confirm the areas of the most congested lines, because this run's line loadings could not be read. Use Build / refresh analysis, and then ask again."
+        return "I cannot confirm the areas of the most congested lines, because this run's line loadings could not be read. Ask Clarke to prepare the run for analysis, and then ask again."
     data = source["result"]["data"]
     rows = data["rows"][:count]
     if not rows:

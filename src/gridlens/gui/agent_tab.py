@@ -1,38 +1,49 @@
-"""The Agent tab: a conversation with the planning agent about GridLens projects, runs, and files.
+"""The Agent tab: a conversation with Clarke, the planning agent, about GridLens projects, runs, and files.
 
-A conversation can start with or without a project open. The open project and the runs selected here are
-where each turn starts; its tools can reach any project in the projects folder, create new ones, and start
-runs and analyses. Opening another project or selecting other runs keeps the conversation and moves the
-next turn there, and the saved conversations of every project are listed together. After each turn the tab
-emits `turn_finished`, so the main window can refresh the run lists the agent may have changed.
+A conversation can start with or without a project open. The open project, and the run selected in the
+Results tab or else the project's newest completed run, are where each turn starts; its tools can reach any
+project in the projects folder, create new ones, and start runs and analyses. Opening another project or
+selecting another run keeps the conversation and moves the next turn there, and the saved conversations of
+every project are listed together. After each turn the tab emits `turn_finished`, so the main window can
+refresh the run lists the agent may have changed.
+
+The first time the tab is shown, it checks that Hermes Agent, Ollama, and a model are installed, and opens
+the Set up Clarke dialog when something is missing.
 """
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt, QUrl, Signal
+from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+    QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
 from gridlens.agent.controller import AgentController, MAX_PROMPT_CHARS, normalize_citations, session_sources
+from gridlens.agent.conversation_log import write_conversation_log
 from gridlens.agent.hermes import DEFAULT_ENDPOINT
 from gridlens.agent.policy import AgentError
 from gridlens.agent.providers import DESCRIPTORS, create_adapter, descriptor
 from gridlens.agent.runtime import RuntimeEvent, RuntimeStatus
-from gridlens.agent.session import SessionContext, export_session, saved_sessions, scoped_path, session_title
-from gridlens.agent.tools import TOOL_NAMES
+from gridlens.agent.session import (
+    SessionContext, export_session, migrate_legacy_sessions, saved_sessions, scoped_path, session_title,
+)
+from gridlens.agent.setup import PREFERRED_MODEL, SetupStatus
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project
-from gridlens.analysis.csv_flat import CSV_FLAT_ALLOW_CPU_DASK_ENV, cpu_dask_fallback_warning
 from gridlens.gui.agent_conversation import AgentPromptEdit, ConversationView, ProcessCard
-from gridlens.gui.agent_jobs import AgentAnalysisWorker
+from gridlens.gui.agent_setup import AgentSetupDialog, SetupProbe
 from gridlens.gui.results_view_models import read_run_status
 from gridlens.gui.theme import configure_form_layout, set_button_role, set_context_label
+
+
+CLARKE_DOCS_URL = "https://github.com/alexluhuang/GridLens/blob/main/docs/clarke.md"
+# The model list's last entry, which opens the Set up Clarke dialog instead of choosing a model.
+MANAGE_MODELS = "__manage_models__"
+UNAVAILABLE_SUFFIX = " (under development, currently unavailable)"
 
 
 class RuntimeProbe(QThread):
@@ -72,6 +83,17 @@ def cited_answer(text: str, sources: list[dict]) -> str:
     return normalize_citations(text, sources)
 
 
+def proposed_scripts(directory: Path | None) -> int:
+    """Count the scripts a session has proposed, which Review proposed scripts lists."""
+    if directory is None:
+        return 0
+    try:
+        folder = scoped_path(directory, "generated", directory=True)
+    except AgentError:
+        return 0
+    return len(list(folder.glob("*.json"))) if folder.is_dir() else 0
+
+
 class AgentTab(QWidget):
     turn_finished = Signal()
 
@@ -80,27 +102,50 @@ class AgentTab(QWidget):
         super().__init__()
         self.settings = settings or AppSettings.load()
         self.project: Project | None = None
-        # A project opened while a turn or an analysis runs, shown once it ends.
+        # A project opened while a turn runs, shown once it ends.
         self._pending_project: Project | None = None
+        # The run each turn starts from: the one selected in the Results tab, else the newest completed run.
+        self.focus_run = ""
         self.controller: AgentController | None = None
         self.worker: AgentWorker | None = None
         self.probe_worker: RuntimeProbe | None = None
-        self.analysis_worker: AgentAnalysisWorker | None = None
+        self.setup_probe: SetupProbe | None = None
         self.runtime_status: RuntimeStatus | None = None
+        self.setup_status: SetupStatus | None = None
         self.session_directory: Path | None = None
-        self._probed_once = False
-        self._draft_label: QLabel | None = None
+        self.endpoint = DEFAULT_ENDPOINT
+        self._checked_setup = False
+        self._model_index = -1
+        self._draft_label = None
         self._process_card: ProcessCard | None = None
         self._shown_sources = 0
         self._streamed_chars = 0
+        try:
+            migrate_legacy_sessions(self.settings.default_projects_dir)
+        except (AgentError, OSError):
+            pass  # An unmoved session stays where it was and is still listed.
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
-        self.project_label = QLabel("No project is open. The agent can list, create, and run projects in the projects folder.")
+        self.project_label = QLabel()
         self.project_label.setTextFormat(Qt.PlainText)
         set_context_label(self.project_label)
         layout.addWidget(self.project_label)
+        self.notice = QFrame()
+        self.notice.setObjectName("agentSetupNotice")
+        notice_row = QHBoxLayout(self.notice)
+        notice_row.setContentsMargins(0, 0, 0, 0)
+        self.notice_label = QLabel()
+        self.notice_label.setTextFormat(Qt.PlainText)
+        self.notice_label.setWordWrap(True)
+        self.setup_button = QPushButton("Set up Clarke…")
+        set_button_role(self.setup_button, "primary")
+        self.setup_button.clicked.connect(self.check_setup)
+        notice_row.addWidget(self.notice_label, 1)
+        notice_row.addWidget(self.setup_button)
+        self.notice.hide()
+        layout.addWidget(self.notice)
         settings_header = QHBoxLayout()
         self.settings_toggle = QToolButton()
         self.settings_toggle.setObjectName("agentSettingsToggle")
@@ -131,76 +176,36 @@ class AgentTab(QWidget):
         configure_form_layout(form)
         self.runtime_combo = QComboBox()
         for item in DESCRIPTORS:
-            self.runtime_combo.addItem(item.label, item.provider)
-        runtime_row = QHBoxLayout()
-        runtime_row.addWidget(self.runtime_combo, 1)
-        self.route_badge = QLabel("Local (unverified)")
-        self.route_badge.setTextFormat(Qt.PlainText)
-        runtime_row.addWidget(self.route_badge)
-        form.addRow("Runtime", runtime_row)
-        self.endpoint_container = QWidget()
-        endpoint_row = QHBoxLayout(self.endpoint_container)
-        endpoint_row.setContentsMargins(0, 0, 0, 0)
-        self.endpoint = QLineEdit(DEFAULT_ENDPOINT)
-        self.endpoint.setToolTip("Local Ollama endpoint. Authentication is not required for local Ollama.")
-        self.refresh_button = QPushButton("Check runtime")
-        self.refresh_button.clicked.connect(self.check_runtime)
-        endpoint_row.addWidget(self.endpoint, 1)
-        endpoint_row.addWidget(self.refresh_button)
-        self.endpoint_label = QLabel("Ollama URL")
-        form.addRow(self.endpoint_label, self.endpoint_container)
+            self.runtime_combo.addItem(item.label if item.local else item.label + UNAVAILABLE_SUFFIX, item.provider)
+            if not item.local:
+                # Hosted runtimes stay listed so users know they are coming, but cannot be chosen yet.
+                self.runtime_combo.model().item(self.runtime_combo.count() - 1).setEnabled(False)
+        form.addRow("Runtime", self.runtime_combo)
         self.model_combo = QComboBox()
         self.model_label = QLabel("Local model")
         form.addRow(self.model_label, self.model_combo)
-        self.run_combo = QComboBox()
-        self.compare_combo = QComboBox()
-        self.compare_combo.addItem("No comparison", "")
-        form.addRow("Start from run", self.run_combo)
-        form.addRow("Compare with", self.compare_combo)
         settings_layout.addLayout(form)
-        self.runtime_policy = QLabel(
-            "Hosted runtimes send questions and tool results online. The local-only CEII policy in "
-            "CONTRIBUTING.md and docs/security_ceii.md keeps them unavailable until a separate authorization."
-        )
-        self.runtime_policy.setTextFormat(Qt.PlainText)
-        self.runtime_policy.setWordWrap(True)
-        set_context_label(self.runtime_policy)
-        settings_layout.addWidget(self.runtime_policy)
         self.remote_acknowledgement = QCheckBox("I understand this provider sends my questions and project-derived tool results off this machine.")
         settings_layout.addWidget(self.remote_acknowledgement)
-        self.tool_scope = QLabel(f"GridLens tools: {len(TOOL_NAMES)}. The agent can set up projects, configure and start runs, build analyses, and read every field of every project file.")
-        self.tool_scope.setTextFormat(Qt.PlainText)
-        self.tool_scope.setWordWrap(True)
-        settings_layout.addWidget(self.tool_scope)
-        build_row = QHBoxLayout()
-        self.build_button = QPushButton("Build / refresh analysis")
-        self.build_button.clicked.connect(self.build_analysis)
-        self.index_checkbox = QCheckBox("Include contingency drill-down index")
-        self.index_checkbox.setToolTip("Reads the flat results once and stores a Parquet index under reports/. This may take several minutes.")
-        build_row.addWidget(self.build_button)
-        build_row.addWidget(self.index_checkbox)
-        build_row.addStretch(1)
-        settings_layout.addLayout(build_row)
-        self.diagnostics = QLabel("Local inference only. Select Check runtime to detect Hermes and installed Ollama models.")
-        self.diagnostics.setTextFormat(Qt.PlainText)
-        self.diagnostics.setWordWrap(True)
-        settings_layout.addWidget(self.diagnostics)
-        self.setup_message = QLabel()
-        self.setup_message.setTextFormat(Qt.PlainText)
-        self.setup_message.setWordWrap(True)
-        settings_layout.addWidget(self.setup_message)
-        setup_row = QHBoxLayout()
-        self.setup_command = QLineEdit()
-        self.setup_command.setReadOnly(True)
-        self.setup_command.setPlaceholderText("Installation and sign-in guidance appears after the runtime check.")
-        self.copy_setup_button = QPushButton("Copy command")
-        self.copy_setup_button.clicked.connect(lambda: QApplication.clipboard().setText(self.setup_command.text()))
-        self.docs_button = QPushButton("Provider documentation")
-        self.docs_button.clicked.connect(self.open_provider_docs)
-        setup_row.addWidget(self.setup_command, 1)
-        setup_row.addWidget(self.copy_setup_button)
-        setup_row.addWidget(self.docs_button)
-        settings_layout.addLayout(setup_row)
+        self.docs_link = QLabel(f'To learn more about Clarke, read <a href="{CLARKE_DOCS_URL}">here</a>.')
+        self.docs_link.setTextFormat(Qt.RichText)
+        self.docs_link.setOpenExternalLinks(True)
+        settings_layout.addWidget(self.docs_link)
+        session_actions = QHBoxLayout()
+        self.folder_button = QPushButton("Open session folder")
+        self.folder_button.setToolTip("Open this conversation's folder: conversation.md is the full record of it.")
+        self.folder_button.clicked.connect(self.open_session_folder)
+        self.export_button = QPushButton("Export session (ZIP)…")
+        self.export_button.setToolTip("Save this conversation, its tool calls, and their results as one ZIP file to share or archive.")
+        self.export_button.clicked.connect(self.export_audit)
+        self.review_button = QPushButton("Review proposed scripts")
+        self.review_button.setToolTip("Read, approve, and run the analysis scripts Clarke proposed in this conversation.")
+        self.review_button.clicked.connect(self.review_scripts)
+        session_actions.addWidget(self.folder_button)
+        session_actions.addWidget(self.export_button)
+        session_actions.addWidget(self.review_button)
+        session_actions.addStretch(1)
+        settings_layout.addLayout(session_actions)
         layout.addWidget(self.settings_scroll)
 
         history_row = QHBoxLayout()
@@ -209,21 +214,9 @@ class AgentTab(QWidget):
         self.history_combo.activated.connect(self.open_history)
         self.new_button = QPushButton("New conversation")
         self.new_button.clicked.connect(self.new_session)
-        self.folder_button = QPushButton("Open session folder")
-        self.folder_button.clicked.connect(self.open_session_folder)
-        self.export_button = QPushButton("Export session audit")
-        self.export_button.clicked.connect(self.export_audit)
-        self.review_button = QPushButton("Review scripts")
-        self.review_button.clicked.connect(self.review_scripts)
         history_row.addWidget(self.history_combo, 1)
         history_row.addWidget(self.new_button)
         layout.addLayout(history_row)
-        session_actions = QHBoxLayout()
-        session_actions.addWidget(self.folder_button)
-        session_actions.addWidget(self.export_button)
-        session_actions.addWidget(self.review_button)
-        session_actions.addStretch(1)
-        settings_layout.addLayout(session_actions)
 
         self.conversation = ConversationView()
         layout.addWidget(self.conversation, 1)
@@ -273,24 +266,20 @@ class AgentTab(QWidget):
         buttons.addStretch(1)
         composer.addLayout(buttons)
         layout.addLayout(composer)
-        self.model_combo.currentIndexChanged.connect(self.new_session)
-        for combo in (self.run_combo, self.compare_combo):
-            combo.currentIndexChanged.connect(self.update_controls)
+        self.model_combo.currentIndexChanged.connect(self.model_changed)
         self.model_combo.editTextChanged.connect(self.new_session)
         self.runtime_combo.currentIndexChanged.connect(self.provider_changed)
         self.remote_acknowledgement.toggled.connect(self.update_controls)
-        self.endpoint.textEdited.connect(self.endpoint_changed)
-        # Fill the run list now, so the refresh after the first turn does not look like a new selection.
-        self.refresh_runs()
+        self._show_project_label()
         self.provider_changed(probe=False)
         self.refresh_history()
         self.update_controls()
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        if not self._probed_once:
-            self._probed_once = True
-            self.check_runtime()
+        if not self._checked_setup:
+            self._checked_setup = True
+            self.check_setup()
 
     def toggle_settings(self, expanded: bool) -> None:
         """Show setup controls when the user expands Session setup in the Agent tab."""
@@ -307,9 +296,9 @@ class AgentTab(QWidget):
         self.audit_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
 
     def set_project(self, project: Project) -> None:
-        """Show a project and its runs, keeping the conversation; its next turn starts in this project.
+        """Show a project, keeping the conversation; its next turn starts in this project at its newest run.
 
-        While a turn or an analysis runs, the project is shown once it ends.
+        While a turn runs, the project is shown once it ends.
         """
         if not self._can_retarget():
             self._pending_project = project
@@ -319,55 +308,92 @@ class AgentTab(QWidget):
             self.refresh_runs()
             return
         self.project = project
-        self.project_label.setText(f"Project: {project.name} ({project.root_dir})")
-        # Forget the previous project's runs, so this project's list starts from its newest run.
-        self.run_combo.blockSignals(True)
-        self.run_combo.clear()
-        self.run_combo.blockSignals(False)
+        self.focus_run = ""
         self.refresh_runs()
         self.refresh_history()
 
     def _show_pending_project(self) -> None:
-        """Show the project opened while a worker ran, once neither worker holds the session."""
+        """Show the project opened while a turn ran, once the turn has ended."""
         if self._pending_project is not None and self._can_retarget():
             self.set_project(self._pending_project)
 
+    def completed_runs(self) -> list[str]:
+        """Return the open project's completed runs, newest first."""
+        if not self.project:
+            return []
+        return [path.name for path in self.project.list_runs() if not path.is_symlink() and read_run_status(path) == "completed"]
+
     def refresh_runs(self, select_run: Path | None = None) -> None:
-        """Refresh completed run choices without changing an active turn's scope."""
+        """Keep the focus run, or move it to select_run; fall back to the newest completed run.
+
+        The focus does not change while a turn runs.
+        """
         if not self._can_retarget():
             return
-        previous = self.run_combo.currentData()
-        comparison = self.compare_combo.currentData()
-        for combo in (self.run_combo, self.compare_combo):
-            combo.blockSignals(True)
-            combo.clear()
-        self.compare_combo.addItem("No comparison", "")
-        self.run_combo.addItem("No run", "")
-        if self.project:
-            for path in self.project.list_runs():
-                if not path.is_symlink() and read_run_status(path) == "completed":
-                    self.run_combo.addItem(path.name, path.name)
-                    self.compare_combo.addItem(path.name, path.name)
-        # A freshly filled list starts from the newest run; a later refresh keeps the user's choice, even "No run".
-        if self.run_combo.count() > 1 and previous is None and select_run is None:
-            self.run_combo.setCurrentIndex(1)
-        desired = select_run.name if select_run else previous
-        index = self.run_combo.findData(desired)
-        if index >= 0:
-            self.run_combo.setCurrentIndex(index)
-        self.compare_combo.setCurrentIndex(max(0, self.compare_combo.findData(comparison)))
-        for combo in (self.run_combo, self.compare_combo):
-            combo.blockSignals(False)
+        runs = self.completed_runs()
+        if select_run is not None and select_run.name in runs:
+            self.focus_run = select_run.name
+        elif self.focus_run not in runs:
+            self.focus_run = runs[0] if runs else ""
+        self._show_project_label()
         self.update_controls()
 
     def select_run(self, run_dir: object) -> None:
-        """Select an external run signal only when it belongs to the open project."""
+        """Follow the run selected in the Results tab when it belongs to the open project."""
         if self.project and Path(str(run_dir)).parent.resolve() == self.project.runs_dir.resolve():
             self.refresh_runs(Path(str(run_dir)))
 
+    def _show_project_label(self) -> None:
+        """Say where the next turn starts: the open project and its focus run, or the projects folder."""
+        if self.project is None:
+            self.project_label.setText("No project is open. Clarke can list, create, and run projects in the projects folder.")
+        elif self.focus_run:
+            self.project_label.setText(f"Project: {self.project.name} · starting from run {self.focus_run}. Select another run in the Results tab, or name one in your question.")
+        else:
+            self.project_label.setText(f"Project: {self.project.name} ({self.project.root_dir}). It has no completed run yet.")
+
     def _can_retarget(self) -> bool:
-        """Return whether the project or runs shown here can change, which they cannot while a worker runs."""
-        return self.worker is None and self.analysis_worker is None
+        """Return whether the project or run shown here can change, which they cannot while a turn runs."""
+        return self.worker is None
+
+    def check_setup(self) -> None:
+        """Check for Hermes, Ollama, and a model off the GUI thread; the result may open Set up Clarke."""
+        if self.setup_probe is not None or self.worker is not None:
+            return
+        self.notice_label.setText("Checking for Hermes Agent, Ollama, and installed models…")
+        self.notice.show()
+        self.setup_button.setEnabled(False)
+        self.setup_probe = SetupProbe(self)
+        self.setup_probe.checked.connect(self.on_setup_checked)
+        self.setup_probe.finished.connect(self._setup_probe_finished)
+        self.setup_probe.start()
+
+    def _setup_probe_finished(self) -> None:
+        worker, self.setup_probe = self.setup_probe, None
+        if worker:
+            worker.deleteLater()
+        self.setup_button.setEnabled(True)
+
+    def on_setup_checked(self, status: SetupStatus) -> None:
+        """Open Set up Clarke when something is missing, then check the runtime the tab uses."""
+        self.setup_status = status
+        if status.started_ollama:
+            self.activity.appendPlainText("Ollama was not running, so GridLens started it.")
+        if not status.ready:
+            self.open_setup(status)
+        self.check_runtime()
+
+    def open_setup(self, status: SetupStatus | None = None) -> None:
+        """Show Set up Clarke for a checked machine; re-check the runtime once it closes, as it may have changed."""
+        status = status or self.setup_status
+        if status is None:
+            self.check_setup()
+            return
+        dialog = AgentSetupDialog(status, self)
+        dialog.exec()
+        self.setup_status = dialog.status
+        if dialog.changed:
+            self.check_runtime()
 
     def provider_changed(self, *_args, probe: bool = True) -> None:
         """Apply provider-specific fields, clear the old session, and probe the selected CLI."""
@@ -375,85 +401,82 @@ class AgentTab(QWidget):
         self.runtime_status = None
         self.remote_acknowledgement.setChecked(False)
         self.remote_acknowledgement.setVisible(not item.local)
-        self.endpoint_container.setVisible(item.needs_endpoint)
-        self.endpoint_label.setVisible(item.needs_endpoint)
         self.model_label.setText("Local model" if item.enumerates_models else "Model (default = CLI default)")
+        self.model_combo.blockSignals(True)
         self.model_combo.setEditable(not item.enumerates_models)
         self.model_combo.clear()
         if not item.enumerates_models:
-            self.model_combo.addItem("default")
-        self.route_badge.setText("Local (unverified)" if item.local else "Remote")
-        self.setup_message.setText("Select Check runtime to detect the CLI and sign-in state.")
-        self.setup_command.clear()
-        self.docs_button.setEnabled(False)
+            self.model_combo.addItem("default", "default")
+        self.model_combo.blockSignals(False)
+        self._model_index = self.model_combo.currentIndex()
         self.new_session()
         if probe:
             self.check_runtime()
 
-    def endpoint_changed(self) -> None:
-        """Invalidate the verified local route when its endpoint changes."""
-        self.runtime_status = None
+    def selected_model(self) -> str:
+        """Return the chosen model name; the model list's manage entry is not a model."""
+        if self.model_combo.isEditable():
+            return self.model_combo.currentText().strip()
+        data = self.model_combo.currentData()
+        return "" if data in (None, MANAGE_MODELS) else str(data)
+
+    def model_changed(self, index: int) -> None:
+        """Start a new conversation for another model, or open Set up Clarke from the manage entry."""
+        if self.model_combo.itemData(index) == MANAGE_MODELS:
+            self.model_combo.blockSignals(True)
+            self.model_combo.setCurrentIndex(self._model_index)
+            self.model_combo.blockSignals(False)
+            QTimer.singleShot(0, self.open_setup)
+            return
+        self._model_index = index
         self.new_session()
-        self.diagnostics.setText("Endpoint changed. Check runtime before sending.")
-        self.route_badge.setText("Local (unverified)")
+
+    def _fill_models(self, models: list[str], selected: str) -> None:
+        """List installed models, then the manage entry; keep selected, else prefer Clarke's preferred model."""
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        for name in models:
+            self.model_combo.addItem(f"{name}  (preferred)" if name == PREFERRED_MODEL else name, name)
+        if not self.model_combo.isEditable():
+            self.model_combo.insertSeparator(self.model_combo.count())
+            self.model_combo.addItem("Install or remove models…", MANAGE_MODELS)
+        choice = selected if selected in models else PREFERRED_MODEL if PREFERRED_MODEL in models else models[0] if models else ""
+        index = self.model_combo.findData(choice)
+        if index < 0 and self.model_combo.isEditable():
+            self.model_combo.setEditText(choice)
+        self.model_combo.setCurrentIndex(index)
+        self._model_index = index
+        self.model_combo.blockSignals(False)
 
     def check_runtime(self) -> None:
         """Probe the selected CLI in a worker, without sending a project prompt."""
-        if self.probe_worker is not None or self.worker is not None or self.analysis_worker is not None:
+        if self.probe_worker is not None or self.worker is not None:
             return
         provider = self.runtime_combo.currentData()
-        self.diagnostics.setText(f"Checking {descriptor(provider).label}…")
-        self.probe_worker = RuntimeProbe(provider, self.endpoint.text() if descriptor(provider).needs_endpoint else "", self)
+        self.probe_worker = RuntimeProbe(provider, self.endpoint if descriptor(provider).needs_endpoint else "", self)
         self.probe_worker.probed.connect(self.on_probed)
         self.probe_worker.finished.connect(self.probe_finished)
         self.probe_worker.start()
         self.update_controls()
 
     def on_probed(self, status: RuntimeStatus) -> None:
-        """Render the selected CLI's installation, sign-in, route, and model status."""
+        """Show the selected runtime's models, and say what is wrong when it is not ready."""
         if status.provider != self.runtime_combo.currentData():
             return
         self.runtime_status = status
-        self.diagnostics.setText(status.message)
-        if not status.ready:
-            self.settings_toggle.setChecked(True)
-        self.route_badge.setText("Remote" if status.remote else "Local (loopback)" if status.endpoint else "Local (unverified)")
-        if not status.installed:
-            self.setup_message.setText("Install this CLI yourself using its provider documentation, then check runtime again.")
-            command = status.install_command if status.remote else ""
-        elif status.authenticated is False:
-            self.setup_message.setText("Sign in through the CLI using your own credentials, then check runtime again.")
-            command = status.login_command
-        elif status.policy_blocked:
-            self.setup_message.setText("This runtime is detected but cannot send project data under the current CEII policy or isolation gate.")
-            command = ""
-        elif not status.ready and not status.remote and not status.models:
-            self.setup_message.setText("Install a tool-capable local Ollama model yourself, then check runtime again.")
-            command = status.install_command
-        else:
-            self.setup_message.setText("Runtime ready. GridLens supplies no inference, model installer, or credentials.")
-            command = ""
-        self.setup_command.setText(command)
-        self.docs_button.setEnabled(bool(status.docs_url))
-        selected = self.model_combo.currentText()
-        self.model_combo.blockSignals(True)
-        self.model_combo.clear()
+        if status.endpoint:
+            self.endpoint = status.endpoint
+        self.notice_label.setText(status.message)
+        self.notice.setVisible(not status.ready)
+        selected = self.selected_model()
         models = list(status.models) if descriptor(status.provider).enumerates_models else [selected or "default"]
         if selected and selected not in models:
             models.insert(0, selected)
             if status.ready:
-                self.setup_message.setText(f"The selected model {selected} is unavailable. Install it or start a new conversation.")
-        self.model_combo.addItems(models)
-        index = self.model_combo.findText(selected)
-        if index >= 0:
-            self.model_combo.setCurrentIndex(index)
-        self.model_combo.blockSignals(False)
+                self.notice_label.setText(f"The model {selected} is no longer installed. Install it again, or start a new conversation.")
+                self.notice.show()
+        self._fill_models(models, selected)
         self.update_controls()
-
-    def open_provider_docs(self) -> None:
-        """Open the selected provider's documented setup page without starting an installer."""
-        if self.runtime_status and self.runtime_status.docs_url:
-            QDesktopServices.openUrl(QUrl(self.runtime_status.docs_url))
 
     def probe_finished(self) -> None:
         worker = self.probe_worker
@@ -479,10 +502,10 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def send(self) -> None:
-        """Launch one model turn for the user's prompt, in the open project and on the selected runs.
+        """Launch one model turn for the user's prompt, in the open project and on its focus run.
 
         The first turn creates the session, with or without a project open. A later turn keeps the
-        conversation and moves it to the project and runs shown now; with no project open, it stays
+        conversation and moves it to the project and run shown now; with no project open, it stays
         where the conversation last was.
         """
         if not self.send_button.isEnabled():
@@ -492,7 +515,7 @@ class AgentTab(QWidget):
             run_ids = self._selected_runs()
             if self.controller is None:
                 context = SessionContext.create(
-                    self.project.root_dir if self.project else None, run_ids, self.model_combo.currentText(), self.runtime_status.endpoint,
+                    self.project.root_dir if self.project else None, run_ids, self.selected_model(), self.runtime_status.endpoint,
                     runtime=self.runtime_combo.currentData(), remote_acknowledged=self.remote_acknowledgement.isChecked(),
                     projects_dir=self.settings.default_projects_dir,
                 )
@@ -520,8 +543,8 @@ class AgentTab(QWidget):
             self.conversation.add_message("notice", str(exc))
 
     def _selected_runs(self) -> tuple[str, ...]:
-        """Return the selected run and comparison run of the open project, without blanks or repeats."""
-        return tuple(dict.fromkeys(value for value in (self.run_combo.currentData(), self.compare_combo.currentData()) if value))
+        """Return the focus run of the open project, or nothing when it has none."""
+        return (self.focus_run,) if self.project and self.focus_run else ()
 
     def on_event(self, event: RuntimeEvent) -> None:
         """Place each runtime step in the active chat turn and refresh audited source details."""
@@ -547,7 +570,7 @@ class AgentTab(QWidget):
             self._draft_label.setText(self._draft_label.text() + delta)
             self._streamed_chars += len(delta)
             if len(delta) < len(event.text) and remaining:
-                self._draft_label.setText(self._draft_label.text() + "\n[Output truncated in view; see runtime_events.jsonl.]")
+                self._draft_label.setText(self._draft_label.text() + "\n[Output truncated in view; see conversation.md.]")
             self.conversation.scroll_to_latest()
         elif event.kind == "error":
             self.activity.appendPlainText(event.text)
@@ -556,6 +579,7 @@ class AgentTab(QWidget):
                 self._process_card.complete()
             if self._draft_label:
                 self._draft_label.setText("Turn failed: " + event.text)
+                self._draft_label.flush()
             else:
                 self.conversation.add_message("notice", event.text)
 
@@ -569,6 +593,7 @@ class AgentTab(QWidget):
             self._draft_label.setText(final)
         else:
             self._draft_label = self.conversation.add_message("assistant", final)
+        self._draft_label.flush()
         if self._process_card:
             self._process_card.complete()
         self.conversation.scroll_to_latest()
@@ -618,52 +643,50 @@ class AgentTab(QWidget):
         self.turn_finished.emit()
 
     def stop(self) -> None:
-        if self.analysis_worker:
-            self.analysis_worker.cancelled.set()
-            self.activity.appendPlainText("Stopping analysis…")
         if self.worker:
             self.worker.controller.cancel()
             self.activity.appendPlainText("Stopping…")
 
     def update_controls(self) -> None:
-        """Enable actions only when the selected session scope and runtime are ready."""
-        busy = self.worker is not None or self.analysis_worker is not None
+        """Enable actions only when the runtime and model are ready."""
+        busy = self.worker is not None
         probing = self.probe_worker is not None
-        for control in (self.runtime_combo, self.endpoint, self.refresh_button, self.model_combo, self.run_combo, self.compare_combo, self.history_combo, self.new_button):
+        for control in (self.runtime_combo, self.model_combo, self.history_combo, self.new_button):
             control.setEnabled(not busy and not probing)
         self.remote_acknowledgement.setEnabled(not busy and not probing)
-        self.copy_setup_button.setEnabled(bool(self.setup_command.text()))
         self.stop_button.setEnabled(busy)
-        self.build_button.setEnabled(bool(not busy and not probing and self.project and self.run_combo.currentData()))
-        self.index_checkbox.setEnabled(not busy)
         prompt = self.input.toPlainText().strip()
-        ready = self.runtime_status is not None and self.runtime_status.ready and self.runtime_status.provider == self.runtime_combo.currentData()
-        acknowledged = not descriptor(self.runtime_combo.currentData()).route == "remote" or self.remote_acknowledgement.isChecked()
-        model = self.model_combo.currentText().strip()
-        model_ready = not descriptor(self.runtime_combo.currentData()).enumerates_models or self.runtime_status is not None and model in self.runtime_status.models
+        provider = descriptor(self.runtime_combo.currentData())
+        ready = self.runtime_status is not None and self.runtime_status.ready and self.runtime_status.provider == provider.provider
+        acknowledged = provider.route != "remote" or self.remote_acknowledgement.isChecked()
+        model = self.selected_model()
+        model_ready = not provider.enumerates_models or self.runtime_status is not None and model in self.runtime_status.models
         context = self.controller.context if self.controller else None
-        # The project and runs may differ from the session's: the next turn moves the session to them.
+        # The project and run may differ from the session's: the next turn moves the session to them.
         scope_matches = context is None or (
-            context.runtime == self.runtime_combo.currentData() and context.model == model
+            context.runtime == provider.provider and context.model == model
             and context.endpoint == (self.runtime_status.endpoint if self.runtime_status else "")
         )
         self.send_button.setEnabled(bool(not busy and not probing and ready and acknowledged and model_ready and scope_matches and model and prompt and len(prompt) <= MAX_PROMPT_CHARS))
         self.folder_button.setEnabled(self.session_directory is not None)
         self.export_button.setEnabled(not busy and self.session_directory is not None)
-        self.review_button.setEnabled(not busy and self.session_directory is not None)
-        provider = descriptor(self.runtime_combo.currentData()).label
-        model = self.model_combo.currentText().strip() or "No model"
-        run = self.run_combo.currentData() or "No run"
-        self.session_summary.setText(f"{provider}  ·  {model}  ·  {run}")
+        scripts = proposed_scripts(self.session_directory)
+        self.review_button.setText(f"Review proposed scripts ({scripts})" if scripts else "Review proposed scripts")
+        self.review_button.setEnabled(not busy and scripts > 0)
+        where = self.project.name if self.project else "no project"
+        run = f" / {self.focus_run}" if self.project and self.focus_run else ""
+        self.session_summary.setText(f"Clarke  ·  {model or 'No model'}  ·  {where}{run}")
 
     def export_audit(self) -> None:
+        """Save the conversation's folder, without the runtime's internal files, as a ZIP the user names."""
         if not self.session_directory:
             return
-        destination, _ = QFileDialog.getSaveFileName(self, "Export sensitive session audit", str(self.session_directory.parent / (self.session_directory.name + ".zip")), "ZIP archive (*.zip)")
+        destination, _ = QFileDialog.getSaveFileName(self, "Export session", str(Path.home() / (self.session_directory.name + ".zip")), "ZIP archive (*.zip)")
         if destination:
             try:
+                write_conversation_log(self.session_directory)
                 export_session(self.session_directory, Path(destination))
-                self.activity.appendPlainText("Session audit exported. It contains project-derived data and conversation text.")
+                self.activity.appendPlainText("Session exported. It contains your questions, Clarke's answers, and grid data from your projects; treat it as sensitive.")
             except (AgentError, OSError) as exc:
                 self.activity.appendPlainText(str(exc))
 
@@ -678,32 +701,6 @@ class AgentTab(QWidget):
             dialog.exec()
         except (AgentError, OSError) as exc:
             self.activity.appendPlainText(str(exc))
-
-    def build_analysis(self) -> None:
-        if not self.build_button.isEnabled() or not self.project:
-            return
-        try:
-            runs = [scoped_path(self.project.root_dir, Path("runs") / run_id, directory=True) for run_id in self._selected_runs()]
-            warning = next((text for run in runs if (text := cpu_dask_fallback_warning(run))), "")
-            if warning:
-                QMessageBox.warning(self, "CPU Dask fallback", warning)
-                os.environ[CSV_FLAT_ALLOW_CPU_DASK_ENV] = "1"
-            self.analysis_worker = AgentAnalysisWorker(runs, self.index_checkbox.isChecked(), self)
-            self.analysis_worker.progress.connect(self.activity.appendPlainText)
-            self.analysis_worker.outcome.connect(self.activity.appendPlainText)
-            self.analysis_worker.finished.connect(self.analysis_finished)
-            self.analysis_worker.start()
-            self.update_controls()
-        except (AgentError, OSError) as exc:
-            self.activity.appendPlainText(str(exc))
-
-    def analysis_finished(self) -> None:
-        worker = self.analysis_worker
-        self.analysis_worker = None
-        if worker:
-            worker.deleteLater()
-        self._show_pending_project()
-        self.update_controls()
 
     def refresh_history(self) -> None:
         """List saved sessions of every project and keep the displayed session selected after a completed turn.
@@ -736,7 +733,7 @@ class AgentTab(QWidget):
             context = SessionContext.load(Path(directory) / "context.json")
             path = scoped_path(context.directory, "transcript.jsonl")
             if path.stat().st_size > 8 * 1024 * 1024:
-                raise AgentError("SESSION_LIMIT", "Open the session folder to inspect this large transcript.")
+                raise AgentError("SESSION_LIMIT", "Open the session folder to read this large conversation in conversation.md.")
             messages = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
             records = session_sources(context.directory)
             events_path = scoped_path(context.directory, "runtime_events.jsonl")
@@ -756,6 +753,11 @@ class AgentTab(QWidget):
         self._restore_session_controls(context)
         self.controller = controller
         self.session_directory = context.directory
+        if not (context.directory / "conversation.md").exists():
+            try:
+                write_conversation_log(context.directory)
+            except (AgentError, OSError):
+                pass  # The log is a convenience; the session opens without it.
         self._render_saved_conversation(messages, events, records)
         self._shown_sources = len(records)
         self.update_sources()
@@ -767,27 +769,22 @@ class AgentTab(QWidget):
         self.update_controls()
 
     def _restore_session_controls(self, context: SessionContext) -> None:
-        """Apply context's provider, model, endpoint, and runs before open_history enables follow-ups.
+        """Apply context's provider, model, endpoint, and run before open_history enables follow-ups.
 
-        The runs are selected only when the conversation was last in the project open now.
+        The run is focused only when the conversation was last in the project open now.
         """
         self.runtime_combo.blockSignals(True)
         self.runtime_combo.setCurrentIndex(self.runtime_combo.findData(context.runtime))
         self.runtime_combo.blockSignals(False)
         self.provider_changed(probe=False)
-        self.endpoint.setText(context.endpoint or DEFAULT_ENDPOINT)
-        self.model_combo.blockSignals(True)
-        if self.model_combo.findText(context.model) < 0:
-            self.model_combo.addItem(context.model)
-        self.model_combo.setCurrentText(context.model)
-        self.model_combo.blockSignals(False)
+        self.endpoint = context.endpoint or DEFAULT_ENDPOINT
+        models = [str(self.model_combo.itemData(index)) for index in range(self.model_combo.count()) if self.model_combo.itemData(index) not in (None, MANAGE_MODELS)]
+        self._fill_models(models if context.model in models else [context.model, *models], context.model)
         if self.project is None or context.project_root != self.project.root_dir:
             return
-        for combo, run_id in ((self.run_combo, context.run_ids[0] if context.run_ids else ""),
-                              (self.compare_combo, context.run_ids[1] if len(context.run_ids) > 1 else "")):
-            combo.blockSignals(True)
-            combo.setCurrentIndex(combo.findData(run_id))
-            combo.blockSignals(False)
+        if context.run_ids and context.run_ids[0] in self.completed_runs():
+            self.focus_run = context.run_ids[0]
+            self._show_project_label()
 
     def _render_saved_conversation(self, messages: list[dict], events: list[dict], records: list[dict]) -> None:
         """Merge timestamped messages/events with audited records for open_history's chat replay."""
@@ -809,7 +806,7 @@ class AgentTab(QWidget):
                         process.complete()
                         process = None
                     text = str(item.get("text", ""))
-                    self.conversation.add_message(role, cited_answer(text, records) if role == "assistant" else text)
+                    self.conversation.add_message(role, cited_answer(text, records) if role == "assistant" else text).flush()
             elif process:
                 event = RuntimeEvent(str(item.get("kind", "")), str(item.get("text", "")), item.get("data") or {})
                 source = None
@@ -819,6 +816,7 @@ class AgentTab(QWidget):
                 process.add_event(event, source)
         if process:
             process.complete()
+        self.conversation.scroll_to_latest(force=True)
 
     def open_session_folder(self) -> None:
         if self.session_directory:
@@ -826,10 +824,7 @@ class AgentTab(QWidget):
 
     def shutdown(self) -> bool:
         self.stop()
-        if self.analysis_worker and not self.analysis_worker.wait(5000):
-            return False
-        if self.worker and not self.worker.wait(12_000):
-            return False
-        if self.probe_worker and not self.probe_worker.wait(12_000):
-            return False
+        for worker, wait in ((self.worker, 12_000), (self.probe_worker, 12_000), (self.setup_probe, 35_000)):
+            if worker and not worker.wait(wait):
+                return False
         return True

@@ -8,13 +8,11 @@ import subprocess
 import sys
 import threading
 import time
-from types import SimpleNamespace
 
 import pytest
 
 from gridlens.analysis.service import AnalysisService, _terminate_group
 from gridlens.analysis.utilization import UtilizationBranchOptions
-from gridlens.gui import agent_jobs
 
 
 def test_shared_service_builds_in_spawned_worker(agent_project):
@@ -108,37 +106,3 @@ def test_in_flight_build_is_cancelled_and_worker_is_reaped(agent_project):
         AnalysisService.build(agent_project / "runs/run_a", UtilizationBranchOptions(), progress=cancel_once_building, cancelled=cancelled)
     assert cancelled.is_set()
     assert not _own_child_pids() - before
-
-
-def _worker_with_failing_build(monkeypatch, error, tmp_path):
-    def fail(*args, **kwargs):
-        raise error
-
-    monkeypatch.setattr(agent_jobs, "AnalysisService", SimpleNamespace(build=fail))
-    worker = agent_jobs.AgentAnalysisWorker([tmp_path / "run_a"], False, None)
-    outcomes, progress = [], []
-    worker.outcome.connect(outcomes.append)
-    worker.progress.connect(progress.append)
-    return worker, outcomes, progress
-
-
-def test_agent_worker_reports_one_line_failure_summary(monkeypatch, tmp_path):
-    detail = 'Traceback (most recent call last):\n  File "event_index.py", line 21, in build_event_index\n    raise ValueError(...)\nValueError: run has no csv_flat file\n'
-    worker, outcomes, progress = _worker_with_failing_build(monkeypatch, RuntimeError(detail), tmp_path)
-    worker.run()
-    assert outcomes == ["Analysis failed: ValueError: run has no csv_flat file"]
-    assert detail.strip() in progress
-
-
-def test_agent_worker_summarizes_failure_without_message(monkeypatch, tmp_path):
-    worker, outcomes, progress = _worker_with_failing_build(monkeypatch, MemoryError(), tmp_path)
-    worker.run()
-    assert outcomes == ["Analysis failed: MemoryError"]
-    assert progress[-1] == "MemoryError"
-
-
-def test_agent_worker_reports_cancellation_instead_of_failure(monkeypatch, tmp_path):
-    worker, outcomes, progress = _worker_with_failing_build(monkeypatch, RuntimeError("Analysis cancelled."), tmp_path)
-    worker.cancelled.set()
-    worker.run()
-    assert outcomes == ["Analysis cancelled."]

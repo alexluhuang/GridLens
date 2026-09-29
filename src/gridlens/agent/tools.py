@@ -677,7 +677,7 @@ class AnalysisTools(ToolBase):
             raise AgentError("INVALID_METRIC", "Choose maximum loading or violation count.")
         rows = self._optional_table(self._run(run_id, project), "contingency_summary")
         if rows is None:
-            raise AgentError("ANALYSIS_NOT_BUILT", "Rebuild the analysis with run_analysis(rebuild=True), or with Build / refresh analysis in the Agent tab, to create the contingency summary.")
+            raise AgentError("ANALYSIS_NOT_BUILT", "Rebuild the analysis with run_analysis(rebuild=True) to create the contingency summary; the user can also ask Clarke to prepare the run for analysis again.")
         candidates = [row for row in rows if _number(row.get("event_idx")) != 0]
         converged = [row for row in candidates if str(row.get("converged")).lower() in ("true", "1") and row.get("status_code", "").upper() in ("", "OK")]
         selected = converged if converged_only else candidates
@@ -698,7 +698,7 @@ class AnalysisTools(ToolBase):
 
         manifest = scoped_path(run, "reports/event_index/manifest.json")
         if not manifest.exists():
-            raise AgentError("INDEX_NOT_BUILT", "Build the index with run_analysis(include_index=True), or with Include contingency drill-down index and Build / refresh analysis in the Agent tab.")
+            raise AgentError("INDEX_NOT_BUILT", "Build the index with run_analysis(include_index=True); the user can also ask Clarke to prepare the run's contingency drill-down index.")
         try:
             rows, total, paths = query_event_index(run, event_idx=event_idx, branch=branch, limit=offset + limit if limit else 0)
         except AgentError:
@@ -734,7 +734,7 @@ class AnalysisTools(ToolBase):
         record = save_proposal(self.context, run_id, purpose, code)
         for suffix in (".py", ".json"):
             self._source(self.context.directory / "generated" / (record["proposal_id"] + suffix), self.context.directory)
-        return {"rows": [record], "next_step": "The script is saved. Ask the user to select Review scripts in the Agent tab. No code has run."}
+        return {"rows": [record], "next_step": "The script is saved. Ask the user to select Review proposed scripts in the Agent tab. No code has run."}
 
     @tool
     def get_script_result(self, proposal_id: str, limit: int = 1, offset: int = 0) -> dict:
