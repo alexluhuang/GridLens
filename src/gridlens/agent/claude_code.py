@@ -37,7 +37,9 @@ from gridlens.system import processes
 SUPPORTED_CLAUDE_CODE = "2.1.278"
 DEFAULT_MODEL = "default"
 DOCS_URL = "https://code.claude.com/docs/en/cli-usage"
-INSTALL_COMMAND = "curl -fsSL https://claude.ai/install.sh | bash"
+INSTALL_COMMAND = (
+    "irm https://claude.ai/install.ps1 | iex" if processes.WINDOWS
+    else "curl -fsSL https://claude.ai/install.sh | bash")
 LOGIN_COMMAND = "claude auth login"
 VERSION_PATTERN = re.compile(rb"(\d+\.\d+\.\d+)")
 ALLOWED_TOOLS = tuple(f"mcp__gridlens__{name}" for name in TOOL_NAMES)
@@ -133,7 +135,9 @@ class ClaudeCodeAdapter:
             "--disallowedTools", *BLOCKED_BUILTIN_TOOLS,
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--disable-slash-commands", "--no-session-persistence",
-            "--system-prompt", SYSTEM_PROMPT,
+            # From a file: the prompt is longer than cmd.exe accepts on a
+            # command line, which matters when claude is an npm .cmd shim.
+            "--system-prompt-file", str(prompt_path),
             "--add-dir", str(scratch),
         ]
         if session.model and session.model != DEFAULT_MODEL:

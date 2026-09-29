@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -108,6 +109,10 @@ def test_claude_session_exposes_only_gridlens_tools(agent_project, monkeypatch):
     assert manifest["route"] == "remote" and manifest["tools"] == list(TOOL_NAMES)
     assert "left this machine" in manifest["egress_note"]
     assert prepared.environment.get("NO_PROXY") is None
+    # The prompt is read from a file, since it is longer than cmd.exe allows.
+    prompt_file = Path(argv[argv.index("--system-prompt-file") + 1])
+    assert prompt_file.read_text(encoding="utf-8") == SYSTEM_PROMPT
+    assert "--system-prompt" not in argv
 
 
 @pytest.mark.parametrize("tools,servers,code", [
