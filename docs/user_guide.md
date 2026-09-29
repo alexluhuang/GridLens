@@ -45,6 +45,11 @@ another file name instead.
 GridLens runs GridPACK's contingency analysis, `ca.x`, with the container's network disabled, the Docker
 platform flag matching this machine, and output files written as your user.
 
+When a run completes, GridLens prepares its branch and transformer analysis at once, so the graphs in
+**Branch Analysis** and **Transformer Analysis** are ready when you open those tabs. The analysis runs in
+the background, one tab after the other; each tab's status line shows its progress, and **Stop** there
+cancels it. A run that fails or is terminated is not analyzed. Sensitivity runs are analyzed the same way.
+
 The live log appears in the Run tab. The run folder contains:
 
 ```text
@@ -118,7 +123,9 @@ Click **Export ZIP** to create a local package of the run files.
 
 ## Generate analysis graphs
 
-Go to **Branch Analysis** or **Transformer Analysis**, choose a run, and click **Generate Graphs**.
+GridLens generates the graphs of each run that completes by itself. To see another run's, go to
+**Branch Analysis** or **Transformer Analysis**, choose the run, and click **Generate Graphs**. If an
+automatic analysis fails, the tab's status line says why, and **Generate Graphs** tries again.
 
 If no fresh cache exists, the graph workflow creates:
 

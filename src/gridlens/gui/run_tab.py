@@ -349,21 +349,23 @@ class RunTab(QWidget):
         self.terminate_button.setEnabled(False)
         self.last_run_dir = result.run_dir
         self.open_run_button.setEnabled(True)
-        if self.termination_requested:
+        terminated = self.termination_requested
+        self.active_request = None
+        self.termination_requested = False
+        # Announce the run before any dialog, so its analysis starts while the user reads the outcome.
+        self.run_finished.emit(result.run_dir)
+        if terminated:
             self._finalize_progress("Run terminated.", complete=False)
             self.append_log(f"Run terminated with return code {result.return_code}.")
             QMessageBox.information(self, "Run terminated", "The GridPACK Docker run was terminated.")
         elif result.return_code == 0:
             self._finalize_progress("Run completed successfully.", complete=True)
-            self.append_log("Run completed successfully.")
-            QMessageBox.information(self, "Run completed", "GridPACK completed successfully.")
+            self.append_log("Run completed successfully. Its branch and transformer analysis is being prepared.")
+            QMessageBox.information(self, "Run completed", "GridPACK completed successfully. The Branch Analysis and Transformer Analysis tabs are preparing its graphs.")
         else:
             self._finalize_progress(f"Run failed with return code {result.return_code}.", complete=False)
             self.append_log(f"Run failed with return code {result.return_code}.")
             QMessageBox.warning(self, "Run failed", f"GridPACK exited with return code {result.return_code}.")
-        self.active_request = None
-        self.termination_requested = False
-        self.run_finished.emit(result.run_dir)
 
     def on_failed(self, error_text: str) -> None:
         self.run_button.setEnabled(True)

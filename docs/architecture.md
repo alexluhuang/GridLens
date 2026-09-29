@@ -115,7 +115,8 @@ The analysis layer is deliberately local and file-based. It can do the following
 - Write distribution plot PNGs and companion CSV tables under `exports/distributions/`.
 - Export a run ZIP.
 
-The GUI's **Generate Graphs** action calls the interactive analysis path. It reuses a fresh
+The GUI's **Generate Graphs** action calls the interactive analysis path, and `MainWindow` calls it in
+both analysis tabs when a run from the Run tab completes. It reuses a fresh
 `reports/analysis_manifest.json` when one already exists. Otherwise it writes only
 `reports/interactive_analysis_manifest.json` and `reports/interactive_tables/`. The lower-level export
 helpers create the master CSVs and the distribution plots, not the embedded graph button.

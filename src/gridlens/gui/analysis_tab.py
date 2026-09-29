@@ -128,6 +128,10 @@ class AnalysisTab(QWidget):
         self.control_area_click_items: list[tuple[object, dict[str, object]]] = []
         self.voltage_group_click_items: list[tuple[object, dict[str, object]]] = []
         self.analysis_worker: AnalysisWorker | None = None
+        # True while the running build was started by a finished GridPACK run rather than by the user.
+        self._automatic = False
+        # A finished run whose analysis waits for the build in progress to end.
+        self._pending_run: Path | None = None
         self._wide_layout: bool | None = None
         self._dense_control_area_layout: bool | None = None
 
@@ -212,7 +216,26 @@ class AnalysisTab(QWidget):
         value = self.run_combo.currentData()
         return Path(value) if value else None
 
-    def generate_graphs(self) -> None:
+    def analyze_run(self, run_dir: object) -> None:
+        """Build and show a run's analysis without being asked, as MainWindow does when a GridPACK run completes.
+
+        A build already in progress finishes first, and this run's follows it.
+        """
+        path = Path(str(run_dir))
+        if self.analysis_worker is not None:
+            self._pending_run = path
+            return
+        self.refresh_runs(select_run=path)
+        if self.selected_run_dir() is None or self.selected_run_dir().resolve() != path.resolve():
+            return
+        self.generate_graphs(automatic=True)
+
+    def generate_graphs(self, *, automatic: bool = False) -> None:
+        """Build the selected run's analysis in the background and chart it.
+
+        An automatic build, started because a run completed, reports a CPU fallback and a failure in the
+        status line rather than in a dialog, since nobody asked for it.
+        """
         if self.analysis_worker and self.analysis_worker.isRunning():
             self.status_label.setText("Analysis is already running...")
             return
@@ -220,11 +243,17 @@ class AnalysisTab(QWidget):
         if not run_dir:
             QMessageBox.warning(self, "No run selected", "Select a completed run first.")
             return
+        self._automatic = automatic
         cpu_dask_warning = cpu_dask_fallback_warning(run_dir)
         if cpu_dask_warning:
-            QMessageBox.warning(self, "CPU Dask fallback", cpu_dask_warning)
+            if not automatic:
+                QMessageBox.warning(self, "CPU Dask fallback", cpu_dask_warning)
             os.environ[CSV_FLAT_ALLOW_CPU_DASK_ENV] = "1"
-        self.status_label.setText("Parsing GridPACK outputs and RAW metadata in the background...")
+        self.status_label.setToolTip(cpu_dask_warning if automatic else "")
+        self.status_label.setText(
+            f"Run {run_dir.name} finished. Preparing its {self._analysis_noun()} analysis in the background..."
+            if automatic else "Parsing GridPACK outputs and RAW metadata in the background..."
+        )
         self._set_analysis_controls_enabled(False)
         self._begin_progress()
         self.analysis_worker = AnalysisWorker(run_dir, self._utilization_branch_options())
@@ -262,6 +291,11 @@ class AnalysisTab(QWidget):
         if self.analysis_worker and self.analysis_worker.cancelled.is_set():
             self.status_label.setText("Analysis cancelled.")
             return
+        if self._automatic:
+            summary = (error_text.strip().splitlines() or ["Unknown error"])[-1][:300]
+            self.status_label.setText(f"The automatic analysis failed: {summary.rstrip('.')}. Click Generate Graphs to try again.")
+            self.status_label.setToolTip(error_text)
+            return
         QMessageBox.critical(self, "Analysis failed", error_text)
         self.status_label.setText("Analysis failed.")
 
@@ -281,6 +315,9 @@ class AnalysisTab(QWidget):
         self._end_progress()
         if worker:
             worker.deleteLater()
+        pending, self._pending_run = self._pending_run, None
+        if pending is not None:
+            self.analyze_run(pending)
 
     def _begin_progress(self) -> None:
         self.progress_bar.setRange(0, 0)
@@ -297,6 +334,7 @@ class AnalysisTab(QWidget):
         self.stop_button.setEnabled(not enabled)
 
     def stop_analysis(self) -> None:
+        self._pending_run = None
         if self.analysis_worker:
             self.analysis_worker.cancelled.set()
 

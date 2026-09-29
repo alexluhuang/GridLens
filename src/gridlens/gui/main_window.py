@@ -14,6 +14,7 @@ from gridlens.gui.agent_tab import AgentTab
 from gridlens.gui.configuration_tab import ConfigurationTab
 from gridlens.gui.project_tab import ProjectTab
 from gridlens.gui.results_tab import ResultsTab
+from gridlens.gui.results_view_models import read_run_status
 from gridlens.gui.run_tab import RunTab
 from gridlens.gui.sensitivity_tab import SensitivityTab
 
@@ -140,7 +141,13 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.results_tab)
         project_name = self.project_data.name if self.project_data else "Project"
         self.context_label.setText(f"{project_name} · latest run {path.name}")
-        self.statusBar().showMessage(f"Run finished: {path.name}")
+        if read_run_status(path) != "completed":
+            self.statusBar().showMessage(f"Run finished: {path.name}")
+            return
+        # A completed run's analyses are prepared right away, so its graphs are ready when the user looks.
+        self.branch_analysis_tab.analyze_run(path)
+        self.transformer_analysis_tab.analyze_run(path)
+        self.statusBar().showMessage(f"Run finished: {path.name}. Preparing its branch and transformer analysis.")
 
     def on_agent_turn_finished(self) -> None:
         """Refresh the run lists, because an agent turn may have started runs or built analyses."""
