@@ -6,10 +6,12 @@ rather than on the command line.
 
 The adapter is pinned to one tested CLI version and refuses any other. Guessing at a changed event format
 would be worse than refusing, because the failure would surface as a wrong answer rather than an error.
+`gridlens.agent.setup` installs exactly that version, from the commit named here.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -31,6 +33,8 @@ from gridlens.agent.tools import TOOL_NAMES
 
 
 SUPPORTED_HERMES = "0.21.4"
+# The upstream commit of the validated release. The Hermes installer checks out exactly this commit.
+SUPPORTED_HERMES_COMMIT = "5f5c9ef8f468667539d4d34e95f77eeb253cfc3c"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
 # A turn may start a GridPACK run and wait for it through get_status, so it gets an hour; Stop ends it sooner.
 TURN_TIMEOUT_SECONDS = 3600
@@ -71,6 +75,22 @@ def _profile_config(session: SessionContext, command: list[str]) -> dict:
     }
 
 
+def hermes_executable() -> str:
+    """Return the Hermes CLI, or "" when it is not installed.
+
+    The Hermes installer puts the CLI in ~/.local/bin, or %LOCALAPPDATA%\\hermes\\bin on Windows, and
+    only adds that folder to the PATH of new login shells, so a GridLens started from the desktop, or
+    right after the install, finds it there rather than on PATH.
+    """
+    found = shutil.which("hermes")
+    if found:
+        return found
+    candidates = [Path.home() / ".local" / "bin" / "hermes"]
+    if os.environ.get("LOCALAPPDATA"):
+        candidates.append(Path(os.environ["LOCALAPPDATA"]) / "hermes" / "bin" / "hermes.exe")
+    return next((str(path) for path in candidates if path.is_file() and os.access(path, os.X_OK)), "")
+
+
 class HermesAdapter:
     """Drive the Hermes CLI against a local Ollama endpoint, through an isolated session profile."""
     provider = "hermes"
@@ -85,10 +105,10 @@ class HermesAdapter:
     def probe(self) -> RuntimeStatus:
         # Signing in does not apply: inference is served by the user's own loopback Ollama service.
         """Report the Hermes version, the loopback endpoint, and the installed local models."""
-        common = {"provider": self.provider, "route": self.route, "docs_url": DOCS_URL, "install_command": "ollama pull MODEL", "login_command": ""}
-        executable = shutil.which("hermes")
+        common = {"provider": self.provider, "route": self.route, "docs_url": DOCS_URL, "install_command": "", "login_command": ""}
+        executable = hermes_executable()
         if not executable:
-            return RuntimeStatus(False, "Hermes Agent is not installed. Install it yourself using its installation guide, then refresh. GridLens never installs a CLI or a model.", **common)
+            return RuntimeStatus(False, "Hermes Agent is not installed. Choose Set up Clarke to install it.", **common)
         common["executable"] = executable
         version = ""
         try:
@@ -96,16 +116,18 @@ class HermesAdapter:
             version = probe_version(executable, VERSION_PATTERN)
             common["version"] = version
             if version != SUPPORTED_HERMES:
-                return RuntimeStatus(False, f"Hermes {version} is not validated. This build supports {SUPPORTED_HERMES}; validate the adapter before upgrading.", endpoint=endpoint, **common)
+                return RuntimeStatus(False, f"Hermes {version} is installed, but Clarke is validated only with Hermes {SUPPORTED_HERMES}. Choose Set up Clarke to install Hermes {SUPPORTED_HERMES}.", endpoint=endpoint, **common)
             ollama_json(endpoint, "/api/version")
             inventory = ollama_json(endpoint, "/api/tags")
             models = tuple(sorted({item["name"] for item in inventory.get("models", []) if isinstance(item, dict) and isinstance(item.get("name"), str) and not item.get("remote_host") and "cloud" not in item["name"].lower().split(":")[-1]}))
             if not models:
-                return RuntimeStatus(False, "No local Ollama models found. Install a model with tool support yourself (ollama pull MODEL), then refresh.", endpoint=endpoint, **common)
-            return RuntimeStatus(True, f"Hermes {version}; Ollama reachable on loopback. Signing in does not apply to local Ollama. Model tool support is checked before anything is sent.", endpoint=endpoint, models=models, **common)
+                return RuntimeStatus(False, "No model is installed. Choose Set up Clarke to install one.", endpoint=endpoint, **common)
+            return RuntimeStatus(True, f"Hermes {version}; Ollama reachable on loopback. Model tool support is checked before anything is sent.", endpoint=endpoint, models=models, **common)
         except (AgentError, OSError, subprocess.TimeoutExpired) as exc:
             common.setdefault("version", version)
-            return RuntimeStatus(False, str(exc) if isinstance(exc, AgentError) else "Hermes did not respond. Run `hermes --version` in a terminal, then refresh.", **common)
+            if isinstance(exc, AgentError) and exc.code == "OLLAMA_UNAVAILABLE":
+                return RuntimeStatus(False, "Ollama is not running. Choose Set up Clarke to start or install it.", **common)
+            return RuntimeStatus(False, str(exc) if isinstance(exc, AgentError) else "Hermes did not respond. Run `hermes --version` in a terminal, then choose Set up Clarke.", **common)
 
     def prepare(self, session: SessionContext) -> PreparedRuntime:
         """Write an isolated profile and the session manifest, then fix the launch command."""
