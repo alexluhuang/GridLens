@@ -4,7 +4,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from gridlens.core.project import Project, ProjectData, safe_folder_name
+from gridlens.core.project import (
+    MAX_CONFIGURATION_XML_BYTES,
+    Project,
+    ProjectData,
+    is_gridpack_configuration_root,
+    safe_folder_name,
+)
 from gridlens.core.validation import ValidationError
 
 
@@ -84,6 +90,16 @@ def project_network_file_names(project_data: ProjectData) -> list[str]:
         for record in project_data.input_files
         if Path(record.file_name).suffix.lower() in {".raw", ".m", ".goss"}
     ]
+
+
+def attached_configuration(project_data: ProjectData) -> bool:
+    """Return whether the project's configuration was added as an input file rather than generated here.
+
+    A generated XML is recorded with its stored path as its source; an attached one keeps the path it was
+    copied from, even after the Configuration tab edits it.
+    """
+    record = next((item for item in project_data.input_files if item.file_name == project_data.xml_file_name), None)
+    return record is not None and Path(record.source_path) != Path(record.stored_path)
 
 
 def load_input_configuration_values(
@@ -250,7 +266,32 @@ def normalize_input_configuration_values(values: InputConfigurationValues) -> In
 
 
 def render_input_configuration_xml(values: InputConfigurationValues) -> str:
+    return _xml_document(_configuration_tree(normalize_input_configuration_values(values)))
+
+
+def merge_input_configuration_xml(existing_xml: str, values: InputConfigurationValues) -> str:
+    """Write values into an existing GridPACK configuration, keeping everything GridLens does not manage.
+
+    The elements the Configuration tab controls are updated in place, added where the tab would put them,
+    or removed when the form leaves an optional one blank. Every other element, attribute, and comment
+    stays, so a configuration attached in the Project tab keeps the settings the form has no field for. A
+    file GridLens generated merges to exactly what render_input_configuration_xml writes.
+    """
     normalized = normalize_input_configuration_values(values)
+    try:
+        existing = ET.fromstring(existing_xml, parser=ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)))
+    except ET.ParseError as exc:
+        raise ValidationError(f"{normalized.xml_file_name} could not be read as XML: {exc}") from exc
+    if not is_gridpack_configuration_root(existing):
+        raise ValidationError(
+            f"{normalized.xml_file_name} in the project is not a GridPACK configuration. "
+            "Choose another XML file name."
+        )
+    _merge_children(existing, _configuration_tree(normalized), _MANAGED_TAGS)
+    return _xml_document(existing)
+
+
+def _configuration_tree(normalized: InputConfigurationValues) -> ET.Element:
     root = ET.Element("Configuration")
 
     contingency = ET.SubElement(root, "Contingency_analysis")
@@ -297,23 +338,86 @@ def render_input_configuration_xml(values: InputConfigurationValues) -> str:
         _add_text(linear_solver, "PETScPrefix", normalized.petsc_prefix)
     petsc_options = ET.SubElement(linear_solver, "PETScOptions")
     petsc_options.text = _format_petsc_options(normalized.petsc_options)
+    return root
 
+
+def _xml_document(root: ET.Element) -> str:
     ET.indent(root, space="  ")
     xml_text = ET.tostring(root, encoding="unicode", short_empty_elements=False)
     return f'<?xml version="1.0" encoding="utf-8"?>\n{xml_text}\n'
 
 
+# The elements the Configuration tab writes, including those it writes only when a field is set, by parent.
+_MANAGED_TAGS = {
+    "Configuration": frozenset({"Contingency_analysis", "Powerflow"}),
+    "Contingency_analysis": frozenset({
+        "printCalcFiles", "contingencyList", "FullBranchN1", "FullGeneratorN1", "groupSize", "maxVoltage",
+        "minVoltage", "contingencyRating", "qlim", "qlimDeadband", "LTC", "writeStats", "outputFormat",
+        "outputFile", "monitorBranchesFile", "monitorAreas", "monitorKvMin", "monitorKvMax",
+    }),
+    "Powerflow": frozenset({
+        *NETWORK_CONFIGURATION_TAG_OPTIONS, "initStart", "SwitchedShunt", "qlim", "qlimDeadband", "LTC",
+        "AreaInterchange", "maxControllerIterations", "maxIteration", "tolerance", "maxQlimIterations",
+        "dampingFactor", "phaseShiftSign", "LinearSolver",
+    }),
+    "LinearSolver": frozenset({"PETScPrefix", "PETScOptions"}),
+}
+
+
+def _merge_children(existing: ET.Element, generated: ET.Element, managed: dict[str, frozenset[str]]) -> None:
+    """Make existing's managed children match generated's, in generated's order, leaving other children alone.
+
+    A generated child updates the first existing child with its tag, keeping that child's attributes, or is
+    inserted after the previous managed child. Managed children the generated tree omits are removed, as
+    are repeats of a managed tag, which GridPACK would read ambiguously.
+    """
+    tags = managed.get(existing.tag, frozenset())
+    placed: set[int] = set()
+    anchor: ET.Element | None = None
+    for child in generated:
+        match = next((item for item in existing if item.tag == child.tag), None)
+        if match is None:
+            match = ET.Element(child.tag)
+            existing.insert(0 if anchor is None else list(existing).index(anchor) + 1, match)
+        if child.tag in managed:
+            _merge_children(match, child, managed)
+        else:
+            match.text = child.text
+        placed.add(id(match))
+        anchor = match
+    for item in list(existing):
+        if isinstance(item.tag, str) and item.tag in tags and id(item) not in placed:
+            existing.remove(item)
+
+
 def validated_input_configuration(
     project_data: ProjectData,
     values: InputConfigurationValues,
+    existing_xml: str | None = None,
 ) -> tuple[InputConfigurationValues, str]:
-    """Validate configuration values against the project; return them normalized, with the XML they render to."""
+    """Validate configuration values against the project; return them normalized, with the XML to save.
+
+    existing_xml is the text of the file the XML will be saved to, when it exists. The values are then
+    merged into it rather than replacing it, as merge_input_configuration_xml describes.
+    """
     normalized = normalize_input_configuration_values(values)
     if normalized.monitor_branches_file:
         input_file_names = {record.file_name for record in project_data.input_files}
         if normalized.monitor_branches_file not in input_file_names:
             raise ValidationError("Monitor branches file must be added to the project input files.")
-    return normalized, render_input_configuration_xml(normalized)
+    if existing_xml is None:
+        return normalized, render_input_configuration_xml(normalized)
+    return normalized, merge_input_configuration_xml(existing_xml, normalized)
+
+
+def existing_configuration_text(project: Project, xml_file_name: str) -> str | None:
+    """Return the text of the project input a configuration named xml_file_name would be saved over, if any."""
+    path = project.original_inputs_dir / xml_file_name.strip()
+    if not xml_file_name.strip() or Path(xml_file_name.strip()).name != xml_file_name.strip() or not path.is_file():
+        return None
+    if path.stat().st_size > MAX_CONFIGURATION_XML_BYTES:
+        raise ValidationError(f"{path.name} in the project is too large to be a GridPACK configuration.")
+    return path.read_text(encoding="utf-8")
 
 
 def save_input_configuration(
@@ -321,7 +425,8 @@ def save_input_configuration(
     project_data: ProjectData,
     values: InputConfigurationValues,
 ) -> ProjectData:
-    normalized, xml_text = validated_input_configuration(project_data, values)
+    existing = existing_configuration_text(project, values.xml_file_name)
+    normalized, xml_text = validated_input_configuration(project_data, values, existing)
     return project.save_generated_xml(project_data, normalized.xml_file_name, xml_text)
 
 
@@ -442,8 +547,11 @@ __all__ = [
     "INIT_START_OPTIONS",
     "InputConfigurationValues",
     "NETWORK_CONFIGURATION_TAG_OPTIONS",
+    "attached_configuration",
     "default_input_configuration_values",
+    "existing_configuration_text",
     "load_input_configuration_values",
+    "merge_input_configuration_xml",
     "normalize_input_configuration_values",
     "project_network_file_names",
     "render_input_configuration_xml",

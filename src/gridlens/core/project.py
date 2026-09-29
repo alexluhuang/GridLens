@@ -7,12 +7,15 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import xml.etree.ElementTree as ET
 
 from gridlens.core.validation import ValidationError, sanitize_project_name
 
 
 PROJECT_FILE_NAME = "project.json"
 RESERVED_PROJECT_ROOT_NAMES = {"exports", "logs", "original_inputs", "reports", "runs", "work"}
+# A GridPACK configuration is a few kilobytes; a larger XML input is data, such as a contingency list.
+MAX_CONFIGURATION_XML_BYTES = 1024 * 1024
 
 
 def utc_timestamp() -> str:
@@ -27,6 +30,32 @@ def safe_folder_name(name: str) -> str:
         elif char.isspace():
             safe.append("_")
     return "".join(safe).strip("_") or "GridPACK_Project"
+
+
+def is_gridpack_configuration_root(root: ET.Element) -> bool:
+    """Return whether an XML root is a GridPACK run configuration rather than another XML input.
+
+    A configuration is a <Configuration> element with a power-flow section, or a contingency-analysis
+    section holding settings. A contingency list is also a <Configuration>, but its contingency-analysis
+    section holds only <Contingencies>.
+    """
+    if root.tag != "Configuration":
+        return False
+    if root.find("Powerflow") is not None:
+        return True
+    contingency = root.find("Contingency_analysis")
+    return contingency is not None and any(isinstance(child.tag, str) and child.tag != "Contingencies" for child in contingency)
+
+
+def is_gridpack_configuration_file(path: str | Path) -> bool:
+    """Return whether path is an .xml file holding a GridPACK run configuration; unreadable files are not."""
+    path = Path(path)
+    try:
+        if path.suffix.lower() != ".xml" or not path.is_file() or path.stat().st_size > MAX_CONFIGURATION_XML_BYTES:
+            return False
+        return is_gridpack_configuration_root(ET.parse(path).getroot())
+    except (OSError, ET.ParseError, ValueError):
+        return False
 
 
 def file_sha256(path: Path) -> str:
@@ -129,15 +158,20 @@ class Project:
         existing = self.load_data() if self.project_file.exists() else None
         created_at = existing.created_at if existing else utc_timestamp()
 
+        previous = {record.file_name: record for record in existing.input_files} if existing else {}
         records = []
         for file_path in input_files:
             stored_path = self.original_inputs_dir / file_path.name
+            source_path = str(file_path)
             if file_path.resolve() != stored_path.resolve():
                 shutil.copy2(file_path, stored_path)
+            elif file_path.name in previous:
+                # Saving the project again lists its stored copy; keep where the file first came from.
+                source_path = previous[file_path.name].source_path
             records.append(
                 InputFileRecord(
                     file_name=stored_path.name,
-                    source_path=str(file_path),
+                    source_path=source_path,
                     stored_path=str(stored_path),
                     sha256=file_sha256(stored_path),
                     size_bytes=stored_path.stat().st_size,
@@ -162,9 +196,11 @@ class Project:
         xml_path = self.original_inputs_dir / xml_file_name
         xml_path.write_text(xml_text, encoding="utf-8")
 
+        previous = next((record for record in project_data.input_files if record.file_name == xml_path.name), None)
         generated_record = InputFileRecord(
             file_name=xml_path.name,
-            source_path=str(xml_path),
+            # A configuration attached from elsewhere and then edited here keeps the record of where it came from.
+            source_path=previous.source_path if previous else str(xml_path),
             stored_path=str(xml_path),
             sha256=file_sha256(xml_path),
             size_bytes=xml_path.stat().st_size,

@@ -46,10 +46,11 @@ from gridlens.gui.configuration_view_models import (
     default_input_configuration_values,
     load_input_configuration_values,
     project_network_file_names,
+    existing_configuration_text,
     save_input_configuration,
     validated_input_configuration,
 )
-from gridlens.gui.project_view_models import ProjectFormValues, default_project_folder, prepare_project_save
+from gridlens.gui.project_view_models import ProjectFormValues, default_project_folder, prepare_project_save, project_configuration_name
 from gridlens.gui.run_view_models import RunFormValues, validate_run_form_values
 from gridlens.runner import docker_probe
 from gridlens.runner.gridpack_runner import gridpack_container_name, terminate_gridpack_run
@@ -232,21 +233,25 @@ class GridLensTools(ToolBase):
 
     @tool
     def create_project(self, name: str, input_files: list[str], xml_file_name: str = "", folder: str = "") -> dict:
-        """Create a GridLens project and copy its input files (absolute paths: RAW case, XML, contingency and monitor lists) into it. folder defaults to the projects folder."""
+        """Create a GridLens project and copy its input files (absolute paths: RAW case, XML, contingency and monitor lists) into it. folder defaults to the projects folder. With xml_file_name blank, an attached GridPACK configuration XML becomes the project's XML."""
         target = Path(folder).expanduser() if folder.strip() else default_project_folder(self.context.projects_folder, name)
         if (target / PROJECT_FILE).exists():
             raise AgentError("PROJECT_EXISTS", f"A project already exists in {target}. Use add_project_inputs to change it.")
         files = _absolute_files(input_files)
-        prepared = prepare_project_save(ProjectFormValues(name, target, files, xml_file_name))
+        prepared = prepare_project_save(ProjectFormValues(name, target, files, xml_file_name or project_configuration_name(files, "")))
         data = prepared.project.save(prepared.input_files, prepared.xml_file_name)
+        next_step = (
+            f"The attached {data.xml_file_name} is the project's GridPACK XML. Use configure_run only to change its settings, then start_run."
+            if data.xml_file_name else "Use configure_run to write the GridPACK XML, then start_run."
+        )
         return {
             "rows": [asdict(record) for record in data.input_files], "name": data.name, "folder": str(prepared.project.root_dir),
-            "xml_file_name": data.xml_file_name, "next_step": "Use configure_run to write the GridPACK XML, then start_run.",
+            "xml_file_name": data.xml_file_name, "next_step": next_step,
         }
 
     @tool
     def add_project_inputs(self, input_files: list[str], project: str = "", xml_file_name: str = "", confirm: bool = False) -> dict:
-        """Copy more input files (absolute paths) into a project. A file with the same name as an existing input replaces it. Replacing an input with different content, or switching the project's XML with xml_file_name, first returns a preview and changes nothing: show it to the user, and call again with confirm=True only after they agree in a later message."""
+        """Copy more input files (absolute paths) into a project. A file with the same name as an existing input replaces it. A project with no XML yet adopts an added GridPACK configuration XML. Replacing an input with different content, or switching the project's XML with xml_file_name, first returns a preview and changes nothing: show it to the user, and call again with confirm=True only after they agree in a later message."""
         root = self._project(project)
         project_record, data = _project_record(root)
         files = _absolute_files(input_files)
@@ -267,7 +272,7 @@ class GridLensTools(ToolBase):
                 return held
         names = {path.name for path in files}
         kept = [Path(record.stored_path) for record in data.input_files if record.file_name not in names]
-        saved = project_record.save(kept + files, xml_file_name or data.xml_file_name)
+        saved = project_record.save(kept + files, xml_file_name or project_configuration_name(kept + files, data.xml_file_name))
         return {"rows": [asdict(record) for record in saved.input_files], "folder": str(root), "xml_file_name": saved.xml_file_name}
 
     @tool
@@ -284,7 +289,7 @@ class GridLensTools(ToolBase):
 
     @tool
     def configure_run(self, settings: dict, project: str = "", confirm: bool = False) -> dict:
-        """Change GridPACK XML settings by name, as listed by get_run_configuration (for example {"full_generator_n1": true, "max_voltage": "1.05"}), and save the XML into the project. Changing a project's existing XML first returns a preview, each setting's current and new value and the XML diff, and changes nothing: show it to the user, and call again with confirm=True only after they agree in a later message. A project with no XML yet gets one at once."""
+        """Change GridPACK XML settings by name, as listed by get_run_configuration (for example {"full_generator_n1": true, "max_voltage": "1.05"}), and save the XML into the project; elements of an existing XML that are not settings stay as they are. Changing a project's existing XML first returns a preview, each setting's current and new value and the XML diff, and changes nothing: show it to the user, and call again with confirm=True only after they agree in a later message. A project with no XML yet gets one at once."""
         root = self._project(project)
         project_record, data = _project_record(root)
         current = _current_configuration(root, data)
@@ -296,7 +301,8 @@ class GridLensTools(ToolBase):
         values = replace(current, **changes)
         if values.network_file_name not in {record.file_name for record in data.input_files}:
             raise AgentError("NETWORK_FILE_NOT_IN_PROJECT", "Set network_file_name to one of the project's input files, or add the case with add_project_inputs.")
-        normalized, after = validated_input_configuration(data, values)
+        # Saving merges into the file it replaces, keeping settings GridLens does not manage; the preview shows the same text.
+        normalized, after = validated_input_configuration(data, values, existing_configuration_text(project_record, values.xml_file_name))
         existing = scoped_path(root, Path("original_inputs") / data.xml_file_name) if data.xml_file_name else None
         if existing is not None and existing.is_file():
             before = existing.read_text(encoding="utf-8")

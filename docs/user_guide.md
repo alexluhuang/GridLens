@@ -6,10 +6,17 @@
 2. Go to **Project**.
 3. Enter a project name.
 4. Choose a project folder.
-5. Add the GridPACK input files, including the network file such as a RAW file.
+5. Add the GridPACK input files, including the network file such as a RAW file. You can also add a GridPACK
+   XML configuration you already have.
 6. Click **Create / Save Project**.
 
 The app copies the selected files into `original_inputs/` in the project folder.
+
+If you add a GridPACK XML configuration, the project uses it, and the file list marks it
+**GridPACK configuration**. A project with no configuration yet adopts the one you add; if you add several,
+GridLens asks which one to use, and if the project already has one, GridLens asks whether to switch. A
+contingency-list XML is an input, not a configuration. If you add a file with the same name as one the
+project already has, such as your own `input.xml` over the generated one, GridLens asks whether to replace it.
 
 ## Generate the XML configuration
 
@@ -22,7 +29,10 @@ The app copies the selected files into `original_inputs/` in the project folder.
 6. Click **Generate / Save XML**.
 
 The app writes the XML configuration into `original_inputs/` and updates the project so the Run tab can use
-it.
+it. When the XML file already exists, for example one you added in the **Project** tab, GridLens edits it in
+place: it changes the settings shown in this tab and keeps every other element, attribute, and comment. It
+refuses to overwrite an XML file that is not a GridPACK configuration, such as a contingency list; choose
+another file name instead.
 
 ## Run GridPACK
 

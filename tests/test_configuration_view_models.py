@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -10,7 +11,9 @@ from gridlens.core.validation import ValidationError
 from gridlens.gui.configuration_view_models import (
     InputConfigurationValues,
     default_input_configuration_values,
+    attached_configuration,
     load_input_configuration_values,
+    merge_input_configuration_xml,
     render_input_configuration_xml,
     save_input_configuration,
 )
@@ -128,3 +131,90 @@ def test_save_input_configuration_requires_monitor_file_project_input(tmp_path: 
                 monitor_branches_file="monitor.csv",
             ),
         )
+
+
+ATTACHED = """<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <!-- written by hand -->
+  <Contingency_analysis>
+    <contingencyList>contingencies.xml</contingencyList>
+    <maxVoltage units="pu">1.2</maxVoltage>
+    <customSetting>kept</customSetting>
+  </Contingency_analysis>
+  <Powerflow>
+    <networkConfiguration_v33>old.raw</networkConfiguration_v33>
+    <LinearSolver>
+      <SolverTag>klu</SolverTag>
+    </LinearSolver>
+  </Powerflow>
+  <Dynamic_simulation><timeStep>0.01</timeStep></Dynamic_simulation>
+</Configuration>
+"""
+
+
+def test_merge_updates_managed_settings_and_keeps_everything_else() -> None:
+    """Saving into an attached XML changes the form's settings and keeps elements, attributes, and comments it has no field for."""
+    values = replace(default_input_configuration_values("case.raw"), max_voltage="1.05", contingency_list="")
+    merged = merge_input_configuration_xml(ATTACHED, values)
+    root = ET.fromstring(merged)
+    contingency = root.find("Contingency_analysis")
+    powerflow = root.find("Powerflow")
+
+    assert "<!-- written by hand -->" in merged
+    assert contingency.find("maxVoltage").text == "1.05" and contingency.find("maxVoltage").get("units") == "pu"
+    assert contingency.findtext("customSetting") == "kept"
+    assert contingency.find("contingencyList") is None
+    assert powerflow.find("networkConfiguration_v33") is None and powerflow.findtext("networkConfiguration") == "case.raw"
+    assert powerflow.findtext("LinearSolver/SolverTag") == "klu"
+    assert "-pc_type lu" in powerflow.findtext("LinearSolver/PETScOptions")
+    assert root.findtext("Dynamic_simulation/timeStep") == "0.01"
+    # Managed elements keep their place, and new ones go where the form writes them.
+    tags = [child.tag for child in contingency]
+    assert tags.index("maxVoltage") < tags.index("customSetting")
+    assert tags.index("FullBranchN1") < tags.index("maxVoltage") < tags.index("minVoltage")
+
+
+def test_merge_into_a_generated_xml_writes_what_render_writes() -> None:
+    """A file GridLens generated merges to the same text a fresh render gives, so an unchanged save shows no diff."""
+    before = default_input_configuration_values("case.raw", project_name="Pilot")
+    after = replace(before, contingency_list="contingencies.xml", monitor_areas="1 2", petsc_prefix="ca")
+
+    assert merge_input_configuration_xml(render_input_configuration_xml(before), after) == render_input_configuration_xml(after)
+    assert merge_input_configuration_xml(render_input_configuration_xml(after), before) == render_input_configuration_xml(before)
+
+
+def test_merge_refuses_an_xml_that_is_not_a_configuration() -> None:
+    values = default_input_configuration_values("case.raw")
+    with pytest.raises(ValidationError, match="not a GridPACK configuration"):
+        merge_input_configuration_xml("<Configuration><Contingency_analysis><Contingencies /></Contingency_analysis></Configuration>", values)
+    with pytest.raises(ValidationError, match="could not be read"):
+        merge_input_configuration_xml("<Configuration>", values)
+
+
+def test_saving_over_an_attached_configuration_keeps_it_and_its_origin(tmp_path: Path) -> None:
+    """The Configuration tab edits an attached XML in place, and the project still records it as attached."""
+    raw = tmp_path / "case.raw"
+    raw.write_text("raw", encoding="utf-8")
+    xml = tmp_path / "input.xml"
+    xml.write_text(ATTACHED, encoding="utf-8")
+    project = Project("Attached", tmp_path / "project")
+    data = project.save([raw, xml], "input.xml")
+    assert attached_configuration(data)
+    values = load_input_configuration_values(project.original_inputs_dir / "input.xml", "case.raw", "input.xml", "Attached")
+
+    saved = save_input_configuration(project, data, replace(values, network_file_name="case.raw", full_generator_n1=True))
+
+    text = (project.original_inputs_dir / "input.xml").read_text(encoding="utf-8")
+    assert "<customSetting>kept</customSetting>" in text and "<FullGeneratorN1>true</FullGeneratorN1>" in text
+    assert attached_configuration(saved)
+    resaved = project.save([Path(record.stored_path) for record in saved.input_files], saved.xml_file_name)
+    assert attached_configuration(resaved)
+
+
+def test_generated_configuration_is_not_attached(tmp_path: Path) -> None:
+    raw = tmp_path / "case.raw"
+    raw.write_text("raw", encoding="utf-8")
+    project = Project("Generated", tmp_path / "project")
+    data = project.save([raw], "")
+    saved = save_input_configuration(project, data, default_input_configuration_values("case.raw"))
+    assert saved.xml_file_name == "input.xml" and not attached_configuration(saved)

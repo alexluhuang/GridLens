@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -23,8 +24,11 @@ from gridlens.core.project import Project, ProjectData, open_project
 from gridlens.core.validation import ValidationError
 from gridlens.gui.project_view_models import (
     ProjectFormValues,
+    add_input_paths,
+    configuration_candidates,
     default_project_folder,
     prepare_project_save,
+    project_configuration_name,
     should_update_project_folder,
 )
 from gridlens.gui.theme import configure_form_layout, set_button_role, set_muted_label
@@ -38,6 +42,7 @@ class ProjectTab(QWidget):
         self.settings = settings
         self.input_paths: list[Path] = []
         self.current_xml_file_name = ""
+        self.project_root: Path | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -132,11 +137,22 @@ class ProjectTab(QWidget):
             self.project_dir.setText(folder)
 
     def set_project(self, project: Project, project_data: ProjectData) -> None:
+        """Show a project's saved inputs.
+
+        When the same project is shown again, as after the Configuration tab saves its XML, files added
+        here but not saved yet stay in the list.
+        """
+        stored = [Path(record.stored_path) for record in project_data.input_files]
+        pending = []
+        if self.project_root == project.root_dir:
+            saved_names = {path.name for path in stored}
+            pending = [path for path in self.input_paths if path.name not in saved_names]
+        self.project_root = project.root_dir
         self.project_name.blockSignals(True)
         self.project_name.setText(project_data.name)
         self.project_name.blockSignals(False)
         self.project_dir.setText(str(project.root_dir))
-        self.input_paths = [Path(record.stored_path) for record in project_data.input_files]
+        self.input_paths = stored + pending
         self.current_xml_file_name = project_data.xml_file_name
         self.refresh_file_list()
 
@@ -147,11 +163,65 @@ class ProjectTab(QWidget):
             str(Path.home()),
             "GridPACK Inputs (*.xml *.raw *.csv *.con *.mon *.txt *.dyr *.seq);;All Files (*)",
         )
-        for file_name in files:
-            path = Path(file_name).expanduser().resolve()
-            if path not in self.input_paths:
-                self.input_paths.append(path)
+        before = list(self.input_paths)
+        added = [Path(file_name).expanduser().resolve() for file_name in files]
+        self.input_paths = add_input_paths(self.input_paths, added, self._confirm_replace_input)
+        self._choose_configuration([path for path in self.input_paths if path not in before])
         self.refresh_file_list()
+
+    def _confirm_replace_input(self, old: Path, new: Path) -> bool:
+        """Ask whether an added file replaces the listed input of the same name; a project keeps one of each."""
+        response = QMessageBox.question(
+            self,
+            "Replace input file",
+            f"The project already has an input named {old.name}:\n{old}\n\n"
+            f"Replace it with the file you added?\n{new}\n\n"
+            "The project keeps one file of each name. The replacement is copied in when you save the project.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return response == QMessageBox.Yes
+
+    def _choose_configuration(self, added: list[Path]) -> None:
+        """Decide whether a GridPACK configuration just added becomes the project's configuration.
+
+        With no configuration yet, a single added one is used, and the user picks among several. With a
+        configuration already set, the user is asked before another one replaces it.
+        """
+        names = {path.name for path in self.input_paths}
+        current = self.current_xml_file_name if self.current_xml_file_name in names else ""
+        candidates = [path.name for path in configuration_candidates(added) if path.name != current]
+        if not candidates:
+            return
+        if not current and len(candidates) == 1:
+            self.current_xml_file_name = candidates[0]
+            return
+        keep = f"Keep {current}" if current else ""
+        if current and len(candidates) == 1:
+            response = QMessageBox.question(
+                self,
+                "GridPACK configuration",
+                f"{candidates[0]} is a GridPACK configuration.\n\n"
+                f"Use it for this project's runs instead of {current}?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if response == QMessageBox.Yes:
+                self.current_xml_file_name = candidates[0]
+            return
+        choices = ([keep] if keep else []) + candidates
+        choice, accepted = QInputDialog.getItem(
+            self,
+            "GridPACK configuration",
+            "Several added files are GridPACK configurations. Choose the one this project's runs use:",
+            choices,
+            0,
+            False,
+        )
+        if accepted and choice != keep:
+            self.current_xml_file_name = choice
+        elif not current:
+            self.current_xml_file_name = candidates[0]
 
     def remove_selected_files(self) -> None:
         selected = {item.data(Qt.UserRole) for item in self.file_list.selectedItems()}
@@ -164,10 +234,12 @@ class ProjectTab(QWidget):
 
     def refresh_file_list(self) -> None:
         self.file_list.clear()
+        configuration = self._selected_xml_file_name()
         for path in self.input_paths:
-            item = QListWidgetItem(f"{path.name}  -  {path.parent}")
+            role = "  ·  GridPACK configuration" if path.name == configuration else ""
+            item = QListWidgetItem(f"{path.name}{role}  -  {path.parent}")
             item.setData(Qt.UserRole, str(path))
-            item.setToolTip(str(path))
+            item.setToolTip(str(path) + ("\nRuns of this project use this XML configuration." if role else ""))
             self.file_list.addItem(item)
 
     def save_project(self) -> None:
@@ -176,7 +248,12 @@ class ProjectTab(QWidget):
             project_data = prepared.project.save(prepared.input_files, prepared.xml_file_name)
             project = prepared.project
             self.current_xml_file_name = project_data.xml_file_name
-            self.status.setText(f"Saved project: {project.project_file}")
+            configuration = (
+                f" GridPACK configuration: {project_data.xml_file_name}."
+                if project_data.xml_file_name
+                else " Generate a GridPACK configuration on the Configuration tab, or add one here."
+            )
+            self.status.setText(f"Saved project: {project.project_file}.{configuration}")
             self.project_changed.emit(project, project_data)
         except Exception as exc:
             QMessageBox.critical(self, "Project cannot be saved", str(exc))
@@ -190,10 +267,7 @@ class ProjectTab(QWidget):
         )
 
     def _selected_xml_file_name(self) -> str:
-        file_names = {path.name for path in self.input_paths}
-        if self.current_xml_file_name in file_names:
-            return self.current_xml_file_name
-        return ""
+        return project_configuration_name(self.input_paths, self.current_xml_file_name)
 
     def open_existing_project(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(

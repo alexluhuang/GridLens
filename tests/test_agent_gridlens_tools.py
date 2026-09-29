@@ -1,6 +1,7 @@
 """The GridLens operation tools set up projects, configure and start runs, and build analyses."""
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -75,6 +76,38 @@ def test_add_project_inputs_replaces_a_file_of_the_same_name(workspace, tmp_path
     added = tools.add_project_inputs([str(newer / "case.raw"), str(newer / "contingencies.txt")], project="Study One")["data"]
     assert sorted(row["file_name"] for row in added["rows"]) == ["case.raw", "contingencies.txt"]
     assert (projects / "Study_One/original_inputs/case.raw").read_text() == "updated case\n"
+
+
+def test_an_attached_configuration_becomes_the_project_xml(workspace, tmp_path):
+    """create_project and add_project_inputs adopt an attached configuration XML, but not a contingency list."""
+    tools, inputs, projects = workspace
+    attached = tmp_path / "attached"
+    attached.mkdir()
+    (attached / "contingencies.xml").write_text("<Configuration><Contingency_analysis><Contingencies /></Contingency_analysis></Configuration>")
+    (attached / "study.xml").write_text("<Configuration><Powerflow><networkConfiguration>case.raw</networkConfiguration></Powerflow><Extra>kept</Extra></Configuration>")
+    created = tools.create_project("Study One", [str(inputs / "case.raw"), str(attached / "contingencies.xml"), str(attached / "study.xml")])["data"]
+    assert created["xml_file_name"] == "study.xml" and "study.xml" in created["next_step"]
+    tools.create_project("Study Two", [str(inputs / "case.raw")])
+    assert tools.add_project_inputs([str(attached / "contingencies.xml")], project="Study Two")["data"]["xml_file_name"] == ""
+    assert tools.add_project_inputs([str(attached / "study.xml")], project="Study Two")["data"]["xml_file_name"] == "study.xml"
+    # configure_run edits the attached XML rather than replacing it.
+    saved = tools.configure_run({"full_generator_n1": True}, project="Study Two")["data"]
+    assert "<Extra>kept</Extra>" in saved["xml_text"] and "<FullGeneratorN1>true</FullGeneratorN1>" in saved["xml_text"]
+
+
+def test_configure_run_preview_shows_the_text_it_saves(confirming):
+    """The preview diff of an XML with settings GridLens does not manage is the diff of the file the confirmed call writes."""
+    tools, inputs, projects = confirming
+    xml = projects / "Study_One/original_inputs/input.xml"
+    xml.write_text(xml.read_text().replace("<Powerflow>", '<Powerflow solver="custom">\n    <extraOption>1</extraOption>'))
+    before = xml.read_text()
+    preview = tools.configure_run({"contingency_rating": "A"}, project="Study One")["data"]
+    assert preview["confirmation_required"] and "extraOption" not in preview["xml_diff"]
+    tools.context.message("user", "Yes.")
+    tools.configure_run({"contingency_rating": "A"}, project="Study One", confirm=True)
+    after = xml.read_text()
+    diff = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), "input.xml (saved)", "input.xml (proposed)"))
+    assert diff == preview["xml_diff"] and '<Powerflow solver="custom">' in after and "<extraOption>1</extraOption>" in after
 
 
 @pytest.fixture

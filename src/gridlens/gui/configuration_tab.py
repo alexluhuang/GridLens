@@ -28,6 +28,7 @@ from gridlens.gui.configuration_view_models import (
     INIT_START_OPTIONS,
     NETWORK_CONFIGURATION_TAG_OPTIONS,
     InputConfigurationValues,
+    attached_configuration,
     default_input_configuration_values,
     load_input_configuration_values,
     project_network_file_names,
@@ -242,6 +243,7 @@ class ConfigurationTab(QWidget):
         selected_network = network_names[0] if network_names else ""
         xml_file_name = project_data.xml_file_name or DEFAULT_XML_FILE_NAME
         values = default_input_configuration_values(selected_network, xml_file_name, project_data.name)
+        load_error = ""
 
         if project_data.xml_file_name:
             xml_path = project.original_inputs_dir / project_data.xml_file_name
@@ -254,7 +256,7 @@ class ConfigurationTab(QWidget):
                         project_data.name,
                     )
                 except Exception as exc:
-                    self.status.setText(f"Loaded project, but existing XML could not be parsed: {exc}")
+                    load_error = f"Loaded project, but existing XML could not be parsed: {exc}"
 
         if values.network_file_name and values.network_file_name not in network_names:
             network_names = [values.network_file_name, *network_names]
@@ -267,10 +269,22 @@ class ConfigurationTab(QWidget):
 
         self.project_label.setText(f"Configuration: {project_data.name} ({project.root_dir})")
         self.save_button.setEnabled(bool(network_names))
-        if network_names:
-            self.status.setText(f"Ready to generate {self.xml_file_name.text().strip() or DEFAULT_XML_FILE_NAME}.")
-        else:
+        if load_error:
+            self.status.setText(load_error)
+        elif not network_names:
             self.status.setText("Add a network file to the project before generating XML.")
+        else:
+            self.status.setText(self._ready_message())
+
+    def _ready_message(self) -> str:
+        """Say which XML a save writes, and that an attached configuration is edited rather than replaced."""
+        name = self.xml_file_name.text().strip() or DEFAULT_XML_FILE_NAME
+        if self.project_data and self.project_data.xml_file_name == name and attached_configuration(self.project_data):
+            return (
+                f"Editing {name}, the configuration added in the Project tab. "
+                "Saving keeps the settings GridLens does not manage."
+            )
+        return f"Ready to generate {name}."
 
     def save_configuration(self) -> None:
         if not self.project or not self.project_data:
