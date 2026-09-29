@@ -102,7 +102,7 @@ edit. The tab keeps your edits while you run them, so you can change a value and
 
 ## Review outputs
 
-Go to **Results**, choose a run, and review the files written under `work/`.
+Go to **Results**, choose a run, and review the files written under `work/`, with their sizes.
 
 Click **Export ZIP** to create a local package of the run files.
 
@@ -119,6 +119,8 @@ reports/interactive_tables/
 
 It reuses an existing full analysis cache at `reports/analysis_manifest.json` and `reports/tables/` when that
 cache is current. The embedded graph button does not create master CSVs or distribution plots.
+[Analysis notes](analysis_notes.md) describes which files are read, how facilities are filtered, and how
+utilization is calculated.
 
 For legacy TXT outputs, utilization metrics use the real-power flow from `pflow.txt` and `pflow_mm.txt`
 divided by the RAW branch Rate C (`ratec`). For `ca-scalability-v2` csv-flat outputs, they use the reported

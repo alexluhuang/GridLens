@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from gridlens.analysis.parser_models import OutputFile
 from gridlens.gui.results_view_models import (
+    format_file_size,
     output_file_row,
     output_file_rows,
     read_run_status,
@@ -41,7 +42,13 @@ def test_output_file_rows_match_results_table_columns() -> None:
     assert row == {
         "File": "success.txt",
         "Path": "work/success.txt",
-        "Size": 123,
+        "Size": "123 B",
         "Type": ".txt",
     }
     assert output_file_rows([output]) == [row]
+
+
+def test_file_sizes_are_shown_in_the_largest_unit_they_reach() -> None:
+    assert [format_file_size(size) for size in (0, 1023, 1024, 1536, 5 * 1024**2, 3 * 1024**3, 2 * 1024**4)] == [
+        "0 B", "1,023 B", "1.0 KB", "1.5 KB", "5.0 MB", "3.0 GB", "2.0 TB",
+    ]

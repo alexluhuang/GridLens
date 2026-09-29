@@ -12,7 +12,6 @@ from gridlens.core.sensitivity import PatchedCase
 from gridlens.gui.analysis_tab import AnalysisTab
 from gridlens.gui.agent_tab import AgentTab
 from gridlens.gui.configuration_tab import ConfigurationTab
-from gridlens.gui.notes_tab import NotesTab
 from gridlens.gui.project_tab import ProjectTab
 from gridlens.gui.results_tab import ResultsTab
 from gridlens.gui.run_tab import RunTab
@@ -82,7 +81,6 @@ class MainWindow(QMainWindow):
         self.branch_analysis_tab = AnalysisTab()
         self.transformer_analysis_tab = AnalysisTab(transformer_analysis=True)
         self.analysis_tab = self.branch_analysis_tab
-        self.notes_tab = NotesTab()
         self.agent_tab = AgentTab(self.settings)
 
         self.tabs.addTab(self.project_tab, "Project")
@@ -92,7 +90,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.results_tab, "Results")
         self.tabs.addTab(self.branch_analysis_tab, "Branch Analysis")
         self.tabs.addTab(self.transformer_analysis_tab, "Transformer Analysis")
-        self.tabs.addTab(self.notes_tab, "Notes")
         self.tabs.addTab(self.agent_tab, "Agent")
         self.tabs.setTabToolTip(0, "Create a project and add GridPACK input files.")
         self.tabs.setTabToolTip(1, "Generate or update the GridPACK XML configuration.")
@@ -102,8 +99,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(4, "Review, open, or export completed runs.")
         self.tabs.setTabToolTip(5, "Analyze non-transformer branch utilization.")
         self.tabs.setTabToolTip(6, "Analyze transformer utilization.")
-        self.tabs.setTabToolTip(7, "Read analysis assumptions and data notes.")
-        self.tabs.setTabToolTip(8, "Ask the planning agent to set up, run, and analyze studies, or about any project file.")
+        self.tabs.setTabToolTip(7, "Ask the planning agent to set up, run, and analyze studies, or about any project file.")
 
         self.project_tab.project_changed.connect(self.on_project_changed)
         self.configuration_tab.project_changed.connect(self.on_project_changed)

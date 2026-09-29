@@ -133,8 +133,11 @@ class ResultsTab(QWidget):
         self.output_table.setRowCount(0)
         if not run_dir:
             return
-        rows = output_file_rows(list_output_files(run_dir))
-        populate_table(self.output_table, rows, OUTPUT_TABLE_COLUMNS)
+        outputs = list_output_files(run_dir)
+        populate_table(self.output_table, output_file_rows(outputs), OUTPUT_TABLE_COLUMNS)
+        size_column = OUTPUT_TABLE_COLUMNS.index("Size")
+        for row, output in enumerate(outputs):
+            self.output_table.item(row, size_column).setToolTip(f"{output.size_bytes:,} bytes")
         self.run_selected.emit(run_dir)
 
     def open_selected_run(self) -> None:
