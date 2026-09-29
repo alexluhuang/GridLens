@@ -13,6 +13,7 @@ import pytest
 from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_mixed_flow_directions, disclose_pending_changes, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
+from gridlens.agent import process as agent_process
 from gridlens.agent.process import mcp_command, minimal_environment
 from gridlens.agent.prompt import SYSTEM_PROMPT
 from gridlens.agent.runtime import PreparedRuntime, RuntimeStatus
@@ -363,3 +364,46 @@ def test_timeout_and_stop_reap_child_processes(agent_context, cancel):
     finally:
         if timer:
             timer.cancel()
+
+
+def test_child_environment_keeps_only_what_the_platform_needs(monkeypatch):
+    monkeypatch.setenv("GRIDLENS_TEST_SECRET", "never passed on")
+    monkeypatch.setattr(agent_process.processes, "WINDOWS", False)
+
+    environment = minimal_environment()
+
+    assert "GRIDLENS_TEST_SECRET" not in environment
+    assert set(environment) <= {
+        *agent_process.POSIX_ENVIRONMENT, "PYTHONUNBUFFERED", "NO_PROXY",
+        "no_proxy", "LD_LIBRARY_PATH"}
+
+
+def test_windows_children_get_the_variables_they_cannot_start_without(
+        monkeypatch, tmp_path):
+    needed = {"SYSTEMROOT": "C:\\Windows", "USERPROFILE": "C:\\Users\\u",
+              "APPDATA": "C:\\Users\\u\\AppData\\Roaming",
+              "LOCALAPPDATA": "C:\\Users\\u\\AppData\\Local",
+              "TEMP": "C:\\Users\\u\\AppData\\Local\\Temp"}
+    for name, value in needed.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("GRIDLENS_TEST_SECRET", "never passed on")
+    monkeypatch.setattr(agent_process.processes, "WINDOWS", True)
+
+    environment = minimal_environment()
+    server = agent_process.mcp_server_environment(tmp_path)
+
+    for name, value in needed.items():
+        assert environment[name] == value
+        assert server[name] == value
+    assert "GRIDLENS_TEST_SECRET" not in environment
+    assert "GRIDLENS_TEST_SECRET" not in server
+    assert server["GRIDLENS_AGENT_CONTEXT"] == str(tmp_path / "context.json")
+
+
+def test_posix_mcp_server_environment_names_only_the_session(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_process.processes, "WINDOWS", False)
+
+    server = agent_process.mcp_server_environment(tmp_path)
+
+    assert set(server) <= {"GRIDLENS_AGENT_CONTEXT", "PYTHONPATH"}
