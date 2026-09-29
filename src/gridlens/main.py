@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from multiprocessing import freeze_support
 import os
+from pathlib import Path
 import sys
 import traceback
 
@@ -24,8 +25,33 @@ def _run_import_diagnostics() -> int:
     return 1 if failed else 0
 
 
+# NVIDIA's GPU direct-storage library, which cuDF loads to read results, writes cufile.log into the working
+# directory of every process that reads a file, including agent job folders. Keep it in the cache instead.
+CUFILE_LOG_ENV = "CUFILE_LOGFILE_PATH"
+
+
+def _cache_dir() -> Path:
+    """Return GridLens's cache folder, under XDG_CACHE_HOME when it is set."""
+    base = os.environ.get("XDG_CACHE_HOME")
+    return (Path(base) if base else Path.home() / ".cache") / "gridlens"
+
+
+def _redirect_cufile_log() -> None:
+    """Point cuFile's log at the GridLens cache, unless the user chose a place for it."""
+    if os.environ.get(CUFILE_LOG_ENV):
+        return
+    try:
+        folder = _cache_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    os.environ[CUFILE_LOG_ENV] = str(folder / "cufile.log")
+
+
 def main() -> int:
     freeze_support()
+    # Before anything imports cuDF; job workers and the MCP server run main() too, and inherit it.
+    _redirect_cufile_log()
     if sys.argv[1:2] == ["--mcp-server"]:
         from gridlens.agent.mcp_server import main as mcp_main
 

@@ -192,7 +192,7 @@ def test_start_run_checks_docker_then_starts_a_job(workspace, monkeypatch):
     monkeypatch.setattr(gridlens_tools.docker_probe, "image_exists", lambda image: ProbeResult(image == "pnnl/gridpack:test", "checked"))
     assert tools.start_run("Study One", image="missing:image")["error"]["code"] == "IMAGE_NOT_AVAILABLE"
     started = []
-    monkeypatch.setattr(gridlens_tools.jobs, "start_job", lambda root, kind, run, request: started.append((root, kind, run, request)) or {"job_id": "20260922T000000Z_0123abcd", "state": "queued"})
+    monkeypatch.setattr(gridlens_tools.jobs, "start_job", lambda root, kind, run, request, conversation=None: started.append((root, kind, run, request)) or {"job_id": "20260922T000000Z_0123abcd", "state": "queued"})
     result = tools.start_run("Study One", mpi_processes=2, notes="agent run")
     assert result["error"] is None
     root, kind, run, request = started[0]
@@ -210,7 +210,7 @@ def test_status_of_runs_and_jobs_and_stop(agent_context, monkeypatch):
     started = tools.run_analysis("run_a", kind="transformer")["data"]
     assert "get_status" in started["next_step"]
     finished = tools.get_status(job_id=started["job_id"], wait_seconds=120)["data"]["rows"][0]
-    assert finished["state"] == "completed", finished["output_tail"]
+    assert finished["state"] == "completed", finished["log_tail"]
     assert list(finished["result"]["summaries"]) == ["transformer"]
     assert tools.get_status(run_id="run_a")["data"]["job"]["state"] == "completed"
     listed = tools.get_status()["data"]

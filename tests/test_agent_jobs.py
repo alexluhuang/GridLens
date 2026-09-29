@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -19,7 +20,7 @@ def _job(project: Path, kind: str, request: dict, pid: int | None = None) -> Pat
     folder = project / jobs.JOBS_FOLDER / "20260922T000000Z_0123abcd"
     folder.mkdir(parents=True)
     run = project / "runs/run_a"
-    (folder / "job.json").write_text(json.dumps({"job_id": folder.name, "kind": kind, "project_root": str(project), "run_id": run.name, "run_dir": str(run), "request": request, "pid": pid}))
+    (folder / "job.json").write_text(json.dumps({"job_id": folder.name, "kind": kind, "project_root": str(project), "run_id": run.name, "run_dir": str(run), "request": request, "pid": pid or 1}))
     return folder
 
 
@@ -29,12 +30,20 @@ def test_detached_analysis_job_reports_branch_and_transformer_summaries(agent_pr
     started = jobs.start_job(agent_project, "analysis", run, {"kinds": ["branch", "transformer"], "include_index": False, "rebuild": False})
     assert started["state"] in ("queued", "running", "completed")
     finished = jobs.wait_for_job(agent_project, started["job_id"], 120)
-    assert finished["state"] == "completed", finished["output_tail"]
+    assert finished["state"] == "completed", finished["log_tail"]
     summaries = finished["result"]["summaries"]
     assert (summaries["branch"]["facility_count"], summaries["branch"]["highest_max_utilization_pct"]) == (3, 120.0)
     assert summaries["transformer"]["facility_count"] == 1
     assert [job["job_id"] for job in jobs.list_jobs(agent_project)] == [started["job_id"]]
-    assert Path(finished["output_log"]).parent == agent_project / jobs.JOBS_FOLDER / started["job_id"]
+    folder = agent_project / jobs.JOBS_FOLDER / started["job_id"]
+    assert Path(finished["log"]) == folder / "job.log"
+    # One record and one readable log; no separate status file, no empty output file, no stray cuFile log.
+    assert sorted(path.name for path in folder.iterdir()) == ["job.json", "job.log"]
+    record = json.loads((folder / "job.json").read_text())
+    assert (record["state"], record["request"]["kinds"], record["pid"]) == ("completed", ["branch", "transformer"], finished["pid"])
+    log = (folder / "job.log").read_text()
+    assert "Queued analysis job" in log and "Started the analysis job" in log and "Completed: The analysis cache is ready" in log
+    assert "branch: 3 facilities; highest loading 120.0%" in log
 
 
 def test_gridpack_job_records_progress_and_outcome(agent_project, monkeypatch):
@@ -55,9 +64,11 @@ def test_gridpack_job_records_progress_and_outcome(agent_project, monkeypatch):
     import gridlens.runner.gridpack_runner as runner
     monkeypatch.setattr(runner, "run_gridpack_case", fake_run)
     assert jobs.run_job(folder) == 0
-    status = json.loads((folder / "status.json").read_text())
+    status = json.loads((folder / "job.json").read_text())
     assert (status["state"], status["result"]["return_code"]) == ("completed", 0)
     assert status["progress"]["total"] == 4
+    assert status["request"]["notes"] == "from the agent"
+    assert "Completed: GridPACK exited with code 0." in (folder / "job.log").read_text()
     assert (seen[0].image, seen[0].mpi_processes, seen[0].network_mode, seen[0].notes) == ("pnnl/gridpack:test", 4, "none", "from the agent")
 
     def broken_run(request, log_callback=None):
@@ -65,8 +76,10 @@ def test_gridpack_job_records_progress_and_outcome(agent_project, monkeypatch):
 
     monkeypatch.setattr(runner, "run_gridpack_case", broken_run)
     assert jobs.run_job(folder) == 1
-    status = json.loads((folder / "status.json").read_text())
+    status = json.loads((folder / "job.json").read_text())
     assert (status["state"], status["message"]) == ("failed", "RuntimeError: docker is not running")
+    log = (folder / "job.log").read_text()
+    assert "Failed: RuntimeError: docker is not running" in log and "Traceback" in log
 
 
 def test_lost_workers_are_reported_and_cancelling_stops_the_worker(agent_project, monkeypatch):
@@ -74,7 +87,8 @@ def test_lost_workers_are_reported_and_cancelling_stops_the_worker(agent_project
     gone = subprocess.Popen([sys.executable, "-c", "pass"])
     gone.wait()
     folder = _job(agent_project, "analysis", {"kinds": ["branch"]}, pid=gone.pid)
-    (folder / "status.json").write_text(json.dumps({"state": "running", "message": "Started."}))
+    record = json.loads((folder / "job.json").read_text())
+    (folder / "job.json").write_text(json.dumps({**record, "state": "running", "message": "Started."}))
     lost = jobs.read_job(agent_project, folder.name)
     assert lost["state"] == "failed" and "without recording a result" in lost["message"]
     monkeypatch.setattr(jobs, "gridlens_command", lambda *arguments: [sys.executable, "-c", "import time; time.sleep(60)"])
@@ -82,6 +96,28 @@ def test_lost_workers_are_reported_and_cancelling_stops_the_worker(agent_project
     cancelled = jobs.cancel_job(agent_project, started["job_id"])
     assert cancelled["state"] == "cancelled"
     assert jobs.cancel_job(agent_project, started["job_id"])["state"] == "cancelled"
+    assert "Cancelled" in (agent_project / jobs.JOBS_FOLDER / started["job_id"] / "job.log").read_text()
+
+
+def test_legacy_job_folders_are_still_read(agent_project):
+    """A job written with a separate status.json and output.log is read as before."""
+    folder = _job(agent_project, "analysis", {"kinds": ["branch"]})
+    (folder / "status.json").write_text(json.dumps({"state": "completed", "message": "Done.", "result": {"summaries": {}}}))
+    (folder / "output.log").write_text("line one\nline two\n")
+    job = jobs.read_job(agent_project, folder.name)
+    assert (job["state"], job["message"], job["request"]["kinds"]) == ("completed", "Done.", ["branch"])
+    assert (Path(job["log"]).name, job["log_tail"]) == ("output.log", ["line one", "line two"])
+    assert jobs.cancel_job(agent_project, folder.name)["state"] == "completed"
+
+
+def test_worker_waits_for_its_pid_before_writing(agent_project, monkeypatch):
+    """The worker never writes job.json before start_job records the pid, so neither write is lost."""
+    folder = _job(agent_project, "analysis", {"kinds": ["branch"]})
+    record = json.loads((folder / "job.json").read_text())
+    (folder / "job.json").write_text(json.dumps({**record, "pid": None}))
+    monkeypatch.setattr(jobs, "PID_WAIT_SECONDS", 0.2)
+    jobs._wait_for_pid(folder)
+    assert json.loads((folder / "job.json").read_text())["pid"] == os.getpid()
 
 
 @pytest.mark.parametrize("job_id,code", [("../../etc", "INVALID_JOB_ID"), ("20260922T000000Z_ffffffff", "JOB_NOT_FOUND")])

@@ -333,12 +333,12 @@ class GridLensTools(ToolBase):
         if form.pull_policy == "never" and not docker_probe.image_exists(form.image).ok:
             raise AgentError("IMAGE_NOT_AVAILABLE", f"The image {form.image} is not on this machine and the pull policy is never. Load it first, or name an installed image.")
         run_dir = project_record.create_run_folder()
-        job = jobs.start_job(root, "gridpack_run", run_dir, {"form": asdict(form), "notes": notes})
+        job = jobs.start_job(root, "gridpack_run", run_dir, {"form": asdict(form), "notes": notes}, conversation=self.context.directory)
         return {"rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "next_step": "Call get_status with this job_id and wait_seconds until the run ends."}
 
     @tool
     def get_status(self, project: str = "", run_id: str = "", job_id: str = "", wait_seconds: int = 0, offset: int = 0, limit: int = 50) -> dict:
-        """Show a background job's state, progress, result, and last output lines (job_id), or a run's status, contingency progress parsed from its GridPACK log, last log lines, and latest job (run_id). With neither, list the project's jobs newest first. wait_seconds, at most 1500, waits for the job, or for the run's job, to end."""
+        """Show a background job's state, progress, result, and the last lines of its log (job_id), or a run's status, contingency progress parsed from its GridPACK log, last log lines, and latest job (run_id). With neither, list the project's jobs newest first. wait_seconds, at most 1500, waits for the job, or for the run's job, to end."""
         root = self._project(project)
         if run_id and job_id:
             raise AgentError("ONE_TARGET", "Give job_id or run_id, not both.")
@@ -402,5 +402,5 @@ class GridLensTools(ToolBase):
         root = self._project(project)
         run = resolve_run(root, run_id)
         kinds = ["branch", "transformer"] if kind == "both" else [kind]
-        job = jobs.start_job(root, "analysis", run, {"kinds": kinds, "include_index": include_index, "rebuild": rebuild})
+        job = jobs.start_job(root, "analysis", run, {"kinds": kinds, "include_index": include_index, "rebuild": rebuild}, conversation=self.context.directory)
         return {"rows": [job], "job_id": job["job_id"], "next_step": "Call get_status with this job_id and wait_seconds until the analysis ends."}
