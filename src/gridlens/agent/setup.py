@@ -38,6 +38,10 @@ from gridlens.system import paths, processes
 HERMES_INSTALLER_POSIX = "https://hermes-agent.nousresearch.com/install.sh"
 HERMES_INSTALLER_WINDOWS = "https://hermes-agent.nousresearch.com/install.ps1"
 OLLAMA_DOWNLOADS = "https://ollama.com/download"
+# Jetson systems name their L4T release here. Ollama's GPU libraries for them
+# come in an archive for each JetPack release, unpacked over the base one.
+TEGRA_RELEASE_FILE = Path("/etc/nv_tegra_release")
+JETPACK_ARCHIVES = {"R36": "jetpack6", "R35": "jetpack5"}
 PREFERRED_MODEL = "nemotron-3.5-lightning:latest"
 # An installer that stops producing output for this long is treated as stuck.
 INSTALL_TIMEOUT_SECONDS = 30 * 60
@@ -279,7 +283,11 @@ def install_hermes(log: Log, cancelled: threading.Event) -> str:
         _run_logged(argv, log, cancelled, env=dict(os.environ), cwd=Path(folder))
     executable = hermes_executable()
     if not executable:
-        raise SetupError("The Hermes installer finished, but the hermes command was not found in ~/.local/bin.")
+        folder = (r"%LOCALAPPDATA%\hermes\bin" if processes.WINDOWS
+                  else "~/.local/bin")
+        raise SetupError(
+            "The Hermes installer finished, but the hermes command was not "
+            f"found in {folder}.")
     version = probe_version(executable, VERSION_PATTERN)
     if version != SUPPORTED_HERMES:
         raise SetupError(f"The installer set up Hermes {version}, not {SUPPORTED_HERMES}.")
@@ -295,6 +303,24 @@ def _linux_architecture() -> str:
     if machine in ("aarch64", "arm64"):
         return "arm64"
     raise SetupError(f"Ollama does not publish a build for {machine} processors.")
+
+
+def jetpack_archive(release: Path | None = None) -> str:
+    """Return the name of Ollama's JetPack archive for this Jetson, or "".
+
+    As Ollama's own installer does, the L4T release named in the release
+    file, TEGRA_RELEASE_FILE unless given, picks the archive, and a machine
+    without the file is not a Jetson.
+    """
+    path = TEGRA_RELEASE_FILE if release is None else release
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for tag, suffix in JETPACK_ARCHIVES.items():
+        if tag in text:
+            return f"ollama-linux-{_linux_architecture()}-{suffix}.tar.zst"
+    return ""
 
 
 def install_ollama(log: Log, progress: Progress, cancelled: threading.Event) -> str:
@@ -333,6 +359,16 @@ def install_ollama(log: Log, progress: Progress, cancelled: threading.Event) -> 
             staged.mkdir(parents=True)
             log(f"Unpacking Ollama into {home}")
             _run_logged(["tar", "--use-compress-program=zstd", "-xf", str(archive), "-C", str(staged)], log, cancelled)
+            jetpack = jetpack_archive()
+            if jetpack:
+                # Without these libraries Ollama runs on a Jetson's CPU only.
+                extra = Path(folder) / jetpack
+                url = f"{OLLAMA_DOWNLOADS}/{jetpack}"
+                log(f"Downloading Ollama's Jetson GPU libraries from {url}")
+                _download(url, extra, progress, cancelled)
+                unpack = ["tar", "--use-compress-program=zstd", "-xf",
+                          str(extra), "-C", str(staged)]
+                _run_logged(unpack, log, cancelled)
             shutil.rmtree(home, ignore_errors=True)
             os.replace(staged, home)
     if not target.is_file():

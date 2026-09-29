@@ -76,6 +76,29 @@ def _profile_config(session: SessionContext, command: list[str]) -> dict:
     }
 
 
+def _windows_hermes_candidates() -> list[Path]:
+    """Return where the Windows installer may have put the Hermes CLI.
+
+    It publishes hermes.exe in HERMES_HOME\\bin, which is
+    %LOCALAPPDATA%\\hermes unless HERMES_HOME says otherwise, or a
+    hermes.cmd that calls the real executable in the install's venv. The
+    real executable is preferred, so no argument passes through cmd.exe.
+    """
+    configured = os.environ.get("HERMES_HOME")
+    local = os.environ.get("LOCALAPPDATA")
+    if configured:
+        home = Path(configured)
+    elif local:
+        home = Path(local) / "hermes"
+    else:
+        return []
+    return [
+        home / "bin" / "hermes.exe",
+        home / "hermes-agent" / "venv" / "Scripts" / "hermes.exe",
+        home / "bin" / "hermes.cmd",
+    ]
+
+
 def hermes_executable() -> str:
     """Return the Hermes CLI, or "" when it is not installed.
 
@@ -87,8 +110,8 @@ def hermes_executable() -> str:
     if found:
         return found
     candidates = [Path.home() / ".local" / "bin" / "hermes"]
-    if os.environ.get("LOCALAPPDATA"):
-        candidates.append(Path(os.environ["LOCALAPPDATA"]) / "hermes" / "bin" / "hermes.exe")
+    if processes.WINDOWS:
+        candidates = _windows_hermes_candidates()
     return next((str(path) for path in candidates if path.is_file() and os.access(path, os.X_OK)), "")
 
 

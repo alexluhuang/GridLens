@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import shutil
 import subprocess
@@ -14,7 +15,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from gridlens.agent import setup
+from gridlens.agent import hermes, setup
 from gridlens.agent.hermes import SUPPORTED_HERMES, SUPPORTED_HERMES_COMMIT
 from gridlens.agent.setup import MODEL_CATALOG, PREFERRED_MODEL, SetupError, SetupStatus
 from gridlens.gui.agent_setup import AgentSetupDialog
@@ -188,3 +189,82 @@ def test_dialog_installs_checked_models_and_removes_unchecked_installed_ones(mon
     assert dialog.action_button.text() == "Install 1 model and remove 1 model"
     dialog.deleteLater()
     app.processEvents()
+
+
+@pytest.mark.parametrize(("release", "archive"), [
+    ("# R36 (release), REVISION: 4.3", "ollama-linux-arm64-jetpack6.tar.zst"),
+    ("# R35 (release), REVISION: 5.0", "ollama-linux-arm64-jetpack5.tar.zst"),
+    ("# R38 (release), REVISION: 2.0", ""),
+])
+def test_jetson_releases_pick_ollamas_jetpack_archive(
+        monkeypatch, tmp_path, release, archive):
+    path = tmp_path / "nv_tegra_release"
+    path.write_text(release)
+    monkeypatch.setattr(setup.platform, "machine", lambda: "aarch64")
+
+    assert setup.jetpack_archive(path) == archive
+
+
+def test_a_machine_without_a_tegra_release_is_not_a_jetson(tmp_path):
+    assert setup.jetpack_archive(tmp_path / "missing") == ""
+
+
+def test_windows_finds_the_hermes_executable_the_installer_published(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(hermes.processes, "WINDOWS", True)
+    monkeypatch.setattr(hermes.shutil, "which", lambda name: None)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    home = tmp_path / "hermes"
+    for relative in ("hermes-agent/venv/Scripts/hermes.exe", "bin/hermes.cmd"):
+        launcher = home / relative
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("")
+        launcher.chmod(0o755)
+
+    # The venv's real executable wins over the .cmd delegator.
+    expected = home / "hermes-agent" / "venv" / "Scripts" / "hermes.exe"
+    assert hermes.hermes_executable() == str(expected)
+
+
+def _zstd_archive(root: Path, relative: str) -> Path:
+    """Pack one file at relative, under root, into a .tar.zst archive."""
+    member = root / relative
+    member.parent.mkdir(parents=True)
+    member.write_text("#!/bin/sh\n")
+    member.chmod(0o755)
+    archive = root.with_suffix(".tar.zst")
+    top = relative.split("/", 1)[0]
+    subprocess.run(["tar", "--use-compress-program=zstd", "-cf", str(archive),
+                    "-C", str(root), top], check=True)
+    return archive
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not shutil.which("zstd"),
+                    reason="Linux Ollama archives are .tar.zst")
+def test_install_ollama_adds_the_jetpack_libraries_on_a_jetson(
+        monkeypatch, tmp_path):
+    base = _zstd_archive(tmp_path / "base", "bin/ollama")
+    gpu = _zstd_archive(tmp_path / "jetpack", "lib/ollama/libjetson.so")
+    release = tmp_path / "nv_tegra_release"
+    release.write_text("# R36 (release), REVISION: 4.3")
+    urls = []
+
+    def download(url, destination, progress, cancelled):
+        urls.append(url)
+        shutil.copy(gpu if "jetpack" in url else base, destination)
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(setup, "TEGRA_RELEASE_FILE", release)
+    monkeypatch.setattr(setup, "_download", download)
+    monkeypatch.setattr(setup.platform, "machine", lambda: "aarch64")
+
+    path = setup.install_ollama(
+        lambda _line: None, lambda *_args: None, threading.Event())
+
+    assert urls == [
+        "https://ollama.com/download/ollama-linux-arm64.tar.zst",
+        "https://ollama.com/download/ollama-linux-arm64-jetpack6.tar.zst"]
+    installed = Path(path).parents[1]
+    assert (installed / "lib" / "ollama" / "libjetson.so").is_file()
+
