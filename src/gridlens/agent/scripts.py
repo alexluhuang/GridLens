@@ -16,7 +16,6 @@ import hashlib
 import os
 from pathlib import Path
 import re
-import selectors
 import shutil
 import subprocess
 import threading
@@ -63,22 +62,22 @@ def _stream_bounded_output(process, output: bytearray, cancelled, deadline: floa
     The cap is enforced on the way in rather than afterward, so a runaway script cannot fill memory before
     anyone notices it exceeded the limit.
     """
-    with selectors.DefaultSelector() as selector:
-        selector.register(process.stdout, selectors.EVENT_READ)
-        while selector.get_map():
+    streams = {"stdout": process.stdout}
+    with processes.OutputReader(streams, READ_CHUNK_BYTES) as reader:
+        while reader.open:
             if cancelled.is_set():
                 raise AgentError("CANCELLED", "Script execution cancelled.")
             if time.monotonic() >= deadline:
                 raise AgentError("TIMEOUT", "The script exceeded its wall-clock limit.")
-            for key, _ in selector.select(POLL_SECONDS):
-                chunk = os.read(key.fileobj.fileno(), READ_CHUNK_BYTES)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    continue
-                remaining = MAX_OUTPUT_BYTES - len(output)
-                output.extend(chunk[:remaining])
-                if len(chunk) > remaining:
-                    raise AgentError("OUTPUT_LIMIT", "The script exceeded its output limit.")
+            item = reader.read(POLL_SECONDS)
+            if item is None or not item[1]:
+                continue
+            chunk = item[1]
+            remaining = MAX_OUTPUT_BYTES - len(output)
+            output.extend(chunk[:remaining])
+            if len(chunk) > remaining:
+                raise AgentError(
+                    "OUTPUT_LIMIT", "The script exceeded its output limit.")
 
 
 def _remove_container(executable: str, name: str, environment: dict) -> bool:

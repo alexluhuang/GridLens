@@ -12,8 +12,11 @@ asks it not to.
 from __future__ import annotations
 
 import os
+import queue
 import signal
 import subprocess
+import threading
+from typing import BinaryIO
 
 import psutil
 
@@ -22,6 +25,79 @@ WINDOWS = os.name == "nt"
 # reports Linux start times in clock ticks, a hundredth of a second.
 _START_TIME_TOLERANCE_SECONDS = 1.0
 _EXIT_WAIT_SECONDS = 2.0
+# OutputReader holds at most this many unread chunks, so a child that writes
+# faster than its reader keeps up waits, as it would on a full pipe.
+_QUEUED_CHUNKS = 64
+_PUT_POLL_SECONDS = 0.1
+
+
+class OutputReader:
+    """Read a child's output pipes on background threads.
+
+    select() on Windows accepts only sockets, so pipes there cannot be
+    watched the way POSIX watches them. Instead a thread per pipe reads it
+    into one queue, on every platform, and `read` returns the next chunk
+    with the name of its pipe. Use it as a context manager, so its threads
+    stop reading once the caller stops.
+    """
+
+    def __init__(self, streams: dict[str, BinaryIO], chunk_bytes: int) -> None:
+        self._chunks: queue.Queue = queue.Queue(maxsize=_QUEUED_CHUNKS)
+        self._closed = threading.Event()
+        self._open = set(streams)
+        for name, stream in streams.items():
+            thread = threading.Thread(
+                target=self._pump, args=(name, stream.fileno(), chunk_bytes),
+                name=f"gridlens-output-{name}", daemon=True)
+            thread.start()
+
+    @property
+    def open(self) -> bool:
+        """Return True while any pipe has not reached its end."""
+        return bool(self._open)
+
+    def read(self, timeout: float) -> tuple[str, bytes] | None:
+        """Return the next (pipe name, chunk), or None after timeout seconds.
+
+        An empty chunk means that its pipe has reached its end.
+        """
+        try:
+            name, chunk = self._chunks.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if not chunk:
+            self._open.discard(name)
+        return name, chunk
+
+    def close(self) -> None:
+        """Stop queueing output; a thread blocked on its pipe ends with it."""
+        self._closed.set()
+
+    def __enter__(self) -> OutputReader:
+        return self
+
+    def __exit__(self, *exception: object) -> None:
+        self.close()
+
+    def _pump(self, name: str, descriptor: int, chunk_bytes: int) -> None:
+        """Queue a pipe's chunks until its end, then an empty chunk."""
+        while True:
+            try:
+                chunk = os.read(descriptor, chunk_bytes)
+            except OSError:
+                chunk = b""
+            if not self._put((name, chunk)) or not chunk:
+                return
+
+    def _put(self, item: tuple[str, bytes]) -> bool:
+        """Queue item, waiting while the queue is full; False once closed."""
+        while not self._closed.is_set():
+            try:
+                self._chunks.put(item, timeout=_PUT_POLL_SECONDS)
+            except queue.Full:
+                continue
+            return True
+        return False
 
 
 def no_window_options() -> dict:

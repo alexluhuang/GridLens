@@ -2,9 +2,9 @@
 
 The controller owns the transcript. A runtime may keep its own session and resume it, but that copy is
 never the only one: an adapter that cannot resume safely gets a bounded replay of this record instead.
-The loop reads the child process through a selector under a wall-clock deadline and byte caps, normalizes
-every line through the adapter, audits it, and terminates the whole process group on stop, timeout, or
-error.
+The loop reads the child process on reader threads, under a wall-clock
+deadline and byte caps, normalizes every line through the adapter, audits it,
+and terminates the child's whole process tree on stop, timeout, or error.
 
 `normalize_citations` is the other half of the trust story. An answer may cite only call IDs that appear
 in the audit, and anything else is rewritten so the reader can see it was invented.
@@ -13,10 +13,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import json
-import os
 from pathlib import Path
 import re
-import selectors
 import threading
 import time
 from typing import Callable
@@ -27,7 +25,7 @@ from gridlens.agent.prompt import session_facts, turn_prompt
 from gridlens.agent.runtime import RuntimeAdapter, RuntimeEvent
 from gridlens.agent.session import SessionContext, append_event, scoped_path, write_json
 from gridlens.agent.tools import ToolService
-from gridlens.system import files
+from gridlens.system import files, processes
 
 
 MAX_PROMPT_CHARS = 12_000
@@ -114,36 +112,39 @@ class AgentController:
         total = 0
         final = None
         spoken: list[str] = []
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-            selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-            while selector.get_map():
+        streams = {"stdout": process.stdout, "stderr": process.stderr}
+        with processes.OutputReader(streams, READ_CHUNK_BYTES) as reader:
+            while reader.open:
                 if self.cancelled.is_set():
                     raise AgentError("CANCELLED", "Turn stopped.")
                 if time.monotonic() >= deadline:
                     raise AgentError("TIMEOUT", "The local model exceeded the turn time limit. Try a smaller question or another model.")
-                for key, _ in selector.select(timeout=POLL_SECONDS):
-                    chunk = os.read(key.fileobj.fileno(), READ_CHUNK_BYTES)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
+                item = reader.read(POLL_SECONDS)
+                if item is None or not item[1]:
+                    continue
+                channel, chunk = item
+                total += len(chunk)
+                if total > MAX_TURN_BYTES:
+                    raise AgentError(
+                        "OUTPUT_LIMIT",
+                        "The runtime exceeded the output limit; "
+                        "start a new session.")
+                if channel == "stderr":
+                    tail = buffers[channel] + chunk
+                    buffers[channel] = tail[-STDERR_TAIL_BYTES:]
+                    continue
+                buffers[channel] += chunk
+                if len(buffers[channel]) > MAX_EVENT_BYTES:
+                    raise AgentError(
+                        "OUTPUT_LIMIT",
+                        "A runtime event exceeded the size limit.")
+                while b"\n" in buffers[channel]:
+                    line, buffers[channel] = buffers[channel].split(b"\n", 1)
+                    if not line.strip():
                         continue
-                    total += len(chunk)
-                    if total > MAX_TURN_BYTES:
-                        raise AgentError("OUTPUT_LIMIT", "The runtime exceeded the output limit; start a new session.")
-                    channel = key.data
-                    if channel == "stderr":
-                        buffers[channel] = (buffers[channel] + chunk)[-STDERR_TAIL_BYTES:]
-                        continue
-                    buffers[channel] += chunk
-                    if len(buffers[channel]) > MAX_EVENT_BYTES:
-                        raise AgentError("OUTPUT_LIMIT", "A runtime event exceeded the size limit.")
-                    while b"\n" in buffers[channel]:
-                        line, buffers[channel] = buffers[channel].split(b"\n", 1)
-                        if not line.strip():
-                            continue
-                        answer = self._handle_line(line, emit, spoken)
-                        if answer is not None:
-                            final = answer
+                    answer = self._handle_line(line, emit, spoken)
+                    if answer is not None:
+                        final = answer
             return final, process.wait(timeout=EXIT_WAIT_SECONDS)
 
     def _handle_line(self, line: bytes, emit: Callable[[RuntimeEvent], None], spoken: list[str]) -> str | None:

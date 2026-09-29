@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 import types
 
@@ -122,3 +123,50 @@ def test_windows_children_open_no_console_window() -> None:
 def test_posix_children_start_a_new_session() -> None:
     assert processes.new_group_options() == {"start_new_session": True}
     assert processes.no_window_options() == {}
+
+
+def _read_all(reader: processes.OutputReader) -> dict[str, bytes]:
+    received = {"stdout": b"", "stderr": b""}
+    deadline = time.monotonic() + 30
+    while reader.open and time.monotonic() < deadline:
+        item = reader.read(0.1)
+        if item is not None:
+            received[item[0]] += item[1]
+    return received
+
+
+def test_output_reader_reads_every_pipe_to_its_end() -> None:
+    script = ("import sys; sys.stdout.write('out' * 50000); "
+              "sys.stderr.write('err' * 50000)")
+    child = subprocess.Popen([sys.executable, "-c", script],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    streams = {"stdout": child.stdout, "stderr": child.stderr}
+
+    with processes.OutputReader(streams, 4096) as reader:
+        received = _read_all(reader)
+
+    child.wait(timeout=10)
+    assert received == {"stdout": b"out" * 50000, "stderr": b"err" * 50000}
+
+
+def _output_threads() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate()
+            if thread.name.startswith("gridlens-output-")]
+
+
+def test_output_reader_holds_a_bounded_backlog_and_stops_on_close() -> None:
+    script = "import sys; sys.stdout.write('x' * 5_000_000)"
+    child = subprocess.Popen([sys.executable, "-c", script],
+                             stdout=subprocess.PIPE)
+    reader = processes.OutputReader({"stdout": child.stdout}, 1024)
+    time.sleep(0.5)
+
+    assert reader._chunks.qsize() <= processes._QUEUED_CHUNKS
+    reader.close()
+    child.kill()
+    child.wait(timeout=10)
+    for _ in range(100):
+        if not _output_threads():
+            break
+        time.sleep(0.05)
+    assert not _output_threads()
