@@ -545,3 +545,59 @@ def test_single_gpu_reads_fit_the_memory_the_gpu_can_use(
 
     assert csv_flat._auto_backend_order(csv_path) == expected
 
+
+def _tied_worst_rows(events: tuple[int, ...]) -> list[dict[str, object]]:
+    """Rows of one branch that every event but the base case loads to 90%.
+
+    Event 4 loads it in the reverse direction, so its absolute loading ties.
+    """
+    rows = []
+    for event in events:
+        loading = 50.0 if event == 0 else -90.0 if event == 4 else 90.0
+        rows.append({
+            "from_bus": 1, "to_bus": 2, "line_id": "1", "section": "",
+            "event_idx": event, "contingency": f"event {event}",
+            "loading_percent": loading,
+        })
+    return rows
+
+
+TIE_ORDERS = [(3, 1, 4, 0), (4, 3, 1, 0), (0, 1, 3, 4)]
+BRANCH_KEYS = ["from_bus", "to_bus", "line_id", "section"]
+
+
+@pytest.mark.parametrize("events", TIE_ORDERS)
+def test_streaming_parser_names_the_lowest_tied_worst_event(events) -> None:
+    aggregate = csv_flat._BranchAggregate(1, 2, "1", "", row_index=1)
+    for row in _tied_worst_rows(events):
+        aggregate.update(row)
+
+    worst = (aggregate.max_abs_event_idx, aggregate.max_abs_contingency)
+    assert worst == (1, "event 1")
+
+
+@pytest.mark.parametrize("events", TIE_ORDERS)
+@pytest.mark.parametrize("backend", ["pandas", "dask", "cudf"])
+def test_frame_reductions_name_the_lowest_tied_worst_event(
+        events, backend) -> None:
+    pd = pytest.importorskip("pandas")
+    data = pd.DataFrame(_tied_worst_rows(events))
+    data["event_idx"] = data["event_idx"].astype("float64")
+    data["abs_loading"] = data["loading_percent"].abs()
+    if backend == "dask":
+        dd = pytest.importorskip("dask.dataframe")
+        data = dd.from_pandas(data, npartitions=2)
+    elif backend == "cudf":
+        cudf = pytest.importorskip("cudf")
+        if not gpu.cuda_device_available():
+            pytest.skip("cuDF is installed, but no CUDA device is usable")
+        data = cudf.from_pandas(data)
+
+    labels = csv_flat._lazy_extreme_label_frame(data, BRANCH_KEYS)
+    if backend == "dask":
+        labels = labels.compute()
+    elif backend == "cudf":
+        labels = labels.to_pandas()
+
+    label = labels.reset_index().iloc[0]
+    assert (label["event_idx"], label["contingency"]) == (1.0, "event 1")

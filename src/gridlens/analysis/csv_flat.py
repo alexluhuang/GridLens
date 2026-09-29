@@ -206,13 +206,27 @@ class _BranchAggregate:
             self.max_event_idx = row.get("event_idx", "")
 
         abs_loading = abs(loading)
-        if self.max_abs_loading is None or abs_loading > self.max_abs_loading:
+        if self._is_new_worst(abs_loading, row.get("event_idx")):
             self.max_abs_loading = abs_loading
             self.max_abs_event_idx = row.get("event_idx", "")
             self.max_abs_contingency = str(row.get("contingency") or "")
 
         if self.rate_mva is None:
             self.rate_mva = _float_value(row.get("rate_mva"))
+
+    def _is_new_worst(self, abs_loading: float, event_idx: object) -> bool:
+        """Return True when a row's loading replaces the worst one so far.
+
+        Several events can share the highest loading. The lowest-numbered
+        one is kept, as the frame reductions keep it, so every backend
+        names the same worst contingency.
+        """
+        if self.max_abs_loading is None or abs_loading > self.max_abs_loading:
+            return True
+        if abs_loading < self.max_abs_loading:
+            return False
+        current = _event_order(self.max_abs_event_idx)
+        return _event_order(event_idx) < current
 
     @property
     def mean_loading(self) -> float | None:
@@ -650,7 +664,14 @@ def _lazy_extreme_label_frame(data, keys: list[str]):
     )
     candidates = data.merge(max_values, on=keys, how="inner")
     candidates = candidates[candidates["abs_loading"] == candidates["max_abs_loading"]]
-    return candidates.groupby(keys).agg({"event_idx": "first", "contingency": "first"})
+    # Several events can share the highest loading, and row order after a
+    # merge differs between pandas, cuDF, and Dask. Name the lowest-numbered
+    # event, so every backend reports the same worst contingency.
+    first_events = candidates.groupby(keys)["event_idx"].min().reset_index()
+    first = candidates.merge(first_events, on=[*keys, "event_idx"])
+    return first.groupby(keys).agg(
+        {"event_idx": "first", "contingency": "first"}
+    )
 
 
 def _compute_lazy_frames(*frames, runtime: _DaskRuntime):
@@ -1540,6 +1561,16 @@ def _column(lookup: dict[str, str], aliases: Iterable[str]) -> str:
 
 def _column_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _event_order(value: object) -> float:
+    """Return an event index for ordering tied events.
+
+    A missing index sorts first, because the frame reductions fill it
+    with -1.
+    """
+    parsed = _float_value(value)
+    return -1.0 if parsed is None else parsed
 
 
 def _event_value(value: object) -> object:
