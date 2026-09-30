@@ -417,3 +417,71 @@ Sizes are rough: S is at most a day, M a few days, L one to two weeks.
    endpoint on Windows (§5.2).
 6. **M.** CI on the three platforms, the test changes, and the documentation (§8). Then the checks in §9 on a
    Windows 11 x64 PC.
+
+## 11. Status (2026-09-29)
+
+Every item in §3 to §8 is implemented on branch `cross-platform-support`:
+
+| Plan | Commit | Change |
+|---|---|---|
+| §3.1–3.4 | `dba2c78` | Python 3.11 floor; `analysis-cpu`, `analysis`, and `analysis-cu12` extras with RAPIDS marked Linux-only; psutil |
+| §4.1, §4.2, §4.3, §8 | `cd0c2b5` | The GPU check, the backend sized to the GPU's memory, `get_pandas`, and the RAPIDS-dependent test |
+| §4.6 | `840c0f0` | The lowest-numbered tied event on every backend |
+| §5.3.4 | `c9be466` | `gridlens.system.paths` |
+| §5.1.1, §5.1.2, §5.3.3 | `b51d589` | `gridlens.system.files`: private files, `FileLock`, `replace` |
+| §5.1.4, §5.1.5, §5.3.1 | `42c47e9` | `gridlens.system.processes`: groups, trees, liveness, detached workers |
+| §5.1.6 | `a971cd5` | `cancel.request` |
+| §5.1.7 | `ed919c4` | The per-platform child environment |
+| §5.1.3 | `a7ca21b` | `OutputReader` |
+| §5.3.2 | `cec99f9` | UTF-8 decoding and no console windows for Docker |
+| §5.3.5 | `931752a` | The Linux-containers check and `--mount` |
+| §4.7, §5.2 | `f40b52e` | The sandbox's resolved local endpoint and Windows user |
+| §5.3.6 | `c383f2f` | Reserved names and case-only collisions |
+| §4.8, §5.3.8 | `0b17bbe`, `eb8011b` | The Hermes launcher, Ollama's JetPack archive, and Claude Code's prompt file and install command |
+| §7.1–7.3 | `f465040` | The Windows spec branches, `gridlens-cli.exe`, the icon, the version resource, and the installer |
+| §4.4 | `40536cf` | The `.deb`'s glibc dependency |
+| §8 | `2ca650c`, `d892faf` | Portable tests, developer scripts, and CI |
+| §4.4, §4.5, §4.9, §4.10, §6, §7.4, §8 | `4830b4a`, `594fc4e` | The platform matrix, the install guides, and the reference docs |
+
+Where the implementation departs from the plan:
+
+- §3.3: RAPIDS is pinned to 26.6, and numpy, pandas, pyarrow, and Dask to the versions it installs, instead
+  of keeping a lock file for each platform. RAPIDS 26.8 moved to pandas 3, so the pins also keep a fresh
+  install on the DGX Spark at the release it was tested with. A dry-run resolution for Linux ARM64, Linux
+  x86_64, and Windows x64 gives the same numpy, pandas, pyarrow, and Dask on all three.
+- §3.4: `FileLock` and `paths` are small modules of GridLens's own rather than `filelock` and
+  `platformdirs`. Their Linux paths and lock semantics are the ones GridLens already used, and the lock file
+  is opened without following a symlink. psutil is a dependency, as planned.
+- §4.5: there is one package for each platform, not a CPU package and a GPU package. An NVIDIA GPU is a
+  prerequisite for GridLens, and the GPU check covers a machine whose GPU or driver cannot run the bundled
+  RAPIDS.
+- §5.1.4: the process tree is stopped through psutil, not a Job Object. Job workers ask to leave their
+  parent's job with `CREATE_BREAKAWAY_FROM_JOB` and start without it where the job forbids it.
+- §5.3.2: the frozen app does not run in UTF-8 mode; every subprocess call that decodes text names UTF-8.
+- §5.3.7: PyInstaller's manifest already marks the executables long-path aware, so only the machine policy
+  remains, and the Windows install guide describes it.
+
+Two problems that the review missed were fixed on the way:
+
+- `os.open` on Windows returns a text-mode descriptor, which would have rewritten the line endings of every
+  session file and made each saved script proposal fail its SHA-256 check. `files.open_private` opens in
+  binary mode and writes the line endings it is given.
+- The CPU fallback warning said that RAPIDS was missing even when only the GPU was.
+
+Checked on the DGX Spark (GB10, driver 580, Ubuntu 24.04, ARM64):
+
+- The suite passes, with and without a simulated GPU, in the GPU environment and in a CPU-only environment
+  resolved as for Windows, as does the sandbox isolation test against `gridlens-analysis-sandbox:20260924`.
+  The older `gridlens-analysis:0.1.0` image fails that test with the `libxml2` error that
+  `packaging/agent/README.md` describes, before and after these changes, and needs rebuilding.
+- On the Memphis run, cuDF, CPU Dask, and the streaming parser agree on every field of all 974 branches and
+  407 transformers.
+- The new spec builds a Linux bundle with the same 6,372 files as the old one. Its import diagnostics pass,
+  and the MCP tests pass against its MCP server.
+- The endpoint the sandbox resolves is the socket it used before, and Docker mounts a `--mount` folder
+  whose name holds a comma and a quote.
+
+Not yet checked, because they need Windows: the whole of §9, the first run of the CI workflow, a Windows
+bundle and installer build, and the Windows code paths the tests reach only by switching the platform flag
+on Linux (the child environment, `kill_tree`, cancellation, the Hermes launcher search, and the sandbox
+user). `msvcrt` locking and the retries in `files.replace` have no Linux equivalent to test against.
