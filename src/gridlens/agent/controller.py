@@ -39,8 +39,6 @@ STDERR_TAIL_BYTES = 8192
 MAX_EVENT_BYTES = 128 * 1024
 POLL_SECONDS = 0.1
 EXIT_WAIT_SECONDS = 2
-# Questions whose answer could be mistaken for spare capacity: margins, headroom, extra MW, or transfer limits.
-CAPACITY_QUESTION = re.compile(r"\b(?:margin|capacity|headroom|carry|ttc|fcitc|atc)\b|\bmore\s+mw\b|\btransfer\s+(?:capability|limit)", re.IGNORECASE)
 
 
 class AgentController:
@@ -207,7 +205,6 @@ class AgentController:
             final = cite_uncited_turn(final, sources[prior_calls:])
             final = disclose_truncated_results(final, sources[prior_calls:])
             final = disclose_tool_failures(final, sources[prior_calls:])
-            final = qualify_capacity_answer(final, prompt)
             final = disclose_generated_output(final, sources[prior_calls:])
             final = disclose_pending_changes(final, sources[prior_calls:])
             final = disclose_mixed_flow_directions(final, sources[prior_calls:])
@@ -570,10 +567,3 @@ def disclose_generated_output(answer: str, turn_sources: list[dict]) -> str:
     if not read:
         return answer
     return answer.rstrip() + "\n\nGridLens note: This answer uses results computed by a custom script you approved. GridLens has not checked them, so treat them as unverified until they are checked."
-
-
-def qualify_capacity_answer(answer: str, question: str) -> str:
-    """Return an answer that qualifies thermal margin for capacity, headroom, and transfer questions in run_turn."""
-    if not CAPACITY_QUESTION.search(question):
-        return answer
-    return answer.rstrip() + "\n\nGridLens note: How far a line stays below its rating does not show how much more load, generation, or transfer the line or the system can carry. That takes a separate power-flow or transfer study."

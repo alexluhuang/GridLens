@@ -475,8 +475,8 @@ text output it is derived from MW flows and the RAW branch rating (Rate C). Faci
     reads its stdout and stderr under a deadline (3,600 s by default) and a 16 MiB byte cap, turns each line
     into a `RuntimeEvent`, and audits it. It then post-processes the answer: `normalize_citations` marks
     invented call IDs, and helpers add disclosures for truncated results, failed tools, pending changes,
-    generated-script output, and capacity-style questions, or replace an unsupported answer with a
-    deterministic one (`verified_group_mean_answer`, `verified_top_line_areas`).
+    generated-script output, and totals of flows measured in different directions, or replace an
+    unsupported answer with a deterministic one (`verified_group_mean_answer`, `verified_top_line_areas`).
   - `runtime.py`: the contract: `RuntimeStatus`, `RuntimeEvent`, `PreparedRuntime`, `RuntimeAdapter`.
   - `providers.py`: the registry of `ProviderDescriptor`s: `hermes` (local, the default), `claude`
     (remote), `codex` (remote).
@@ -924,8 +924,8 @@ Known exposures that the design accepts or leaves to operators:
 - **Pinned vendor CLIs.** Each adapter accepts one exact CLI version. Any upgrade of Hermes, Claude Code, or
   Codex disables the runtime until the adapter is revalidated and its constant changed.
 - **Heuristic answer checks.** Several controller checks recognize questions by English regular
-  expressions (`group_mean_request`, `top_line_area_request`, `CAPACITY_QUESTION`), so a differently worded
-  question gets none of them.
+  expressions (`group_mean_request`, `top_line_area_request`), so a differently worded question gets none
+  of them.
 - **Unreachable code paths.** `analysis/master.py` and `analysis/distributions.py` have no caller in the GUI
   or the agent. As a result, nothing in the application writes `reports/analysis_manifest.json`,
   `reports/tables/`, or `reports/parquet/`, yet the chart path and the agent tools still look for them

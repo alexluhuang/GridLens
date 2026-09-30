@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_mixed_flow_directions, disclose_pending_changes, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
+from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_mixed_flow_directions, disclose_pending_changes, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError, local_endpoint, verify_model
 from gridlens.agent.process import mcp_command, minimal_environment
@@ -151,7 +151,6 @@ def test_uncited_model_answer_reports_only_current_successful_sources():
     outages = {"truncated": True, "returned": 100, "total_matching": 1061, "next_offset": 100}
     assert "shows 100 of 1,061 outages; ask for the next page" in disclose_truncated_results("5", [{"call_id": "T5", "tool": "topology", "arguments": {"query": "islanding_outages"}, "result": {"data": outages}}])
     assert "prepare the run for analysis" in disclose_tool_failures("No lines", [{"call_id": "T2", "result": {"error": {"code": "ANALYSIS_NOT_BUILT"}}}])
-    assert qualify_capacity_answer("20 percentage points", "How much extra capacity?").endswith("takes a separate power-flow or transfer study.")
 
 
 def test_answers_that_total_signed_branch_flows_are_flagged():

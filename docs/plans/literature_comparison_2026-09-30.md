@@ -21,7 +21,7 @@ ability to create projects and start runs.
 The AgentiGrid comparison uses the supplied PDF of arXiv:2609.04544v1, dated 2026-09-03, especially
 Sections II to IV and Table III. The working tree also contains new `topology` and `start_sensitivity_run`
 tools, inspected for this addition. They are distinguished below from the `6c39141` baseline described in
-Section 0; their presence does not establish evaluation results for those capabilities.
+Section 0; the status section records subsequent additions, which need separate research evaluation.
 
 ## Status of the recommendations
 
@@ -532,11 +532,9 @@ The search covered IEEE, Elsevier, ACM, Nature-family, and NeurIPS/ICLR/ACL venu
 September 2026. Each entry below was checked against its abstract or DOI record; those marked *(partial)*
 were checked for metadata only. Many are 2026 preprints without peer review.
 
-### 4.1 The closest analogs
-
 **Mylonas, Foti, and Varvarigos, "A Governance-Aware Large Language Model Orchestrated Agentic Digital Twin
 for Transmission System Operator Control Room Decision Support," arXiv:2609.22476, Sep. 2026.** This is the
-work closest to GridLens. The LLM may only select and fill in whitelisted tools. A side-effect action returns a
+closest governance comparison to GridLens. The LLM may only select and fill in whitelisted tools. A side-effect action returns a
 single-use approval token bound to the user, the session, the tool, and its validated arguments; the operator
 approves through a separate endpoint, not the chat, and approval and execution are logged separately. Backend
 results reach the model as typed facts (`F1`, `F2`, ...) that bind a value to its variable, unit, and time; the
@@ -790,10 +788,11 @@ preliminary searches and successful JSON parsing do not set a sufficient standar
   There is no reported experiment on pause, goal replacement, restart, or resumed reporting. AgentiGrid
   supplies steering and goal-aware reporting within its active search; GridLens must measure what its
   durability adds and whether the objective and approval state survive.
-- **No reported cost-quality tradeoff.** The evaluation records per-question seconds and sessions record
-  usage, but there is no matched time/token/memory comparison with summary-only or scripted workflows.
-  AgentiGrid reports tokens and wall time and identifies inference as its PFLOW bottleneck. GridLens needs
-  its own breakdown because large contingency studies may instead be dominated by the solver or analysis.
+- **No matched cost-quality comparison.** The new turn accounting separates time in tools from the remaining
+  model/runtime time and exposes token counts (see the status section). It does not supply a controlled
+  time/token/memory comparison with summary-only or scripted workflows, or a complete breakdown of solver,
+  cache construction, queries, and inference for a new study. AgentiGrid reports tokens and wall time and
+  identifies inference as its PFLOW bottleneck; GridLens needs to measure where a full study spends its time.
 
 ## References
 
