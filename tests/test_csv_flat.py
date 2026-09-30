@@ -511,7 +511,9 @@ def test_cpu_dask_fallback_warning_appears_when_no_gpu_is_usable(
     monkeypatch.setitem(sys.modules, "cudf", types.SimpleNamespace())
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "auto")
 
-    assert "CPU Dask" in csv_flat.cpu_dask_fallback_warning(run_dir)
+    warning = csv_flat.cpu_dask_fallback_warning(run_dir)
+    assert "CPU Dask" in warning
+    assert "RAPIDS is installed, but there is no usable NVIDIA GPU" in warning
 
 
 PARTITIONED = ("dask_cudf", "dask")

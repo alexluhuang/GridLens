@@ -307,10 +307,19 @@ def cpu_dask_fallback_warning(run_dir: str | Path) -> str:
     largest = _largest_existing_path(csv_files) or flat_path
     size = _format_file_size(largest.stat().st_size)
     return (
-        "RAPIDS cuDF and dask-cuDF are not available in this Python environment, so GridLens "
-        f"will use CPU Dask for CSV-flat graph analysis. Largest CSV detected: {largest.name} ({size}). "
-        "GPU acceleration will not be used for this analysis run."
+        f"{_gpu_unavailable_reason()}, so GridLens will use CPU Dask for "
+        f"CSV-flat graph analysis. Largest CSV detected: {largest.name} "
+        f"({size}). GPU acceleration will not be used for this analysis run."
     )
+
+
+def _gpu_unavailable_reason() -> str:
+    """Say why the GPU backends cannot run: RAPIDS is missing, or the GPU."""
+    installed = _backend_importable("cudf") or _backend_importable("dask_cudf")
+    if not installed:
+        return ("RAPIDS cuDF and dask-cuDF are not available in this Python "
+                "environment")
+    return f"RAPIDS is installed, but there is {NO_GPU_REASON}"
 
 
 def merge_csv_flat_branch_metadata(raw_table: ParsedTable, csv_flat_table: ParsedTable | None) -> ParsedTable:
