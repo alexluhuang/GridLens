@@ -7,11 +7,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
-import resource
 import time
 
+import psutil
+
 from gridlens.analysis.event_index import build_event_index, case_key, scan_cases
+
+
+def _peak_rss_bytes() -> int:
+    """Return this process's peak resident memory, in bytes."""
+    if os.name == "nt":
+        return psutil.Process().memory_info().peak_wset
+    import resource
+
+    # Linux reports ru_maxrss in kilobytes.
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
 def main() -> None:
@@ -42,7 +54,7 @@ def main() -> None:
         started = time.monotonic()
         _, total, _ = scan_cases(args.run, metric="loading_percent", limit=50, keys={case_key(*key)}, index_dir=args.output)
         record.update(branch_query_seconds=round(time.monotonic() - started, 4), branch_matching_rows=total)
-    record["peak_host_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+    record["peak_host_rss_bytes"] = _peak_rss_bytes()
     record["cache_note"] = "First/warm reads; OS cache was not forcibly flushed. Zero GPU memory because this conversion uses CPU PyArrow."
     # No project name, absolute path, bus ID, or loading value in the shareable measurements.
     for key in ("generation", "source", "source_mtime_ns"):
