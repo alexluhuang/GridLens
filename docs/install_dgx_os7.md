@@ -80,8 +80,8 @@ For development and packaging builds, see [Packaging and distribution](packaging
 ## Other Linux machines
 
 GridLens runs on any ARM64 or x86_64 Linux machine with an NVIDIA GPU, Docker, and a GridPACK image for its
-architecture. `pnnl/gridpack:latest`, `v3.7.0`, `ca-scalability-v3`, and `ca-scalability-v4` are published
-for both `linux/amd64` and `linux/arm64`.
+architecture. `pnnl/gridpack:latest` and `v3.7.0`, which write the CSV flat output the analyses read, are
+published for both `linux/amd64` and `linux/arm64`, as are `ca-scalability-v3` and `ca-scalability-v4`.
 
 The package needs Ubuntu 24.04 or later, or another distribution with glibc 2.39 or later, because its
 Python and PySide6 are built there; `apt` refuses it on an older system. Build a package for each

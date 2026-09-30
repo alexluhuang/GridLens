@@ -47,6 +47,14 @@ sudo systemctl restart docker
 ls -l /var/run/docker.sock
 ```
 
+## Docker on Windows
+
+If the Run tab's Docker check says the engine is not reachable, start Docker Desktop and check again. Docker
+on Windows is an application, not a service, so it is not running until someone starts it.
+
+If the check says Docker runs Windows containers, open Docker Desktop's tray menu and choose **Switch to
+Linux containers**. GridPACK images are Linux images.
+
 ## Image not available
 
 The app defaults to `--pull=never`, so a run fails when the image is missing.
@@ -77,8 +85,8 @@ sudo chown -R "$USER:$USER" ~/GridLensProjects
 Confirm the manual command works first:
 
 ```bash
-docker run --rm -v "$PWD:/app/workspace" -w /app/workspace pnnl/gridpack:latest \
-  mpirun -n 4 ca.x input.xml
+docker run --rm --mount "type=bind,source=$PWD,target=/app/workspace" -w /app/workspace \
+  pnnl/gridpack:latest mpirun -n 4 ca.x input.xml
 ```
 
 Then compare it with the command recorded in `manifest.json` and `logs/run.log`.
@@ -164,3 +172,26 @@ See [CEII security notes](security_ceii.md).
 The GPU file reader used by the analysis writes a diagnostic log. GridLens sends it to
 `~/.cache/gridlens/cufile.log`, or under `$XDG_CACHE_HOME`, so it no longer appears beside run or job files.
 Set `CUFILE_LOGFILE_PATH` to put it somewhere else.
+
+## The analysis uses CPU Dask on a machine with an NVIDIA GPU
+
+GridLens uses the GPU only when the CUDA runtime reports a usable device. The warning before the analysis
+names the reason: RAPIDS is not installed, or RAPIDS is installed but there is no usable NVIDIA GPU. For the
+second, check that:
+
+- `nvidia-smi` lists the GPU. Inside a container or WSL2, the GPU has to be passed through.
+- The driver is version 580 or later, which the CUDA 13 build of RAPIDS needs. With an older driver,
+  install from source with the `analysis-cu12` extra; see the [DGX OS 7 install guide](install_dgx_os7.md).
+- `CUDA_VISIBLE_DEVICES` is not set to an empty value.
+
+On native Windows the analysis always runs on CPU Dask, because RAPIDS has no Windows build. For GPU
+analysis there, use WSL2; see the [Windows install guide](install_windows.md).
+
+## A project folder is refused on Windows
+
+Windows reserves `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, and `LPT1` to `LPT9` as device names, so no
+folder can have one of them. GridLens suggests `CON_Project` for a project named `CON`.
+
+Windows also does not tell folder names apart by case, so `test` and `Test` are one folder. GridLens refuses
+a new project whose folder differs from an existing one only in case, because saving it would change the
+existing project. Choose another name.

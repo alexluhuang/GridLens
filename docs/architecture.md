@@ -62,9 +62,9 @@ inside the container. This app follows that model and adds security and reproduc
 - `--network none`
 - `--pull=never`
 - `--platform linux/amd64` or `linux/arm64`
-- `-u uid:gid`
-- `-e HOME=/tmp`
-- `-v run/work:/app/workspace`
+- `-u uid:gid` and `-e HOME=/tmp`, on Linux; Windows has no user IDs to pass
+- `--mount type=bind,source=run/work,target=/app/workspace`, which cannot mistake a Windows drive letter
+  for the end of the host path
 - `-w /app/workspace`
 
 GridLens builds the command as a Python list and passes it to `subprocess.Popen` without a shell, which
@@ -125,7 +125,8 @@ Analysis responsibilities split by module:
 
 - `parser_models.py`: shared parser data objects such as `ParsedTable`.
 - `parsers.py`: converts GridPACK output files into normalized `ParsedTable` objects.
-- `csv_flat.py`: detects `ca-scalability-v2` CSV flat outputs, streams branch-contingency rows into branch
+- `csv_flat.py`: detects the CSV flat outputs that `ca-scalability-v2` introduced and
+  `pnnl/gridpack:latest` also writes, streams branch-contingency rows into branch
   summaries, parses convergence and bus metadata CSVs, and prepares Parquet conversion for the full branch
   result CSV.
 - `table_schemas.py`: the expected columns and types for whitespace-delimited GridPACK TXT outputs.
@@ -152,15 +153,23 @@ Analysis responsibilities split by module:
 - `distributions.py`: creates utilization distribution tables and plots from `master_cleaned.csv`.
 - `distribution_stats.py`: the per-group count, mean, and spread statistics behind those tables.
 - `summary.py`: exports a selected run directory as a ZIP package.
-- `gpu_pandas.py`: imports pandas through cuDF.pandas when RAPIDS is available, and falls back to regular
-  pandas for development and tests.
+- `gpu.py`: asks the CUDA runtime, through CuPy, whether a GPU is usable, and reports its free memory and
+  whether it shares the host's memory. cuDF imports without a usable GPU, so its import proves nothing.
+- `gpu_pandas.py`: imports pandas through cuDF.pandas when a GPU is usable, and falls back to regular
+  pandas otherwise, as on Windows and in development and tests.
 - `table_helpers.py`: CSV-safe value conversion for table export.
 
 The branch master and distribution exporters use cuDF.pandas when RAPIDS cuDF is available, then import
 pandas through that accelerated layer. Development systems without cuDF fall back to pandas, so the code
 stays testable.
 
-For a plain-language walkthrough of the `pnnl/gridpack:ca-scalability-v2` CSV flat workflow, see
+`csv_flat.py` picks a backend from what the GPU can do. With no usable GPU it offers CPU Dask. A CSV that
+fits in the memory the GPU can use is read whole by cuDF; a larger one is partitioned with dask-cuDF. For a
+GPU that shares the host's memory, as DGX Spark's GB10 does, that memory is the host's; for a GPU with its
+own, it is the smaller of the host's and the device's free memory. When several events share a branch's
+highest loading, every backend names the lowest-numbered one as its worst contingency.
+
+For a plain-language walkthrough of the CSV flat workflow, see
 [the CSV flat scalability notes](csv_flat_ca_scalability_v2.md).
 
 ## Agent layer
@@ -189,7 +198,8 @@ one tool server.
   `resolve_run` turn project and run names into folders, and `scoped_path` rejects traversal and symlink
   escape.
 - `agent/controller.py`: owns the conversation, runs one turn at a time under a deadline and byte caps,
-  normalizes runtime events, and kills the whole process group on stop.
+  reading the runtime's output on reader threads, normalizes runtime events, and stops the runtime's whole
+  process tree on stop.
 - `agent/tool_base.py`: what every tool shares. The result envelope, paging by offset and limit with no
   maximum row count, the saved complete copy of any result larger than the inline budget, stable error
   codes, provenance, and the paired audit records.
@@ -231,3 +241,24 @@ reads the same run after the session moves. Sessions written by earlier versions
 opens; those under `<project>/agent/sessions/` are listed while that project is open and still open.
 Every answer cites the call IDs from `tool_calls.jsonl`, and the GUI marks a citation that does not appear
 there as invalid.
+
+## Operating system layer
+
+`gridlens/system/` holds what GridLens needs from the operating system, so the rest of the code runs the same
+on Linux and Windows:
+
+- `files.py`: opens private files at mode 0600 where the platform has modes, in binary mode, and never
+  through a symlink or a junction, so a file has the same bytes everywhere and a recorded hash stays valid.
+  `FileLock` serializes GridLens processes through a separate lock file, with `flock` on POSIX and `msvcrt`
+  on Windows, and `replace` retries briefly on Windows while a reader has the old file open.
+- `paths.py`: names the settings, cache, and data folders, which follow the XDG conventions on Linux and are
+  under `%LOCALAPPDATA%\GridLens` on Windows, and the temporary folder every GridLens process shares.
+- `processes.py`: starts a child in a group of its own, with no console window on Windows; starts job
+  workers detached; stops a child with its whole tree, by group signal on POSIX and by terminating each
+  process of the tree on Windows; checks whether a pid still names the process started with it; and reads a
+  child's pipes on threads, because `select()` on Windows accepts only sockets.
+
+Job workers watch for `cancel.request` in their folder, because Windows cannot send a process a signal it
+can handle; on POSIX they also stop on SIGTERM. A frozen Windows build runs the MCP server, job workers, and
+the tool CLI from `gridlens-cli.exe`, a console executable beside `GridLens.exe`.
+

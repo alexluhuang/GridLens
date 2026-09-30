@@ -64,12 +64,16 @@ GridLens also copies the same terminal stream into `work/terminal.log`, so it ap
 the Results tab and in exported ZIPs. A run-level `exports/` directory appears later if the analysis export
 helpers create master CSVs or distribution outputs.
 
-### Running ca-scalability-v2
+### Running a csv_flat GridPACK image
 
-To use the newer GridPACK container, enter this image in the Run tab:
+The branch and transformer analyses read GridPACK's CSV flat output, which `pnnl/gridpack:latest`
+(GridPACK 3.7.0) writes, for both x86_64 and ARM64. The `ca-scalability-v2` image, which introduced the
+format, is no longer on Docker Hub; a copy already in your local image store still runs. The
+`ca-scalability-v3` and `-v4` images are published too; check that a run with one of them writes a
+`*_flat.csv` file before you rely on it. Enter the image in the Run tab, for example:
 
 ```text
-pnnl/gridpack:ca-scalability-v2
+pnnl/gridpack:latest
 ```
 
 If the image is not already in Docker's local image store, set the Docker pull policy to `missing` or

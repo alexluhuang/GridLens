@@ -2,6 +2,8 @@
 
 ## Setup
 
+GridLens needs Python 3.11 or later.
+
 ```bash
 cd /path/to/gridpack-workbench-dev
 python3 -m venv .venv
@@ -10,8 +12,27 @@ python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev,analysis]"
 ```
 
-`requirements.txt` lists the minimal GUI dependency. `requirements-analysis.txt` lists the optional plotting
-and data dependencies.
+On Windows, in PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e ".[dev,analysis]"
+```
+
+The analysis extras share one CPU stack and differ in RAPIDS, which is installed on Linux only:
+
+- `analysis`: the CPU stack and RAPIDS for CUDA 13, which needs NVIDIA driver 580 or later. On Windows it
+  installs the CPU stack alone.
+- `analysis-cu12`: the CPU stack and RAPIDS for CUDA 12, for older drivers.
+- `analysis-cpu`: the CPU stack alone, as the CI uses.
+
+RAPIDS is pinned to 26.6, and numpy, pandas, pyarrow, and Dask to the versions it installs, so every platform
+runs the same analysis libraries. Upgrade them together.
+
+`requirements.txt` lists the runtime dependencies, and `requirements-analysis.txt` mirrors the `analysis`
+extra.
 
 ## Run the app
 
@@ -25,6 +46,8 @@ Or:
 ```bash
 scripts/run_app.sh
 ```
+
+On Windows, run `scripts\run_app.ps1`.
 
 ## Run tests
 
@@ -43,6 +66,11 @@ documentation links in the README. Keep `pyproject.toml`, `requirements.txt`, `R
 `src/gridlens/__init__.py` in sync when you change packaging or release information.
 
 On a headless machine, the Qt tests set `QT_QPA_PLATFORM=offscreen` in the test module.
+
+The GitHub Actions workflow in `.github/workflows/tests.yml` runs the suite on Ubuntu x86_64, Ubuntu ARM64,
+and Windows x64, with the CPU analysis stack, and builds the Windows bundle. Its runners have no NVIDIA GPU,
+so check GPU analysis, the Docker sandbox (`GRIDLENS_TEST_SANDBOX_IMAGE`), and a frozen build's MCP server
+(`GRIDLENS_TEST_MCP_EXECUTABLE`) on an NVIDIA machine.
 
 ## Development order
 
@@ -65,6 +93,13 @@ Keep user-sensitive behavior in `core/` and `runner/` rather than in GUI event h
 values and calls well-tested functions.
 
 Never build a Docker command as a shell string. Build a list of arguments and run it without `shell=True`.
+
+Reach the operating system through `gridlens/system/`: open private files with `files.open_private`, lock
+with `files.FileLock`, replace files with `files.replace`, name folders with `paths`, and start and stop
+children with `processes`. Linux and Windows differ in each of these, and the modules there are where the
+difference is handled and tested. Pass `encoding="utf-8"` to any `subprocess` call that decodes text.
+
+Follow PEP 8 in new and changed code.
 
 Keep each module organized around one responsibility. Parsed GridPACK data, for example, flows through
 `analysis/parsers.py`, `analysis/enrichment.py`, `analysis/metrics.py`, and `analysis/dataset.py` before

@@ -140,7 +140,8 @@ development machine can keep using pandas and CPU Dask.
 
 ## User workflow
 
-1. In the Run tab, set the Docker image to `pnnl/gridpack:ca-scalability-v2`.
+1. In the Run tab, set the Docker image to `pnnl/gridpack:latest`, which writes CSV flat output. The
+   `ca-scalability-v2` image is no longer on Docker Hub, though a local copy still runs.
 2. If the image is not already in Docker's local image store, set the Docker pull policy to `missing` or
    `always`.
 3. Use an XML file that sets `outputFormat` to `csv_flat`.

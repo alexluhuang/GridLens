@@ -19,7 +19,9 @@ log out and back in before new Docker group membership takes effect.
 ## Build the package
 
 Build on the same architecture you plan to distribute to. For DGX Spark, build on an ARM64 DGX Spark or an
-equivalent ARM64 Ubuntu 24.04 environment.
+equivalent ARM64 Ubuntu 24.04 environment. For x86_64 Linux, and for Windows through WSL2, build on x86_64
+Ubuntu 24.04. The package's `Depends` names the build host's glibc, so `apt` refuses it on an older system;
+build on the oldest distribution you support. For native Windows, see `packaging/windows/README.md`.
 
 One-time build host setup:
 

@@ -32,10 +32,13 @@ running, GridLens starts it. If anything is missing, the **Set up Clarke** windo
 installed and what GridLens will install, and nothing is downloaded until you press its install button:
 
 - Hermes Agent 0.21.4 is installed with Hermes's official installer, from hermes-agent.nousresearch.com,
-  into `~/.hermes/hermes-agent`, with the `hermes` command in `~/.local/bin`. The installer needs `git`.
+  into `~/.hermes/hermes-agent`, with the `hermes` command in `~/.local/bin`. The installer needs `git`. On
+  Windows, its PowerShell installer puts Hermes in `%LOCALAPPDATA%\hermes` and fetches its own `git`.
 - Ollama is downloaded from ollama.com into `~/.local/share/gridlens/ollama`, for your user account only, so
-  no administrator password is needed. Unpacking it needs `zstd` (`sudo apt install zstd`). An Ollama you
-  installed yourself is used as it is.
+  no administrator password is needed. Unpacking it needs `zstd` (`sudo apt install zstd`). On a Jetson,
+  Ollama's JetPack libraries are unpacked over it, as Ollama's own installer does. On Windows, Ollama's
+  installer runs for your account, into `%LOCALAPPDATA%\Programs\Ollama`. An Ollama you installed yourself
+  is used as it is.
 - Models are downloaded from the Ollama library by the local Ollama service.
 
 Choose models from the table. For each model it shows the developer, the total parameters, the active

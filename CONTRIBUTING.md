@@ -50,6 +50,9 @@ python -m compileall -q src tests
 git diff --check
 ```
 
+GridLens runs on Linux and Windows. Reach the operating system through `src/gridlens/system/`, as the
+[developer guide](docs/developer_guide.md) describes, so a change works on both.
+
 The test suite is deliberately focused. Add or update a test when you change parsing, analysis, Docker command
 construction, project-folder behavior, GUI view-model logic, agent tools or runtime adapters, package
 metadata, or documentation links.
