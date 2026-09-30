@@ -33,6 +33,18 @@ def isolated_settings(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
+def symlink():
+    """Return a function that makes a symlink, or skips the test where this
+    account may not, as on Windows without Developer Mode."""
+    def create(link: Path, target: Path, *, directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except OSError as exc:
+            pytest.skip(f"This account cannot create symlinks: {exc}")
+    return create
+
+
+@pytest.fixture
 def agent_project(tmp_path):
     root = tmp_path / "Synthetic_Project"
     root.mkdir()

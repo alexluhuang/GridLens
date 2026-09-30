@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import multiprocessing
 import os
 from pathlib import Path
@@ -9,10 +8,13 @@ import sys
 import threading
 import time
 
+import psutil
 import pytest
 
-from gridlens.analysis.service import AnalysisService, _terminate_group
+from gridlens.analysis.service import (
+    AnalysisService, _lock_path, _terminate_group)
 from gridlens.analysis.utilization import UtilizationBranchOptions
+from gridlens.system import files, processes
 
 
 def test_shared_service_builds_in_spawned_worker(agent_project):
@@ -25,9 +27,7 @@ def test_shared_service_builds_in_spawned_worker(agent_project):
 
 def test_waiting_shared_job_can_be_cancelled(agent_project):
     cancelled = threading.Event()
-    lock_path = Path("/tmp") / f"gridlens-analysis-{os.getuid()}.lock"
-    with lock_path.open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with files.FileLock(_lock_path()):
         timer = threading.Timer(0.2, cancelled.set)
         timer.start()
         try:
@@ -38,7 +38,7 @@ def test_waiting_shared_job_can_be_cancelled(agent_project):
 
 
 def _sleeper_with_grandchild(pid_path: str) -> None:
-    os.setsid()
+    processes.own_process_group()
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
     Path(pid_path).write_text(f"{os.getpid()} {child.pid}\n")
     time.sleep(120)
@@ -59,23 +59,16 @@ def _wait_for_pids(pid_path: Path) -> list[int]:
 def _process_gone(pid: int) -> bool:
     for _ in range(250):
         try:
-            state = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[0]
-        except (FileNotFoundError, ProcessLookupError, IndexError):
-            return True
-        if state == "Z":  # orphan already dead, waiting for init to reap it
+            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                return True  # dead, waiting for its parent or init to reap it
+        except psutil.NoSuchProcess:
             return True
         time.sleep(0.02)
     return False
 
 
 def _own_child_pids() -> set[int]:
-    pids = set()
-    for children in Path("/proc/self/task").glob("*/children"):
-        try:
-            pids.update(int(pid) for pid in children.read_text().split())
-        except FileNotFoundError:
-            continue
-    return pids
+    return {child.pid for child in psutil.Process().children()}
 
 
 def test_terminate_group_kills_worker_and_grandchild(tmp_path):

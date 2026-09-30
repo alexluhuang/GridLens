@@ -246,14 +246,15 @@ def test_repeated_xml_tags_are_numbered(project_files, agent_context):
     assert rows == [{"path": "Items/Item[1]/@kind", "value": "a"}, {"path": "Items/Item[1]", "value": "1"}, {"path": "Items/Item[2]", "value": "2"}]
 
 
-def test_paths_stay_inside_projects_and_the_session(project_files, agent_context, tmp_path):
+def test_paths_stay_inside_projects_and_the_session(
+        project_files, agent_context, tmp_path, symlink):
     """Files outside GridLens projects are refused, symlinks cannot leave a project, and saved results are readable."""
     outside = tmp_path / "outside.csv"
     outside.write_text("a\n1\n")
     assert project_files.read_file(str(outside))["error"]["code"] == "PATH_OUTSIDE_PROJECTS"
     assert project_files.list_files(folder=str(tmp_path))["error"]["code"] == "PATH_OUTSIDE_PROJECTS"
     link = agent_context.run("run_a") / "work/linked.csv"
-    link.symlink_to(outside)
+    symlink(link, outside)
     assert project_files.read_file(str(link))["error"]["code"] == "PATH_OUTSIDE_SESSION"
     assert project_files.read_file("runs/run_a/work/missing.txt")["error"]["code"] == "FILE_NOT_FOUND"
     assert project_files.read_file("")["error"]["code"] == "INVALID_PATH"

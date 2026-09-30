@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 
+import psutil
 import pytest
 
 from gridlens.agent.controller import AgentController, audited_row_scope_answer, cite_uncited_turn, disclose_generated_output, disclose_mixed_flow_directions, disclose_pending_changes, disclose_tool_failures, disclose_truncated_results, group_mean_request, normalize_citations, qualify_capacity_answer, session_sources, top_line_area_request, verified_group_mean_answer, verified_singular_line_area, verified_top_line_areas
@@ -18,6 +19,7 @@ from gridlens.agent.process import mcp_command, minimal_environment
 from gridlens.agent.prompt import SYSTEM_PROMPT
 from gridlens.agent.runtime import PreparedRuntime, RuntimeStatus
 from gridlens.agent.session import SessionContext
+from gridlens.system import processes
 from gridlens.agent.tools import ToolService
 
 
@@ -296,7 +298,9 @@ class StubAdapter(HermesAdapter):
         return PreparedRuntime(session, (), minimal_environment(), session.directory)
 
     def start_turn(self, prepared, prompt_path, continuation=""):
-        return subprocess.Popen([sys.executable, "-u", "-c", self.script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        return subprocess.Popen(
+            [sys.executable, "-u", "-c", self.script], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, **processes.new_group_options())
 
 
 def test_controller_records_prompt_and_answer_without_shell(agent_context):
@@ -351,12 +355,10 @@ def test_timeout_and_stop_reap_child_processes(agent_context, cancel):
         assert caught.value.code == ("CANCELLED" if cancel else "TIMEOUT")
         child = int(pid_file.read_text())
         for _ in range(50):
-            stat = Path(f"/proc/{child}/stat")
             try:
-                state = stat.read_text().split()[2]
-            except (FileNotFoundError, ProcessLookupError):
-                break
-            if state == "Z":
+                if psutil.Process(child).status() == psutil.STATUS_ZOMBIE:
+                    break
+            except psutil.NoSuchProcess:
                 break
             time.sleep(0.02)
         else:

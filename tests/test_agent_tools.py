@@ -179,11 +179,11 @@ def test_stale_cache_never_reads_flat_data(agent_context, monkeypatch):
     assert ToolService(agent_context).rank("run_a")["error"]["code"] == "ANALYSIS_NOT_BUILT"
 
 
-def test_symlink_escape_blocked(agent_context, tmp_path):
+def test_symlink_escape_blocked(agent_context, tmp_path, symlink):
     cache = agent_context.run("run_a") / "reports/interactive_tables/pflow_mm.csv"
     target = tmp_path / "outside.csv"
     cache.rename(target)
-    cache.symlink_to(target)
+    symlink(cache, target)
     assert ToolService(agent_context).rank("run_a")["error"]["code"] == "PATH_OUTSIDE_SESSION"
 
 
@@ -349,7 +349,8 @@ def test_session_roundtrip_and_tampered_directory(agent_context):
         SessionContext.load(path)
 
 
-def test_convergence_and_run_files_come_from_the_file_tools(agent_context, tmp_path):
+def test_convergence_and_run_files_come_from_the_file_tools(
+        agent_context, tmp_path, symlink):
     """Convergence counts come from the convergence CSV, run files from list_files, and a symlinked file is refused."""
     service = ToolService(agent_context)
     failed = service.read_file("runs/run_a/work/case_convergence.csv", filters=[{"column": "converged", "op": "==", "value": "false"}])
@@ -362,7 +363,7 @@ def test_convergence_and_run_files_come_from_the_file_tools(agent_context, tmp_p
     assert service.list_files(folder="exports")["error"]["code"] == "FOLDER_NOT_FOUND"
     outside = tmp_path / "outside_flat.csv"
     outside.write_text("secret")
-    (agent_context.run("run_a") / "work/other_flat.csv").symlink_to(outside)
+    symlink(agent_context.run("run_a") / "work/other_flat.csv", outside)
     assert "runs/run_a/work/other_flat.csv" not in {row["path"] for row in service.list_files(folder="runs/run_a/work")["data"]["rows"]}
     assert service.read_file("runs/run_a/work/other_flat.csv")["error"]["code"] == "PATH_OUTSIDE_SESSION"
 
@@ -674,7 +675,7 @@ def test_unexpected_failure_is_stable_and_audit_is_paired(agent_context, monkeyp
     assert records[-1]["result"] == result
 
 
-def test_index_rejections_keep_their_codes(agent_context):
+def test_index_rejections_keep_their_codes(agent_context, symlink):
     """Path escapes and malformed index manifests retain their specific auditable errors."""
     pytest.importorskip("pyarrow")
     run = agent_context.run("run_a")
@@ -684,7 +685,8 @@ def test_index_rejections_keep_their_codes(agent_context):
     for change, expected in (({"source": "work/../../../../etc/passwd"}, "PATH_OUTSIDE_SESSION"), ({"generation": "../outside"}, "PATH_OUTSIDE_SESSION")):
         path.write_text(json.dumps({**original, **change}))
         assert ToolService(agent_context).rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": 1}])["error"]["code"] == expected
-    (path.parent / "linked-generation").symlink_to(path.parent / original["generation"], target_is_directory=True)
+    generation = path.parent / original["generation"]
+    symlink(path.parent / "linked-generation", generation, directory=True)
     path.write_text(json.dumps({**original, "generation": "linked-generation"}))
     assert ToolService(agent_context).rank("run_a", object="cases", filters=[{"column": "event_idx", "op": "==", "value": 1}])["error"]["code"] == "PATH_OUTSIDE_SESSION"
     path.write_text("{not json")

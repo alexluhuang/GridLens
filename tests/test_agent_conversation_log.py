@@ -38,7 +38,8 @@ def test_conversation_log_shows_messages_tool_calls_results_jobs_and_errors(agen
     path = write_conversation_log(agent_context.directory)
     text = path.read_text()
     assert path == agent_context.directory / "conversation.md"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no POSIX modes.
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert text.startswith("# Clarke conversation")
     assert "- Model: fixture:model" in text and "`tool_calls.jsonl`" in text
     question, call, job, failure, answer = (text.index(item) for item in (
@@ -95,7 +96,8 @@ def test_legacy_hidden_sessions_move_to_the_visible_folder(agent_project, tmp_pa
     assert not (tmp_path / ".gridlens-agent").exists()
     loaded = SessionContext.load(target / "context.json")
     assert (loaded.directory, loaded.run_ids) == (target.resolve(), ("run_a",))
-    assert stat.S_IMODE((target / "context.json").stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no POSIX modes.
+        assert stat.S_IMODE((target / "context.json").stat().st_mode) == 0o600
     assert "Hello" in (target / "conversation.md").read_text()
     assert saved_sessions(tmp_path) == [target]
     assert migrate_legacy_sessions(tmp_path) == []

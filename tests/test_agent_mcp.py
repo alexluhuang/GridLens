@@ -12,6 +12,7 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from gridlens.agent import process as agent_process
 from gridlens.agent.tools import DESTRUCTIVE_TOOL_NAMES, TOOL_NAMES, WRITE_TOOL_NAMES
 
 
@@ -26,7 +27,10 @@ def entry_point(*arguments: str) -> list[str]:
 
 
 def entry_environment(context: Path | None) -> dict[str, str]:
-    environment = {"PATH": os.environ["PATH"], "PYTHONPATH": SOURCE_ROOT}
+    # The platform's minimal variables: on Windows a child cannot start its
+    # socket library without SYSTEMROOT.
+    environment = agent_process._host_variables()
+    environment["PYTHONPATH"] = SOURCE_ROOT
     if context is not None:
         environment["GRIDLENS_AGENT_CONTEXT"] = str(context)
     return environment
