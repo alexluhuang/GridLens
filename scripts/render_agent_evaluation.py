@@ -1,7 +1,9 @@
 """Render one model's planning-question results and their scores as a Markdown report.
 
 The table has a row per question: the prompt and its pass criterion, the model's exact answer, every audited
-tool call, the verdict with its rationale, and the time taken. A call is shown with the arguments that
+tool call, the verdict with its rationale, the time taken, and the model's tokens. A table before it gives
+the model's time and tokens over every question: in total, per question, in GridLens tools, and in the
+model. A report written before the harness recorded accounting takes it from each result's session folder. A call is shown with the arguments that
 differ from the tool's defaults, so it can be reproduced exactly, and with the size or error of its result.
 The report comes from `evaluate_agent_questions.py`. The scores are a JSON object keyed by question ID,
 each value holding "verdict" (Pass, Partial, or Fail) and "rationale". An optional preamble, such as a
@@ -16,7 +18,9 @@ import argparse
 import inspect
 import json
 from pathlib import Path
+import statistics
 
+from gridlens.agent.accounting import duration, turn_accounting
 from gridlens.agent.tools import TOOL_NAMES, ToolService
 
 ORDER = ("1", "2a", "2b", *(str(number) for number in range(3, 30)), "30a", "30b")
@@ -66,7 +70,42 @@ def row(question: str, turn: dict, score: dict, record: dict, known: dict) -> st
     if record.get("cleanup") and turn is record["turns"][-1]:
         lines.append("Harness cleanup: " + "; ".join(record["cleanup"]))
     verdict = f"**{score['verdict']}.** {score['rationale']}" if score else "Not scored."
-    return f"| {question} | {prompt} | {answer} | {cell(chr(10).join(lines))} | {cell(verdict)} | {turn['seconds']:.0f} |"
+    spent = turn.get("accounting") or {}
+    counts = spent.get("tokens")
+    used = f"{counts['total']:,}<br>({counts['output']:,} out)" if counts else "not reported"
+    return f"| {question} | {prompt} | {answer} | {cell(chr(10).join(lines))} | {cell(verdict)} | {turn['seconds']:.0f} | {used} |"
+
+
+def with_accounting(record: dict) -> dict:
+    """Return a result with each turn's accounting, taken from its session folder when the report lacks it."""
+    if all(turn.get("accounting") for turn in record["turns"]):
+        return record
+    session = Path(record.get("session", ""))
+    found = turn_accounting(session) if session.is_dir() else []
+    turns = [{**turn, "accounting": turn.get("accounting") or (found[index] if index < len(found) else None)} for index, turn in enumerate(record["turns"])]
+    return {**record, "turns": turns}
+
+
+def time_and_tokens(turns: list[dict]) -> list[str]:
+    """Return a Markdown table of one model's time and tokens over the questions it answered."""
+    spent = [turn["accounting"] for turn in turns if turn.get("accounting")]
+    counted = [item["tokens"] for item in spent if item.get("tokens")]
+    seconds = [turn["seconds"] for turn in turns]
+    rates = [item["output_tokens_per_second"] for item in spent if item.get("output_tokens_per_second")]
+    total = lambda name: sum(item[name] for item in counted)
+    rows = [
+        ("Prompts", f"{len(turns)}"),
+        ("Total time", duration(sum(seconds))),
+        ("Median time per prompt", duration(statistics.median(seconds)) if seconds else "unknown"),
+        ("Time in GridLens tools, including waits for jobs", duration(sum(item["tool_seconds"] for item in spent))),
+        ("Time in the model and runtime", duration(sum(item["model_seconds"] or 0.0 for item in spent))),
+        ("Prompt tokens read", f"{total('prompt'):,}, {total('cache_read'):,} of them from the cache" if counted else "not reported"),
+        ("Output tokens written", f"{total('output'):,}; median {statistics.median(item['output'] for item in counted):,.0f} per prompt" if counted else "not reported"),
+        ("Median output tokens per second of model time", f"{statistics.median(rates):.1f}" if rates else "not reported"),
+    ]
+    if len(counted) < len(turns):
+        rows.append(("Prompts without token counts", f"{len(turns) - len(counted)}"))
+    return ["| Measure | Value |", "|---|---|", *(f"| {name} | {value} |" for name, value in rows), ""]
 
 
 def main() -> None:
@@ -83,12 +122,14 @@ def main() -> None:
     turns = {}
     for record in report["results"]:
         if record["model"] == args.model:
+            record = with_accounting(record)
             for turn in record["turns"]:
                 turns[turn["id"]] = (turn, record)
     lines = [args.preamble.read_text().rstrip() + "\n"] if args.preamble else []
+    lines += [f"Time and tokens for {args.model}:", "", *time_and_tokens([turns[question][0] for question in ORDER if question in turns])]
     lines += [
-        "| # | Question and pass criterion | Response | Tool calls | Evaluation | Seconds |",
-        "|---|---|---|---|---|---|",
+        "| # | Question and pass criterion | Response | Tool calls | Evaluation | Seconds | Tokens |",
+        "|---|---|---|---|---|---|---|",
     ]
     for question in ORDER:
         if question in turns:

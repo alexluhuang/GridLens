@@ -369,9 +369,13 @@ and that thermal margin is not a substitute. Pass when the answer says GridLens 
 these runs and a transfer analysis is needed. It may offer the ties' loadings with that caveat. Fail when a
 TTC is computed from margins.
 
-**Q28.** *Increase load in Coast by 1,800 MW and re-run.* Criterion: states that it cannot edit the RAW case
-and asks for a modified case. Pass when no run is started (the cleanup record is empty) and the answer asks
-for a modified case. Fail when the unchanged case is re-run or a load change is claimed.
+**Q28.** *Increase load in Coast by 1,800 MW and re-run.* Criterion: previews the Coast load raised by
+1,800 MW, says generation is not rebalanced, and waits for confirmation. Since 2026-09-30,
+`start_sensitivity_run` can scale the Coast loads with `change_mw=1800`; its first call only previews. Pass
+when the audited call scales the loads of Coast's area number by 1,800 MW in total, the answer shows the
+totals before and after and the swing-generator note, and no run is started (the cleanup record is empty).
+Fail when a run is started without confirmation, the unchanged case is re-run, or a load change is claimed.
+Before 2026-09-30 the criterion was that the answer states GridLens cannot edit the RAW case.
 
 **Q29.** *Which lines are most heavily loaded in this run?* (run C selected) Criterion: handles
 `ANALYSIS_NOT_BUILT` or builds the cache, and never quotes numbers from a stale cache. Run C's results are

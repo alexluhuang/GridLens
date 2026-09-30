@@ -18,12 +18,14 @@ from pathlib import Path
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
-    QScrollArea, QToolButton, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
+    QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
+from gridlens.agent.accounting import summary as turn_summary, turn_accounting
 from gridlens.agent.controller import AgentController, MAX_PROMPT_CHARS, normalize_citations, session_sources
 from gridlens.agent.conversation_log import write_conversation_log
+from gridlens.agent.document_tools import reference_folder
 from gridlens.agent.hermes import DEFAULT_ENDPOINT
 from gridlens.agent.policy import AgentError
 from gridlens.agent.providers import DESCRIPTORS, create_adapter, descriptor
@@ -198,11 +200,15 @@ class AgentTab(QWidget):
         self.export_button = QPushButton("Export session (ZIP)…")
         self.export_button.setToolTip("Save this conversation, its tool calls, and their results as one ZIP file to share or archive.")
         self.export_button.clicked.connect(self.export_audit)
+        self.documents_button = QPushButton("Open reference documents")
+        self.documents_button.setToolTip("Open the folder of standards, planning criteria, and manuals Clarke can search. Add PDF, text, Markdown, or HTML files to it.")
+        self.documents_button.clicked.connect(self.open_reference_documents)
         self.review_button = QPushButton("Review proposed scripts")
         self.review_button.setToolTip("Read, approve, and run the analysis scripts Clarke proposed in this conversation.")
         self.review_button.clicked.connect(self.review_scripts)
         session_actions.addWidget(self.folder_button)
         session_actions.addWidget(self.export_button)
+        session_actions.addWidget(self.documents_button)
         session_actions.addWidget(self.review_button)
         session_actions.addStretch(1)
         settings_layout.addLayout(session_actions)
@@ -595,7 +601,8 @@ class AgentTab(QWidget):
             self._draft_label = self.conversation.add_message("assistant", final)
         self._draft_label.flush()
         if self._process_card:
-            self._process_card.complete()
+            turns = turn_accounting(self.session_directory)
+            self._process_card.complete(turn_summary(turns[-1]) if turns and turns[-1]["outcome"] == "answered" else None)
         self.conversation.scroll_to_latest()
         self.update_sources()
 
@@ -791,6 +798,7 @@ class AgentTab(QWidget):
         timeline = [(item.get("timestamp", ""), 0 if item.get("role") == "user" else 2, "message", item) for item in messages]
         timeline.extend((item.get("timestamp", ""), 1, "event", item) for item in events if item.get("kind") in ("session", "info", "reasoning", "tool_start", "tool_result", "error"))
         timeline.sort(key=lambda item: (item[0], item[1]))
+        summaries = {turn["ended_at"]: turn_summary(turn) for turn in turn_accounting(self.session_directory)} if self.session_directory else {}
         process = None
         source_index = 0
         for _, _, kind, item in timeline:
@@ -803,7 +811,7 @@ class AgentTab(QWidget):
                     process = self.conversation.add_process()
                 else:
                     if process:
-                        process.complete()
+                        process.complete(summaries.get(item.get("timestamp")))
                         process = None
                     text = str(item.get("text", ""))
                     self.conversation.add_message(role, cited_answer(text, records) if role == "assistant" else text).flush()
@@ -821,6 +829,20 @@ class AgentTab(QWidget):
     def open_session_folder(self) -> None:
         if self.session_directory:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.session_directory)))
+
+    def reference_documents_folder(self) -> Path:
+        """Return the folder of reference documents Clarke searches, creating it so the user can fill it."""
+        folder = reference_folder(Path(self.settings.default_projects_dir).expanduser())
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def open_reference_documents(self) -> None:
+        try:
+            folder = self.reference_documents_folder()
+        except OSError as exc:
+            QMessageBox.warning(self, "Reference documents", f"GridLens could not create the reference documents folder: {exc}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def shutdown(self) -> bool:
         self.stop()

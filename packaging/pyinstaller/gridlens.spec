@@ -124,6 +124,8 @@ metadata_packages = (
 hidden_imports = [
     "mcp.server.fastmcp",
     "mcp.server.stdio",
+    # Imported when the document search tool first reads a PDF.
+    "pypdf",
     "_numba_cuda_redirector",
     "dask",
     "dask.dataframe",

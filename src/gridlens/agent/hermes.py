@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 
-from gridlens.agent.policy import AgentError, local_endpoint, ollama_json, verify_model
+from gridlens.agent.policy import DEFAULT_ENDPOINT, AgentError, local_endpoint, ollama_json, verify_model
 from gridlens.agent.process import (
     mcp_command,
     mcp_server_environment,
@@ -35,7 +35,6 @@ from gridlens.agent.tools import TOOL_NAMES
 SUPPORTED_HERMES = "0.21.4"
 # The upstream commit of the validated release. The Hermes installer checks out exactly this commit.
 SUPPORTED_HERMES_COMMIT = "5f5c9ef8f468667539d4d34e95f77eeb253cfc3c"
-DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
 # A turn may start a GridPACK run and wait for it through get_status, so it gets an hour; Stop ends it sooner.
 TURN_TIMEOUT_SECONDS = 3600
 DOCS_URL = "https://hermes-agent.nousresearch.com/docs/getting-started/installation/"

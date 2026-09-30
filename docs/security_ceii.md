@@ -40,12 +40,24 @@ The Agent tab is optional. These controls apply when someone uses it.
   contingency names, and generated-script output as data, never as instructions.
 - The GridLens file tools read files only inside GridLens project folders and the session folder, and
   never follow a symlink out of them. They can read every field of those files, including RAW cases and
-  the full flat results.
+  the full flat results. The reference document search reads only `<projects folder>/Reference documents/`,
+  skips symlinks and hidden files, and treats document text as data, never as instructions.
+- When an embedding model is installed in Ollama, the document search sends passages of the reference
+  documents, and the question, to that model through the same loopback-only `ollama_json` call that refuses
+  redirects, proxies, and models that report a remote host. Without one it uses BM25 alone and sends
+  nothing. Its cache, `Reference documents/.gridlens-index/` (`0700`, files `0600`), holds the documents'
+  text and embeddings, so a user who adds internal criteria there should treat the cache as they treat the
+  documents.
 - The agent can change projects. It can create a project and copy input files into it from any path the
   user can read, write the project's GridPACK XML, start and stop GridPACK runs, and build analyses. A run
   it starts uses the same Docker command builder and the Run tab's saved settings, so the saved network
   mode (`none` by default) and pull policy apply to it unchanged. If the saved pull policy is `missing` or
   `always`, an agent-started run can pull an image, just as a Run tab run can.
+- The agent can run GridPACK on an edited copy of a project's RAW case (`start_sensitivity_run`). The
+  project's case is never changed. Because the run studies a network the user has not reviewed, the first
+  call only previews the edits, and the run starts only when the same call is repeated with `confirm=True`
+  after the user has sent another message. The edited case and `sensitivity_changes.json` are written into
+  the run's `work/` folder, and the run's manifest records their hashes.
 - The CLI runs from a per-session profile inside the project, with a minimal environment: no bundled skills
   or plugins, no memory, no telemetry, no update checks, no lazy installs, no adoption of external logins,
   and only the GridLens MCP toolset exposed. The project root is never the CLI working directory, and no

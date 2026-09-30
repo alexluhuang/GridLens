@@ -171,4 +171,5 @@ def test_every_turn_states_the_session_facts(agent_context):
     assert composed.startswith("Session facts:\n- GridLens projects folder: " + str(agent_context.projects_folder))
     assert f"- Session project: {agent_context.project_root}" in composed
     assert f"- Saved results folder: {agent_context.directory / 'results'}" in composed
+    assert f"- Reference documents folder: {agent_context.projects_folder / 'Reference documents'}" in composed
     assert str(agent_context.project_root) not in SYSTEM_PROMPT

@@ -5,12 +5,16 @@ import difflib
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import json
+import shutil
+
 import pytest
 
 import gridlens.agent.gridlens_tools as gridlens_tools
 from gridlens.agent.session import SessionContext
 from gridlens.agent.tools import ToolService
 from gridlens.core.app_settings import AppSettings
+from gridlens.psse import parse
 from gridlens.runner.docker_probe import ProbeResult
 from gridlens.runner.gridpack_runner import GridpackTerminationResult
 
@@ -224,3 +228,67 @@ def test_status_of_runs_and_jobs_and_stop(agent_context, monkeypatch):
     assert stopped == ["gridlens-run_a"]
     assert tools.stop(job_id=started["job_id"])["data"]["rows"][0]["state"] == "completed"
     assert tools.stop()["error"]["code"] == "ONE_TARGET"
+
+
+@pytest.fixture
+def sensitivity_study(workspace, monkeypatch):
+    """Return tools that hold changes for confirmation, a project of the three-bus case with an XML, and the jobs started."""
+    tools, inputs, projects = workspace
+    raw = inputs / "three_bus_v33.raw"
+    shutil.copy(Path(__file__).parent / "data" / raw.name, raw)
+    tools.create_project("Sensitivity", [str(raw)])
+    tools.configure_run({}, project="Sensitivity")
+    monkeypatch.setattr(AppSettings, "load", classmethod(lambda cls, path=None: cls(default_gridpack_image="pnnl/gridpack:test", default_mpi_processes=2)))
+    monkeypatch.setattr(gridlens_tools.docker_probe, "docker_engine_available", lambda: ProbeResult(True, "Docker Engine 27"))
+    monkeypatch.setattr(gridlens_tools.docker_probe, "image_exists", lambda image: ProbeResult(True, "present"))
+    started = []
+    monkeypatch.setattr(gridlens_tools.jobs, "start_job", lambda root, kind, run, request, conversation=None: started.append((kind, run, request)) or {"job_id": "20260930T000000Z_0123abcd", "state": "queued"})
+    return ToolService(tools.context, confirm_changes=True), projects / "Sensitivity", started
+
+
+def test_a_sensitivity_run_previews_the_edits_and_waits_for_a_confirmation(sensitivity_study):
+    """The first call shows every changed field and the totals and starts nothing; a later confirmation runs the edited copy."""
+    tools, project, started = sensitivity_study
+    requested = [
+        {"action": "scale", "kind": "load", "area": 1, "change_mw": 5},
+        {"action": "set", "kind": "branch", "bus": 102, "to_bus": 101, "id": "1", "values": {"STAT": 0}},
+    ]
+    base = project / "original_inputs/three_bus_v33.raw"
+    before = base.read_bytes()
+    preview = tools.start_sensitivity_run(requested, project="Sensitivity")
+    data = preview["data"]
+    assert data["confirmation_required"] and not started and not list((project / "runs").glob("*"))
+    assert data["summary"] == "0 added, 2 changed, 0 removed" and data["edited_case"] == "three_bus_v33_sensitivity.raw"
+    assert data["selections"] == ["Change 1 scales PL and QL of 1 in-service load in area 1 NORTH by 1.1."]
+    changed = {row["record"]: row["fields"] for row in data["rows"]}
+    assert changed["Load 102 ID 1"] == {"PL": {"from": "50.000", "to": "55.000"}, "QL": {"from": "10.000", "to": "11.000"}}
+    assert changed["Branch 101 to 102 circuit 1"] == {"ST": {"from": "1", "to": "0"}}
+    totals = {(row["scope"], row["quantity"]): (row["before"], row["after"]) for row in data["totals"]}
+    assert totals[("case", "load_mw")] == (50.0, 55.0) and totals[("area 1 NORTH", "load_mw")] == (50.0, 55.0)
+    assert any("rises 5.0 MW more than generation" in warning for warning in preview["warnings"])
+    assert str(base) in {source["path"] for source in preview["provenance"]["sources"]}
+    assert tools.start_sensitivity_run(requested, project="Sensitivity", confirm=True)["error"]["code"] == "CONFIRMATION_REQUIRED"
+    tools.context.message("user", "Yes, run it.")
+    result = tools.start_sensitivity_run(requested, project="Sensitivity", confirm=True)
+    assert result["error"] is None
+    kind, run, request = started[0]
+    assert (kind, request["xml_file"], request["form"]["image"]) == ("gridpack_run", "input_sensitivity.xml", "pnnl/gridpack:test")
+    assert request["notes"].startswith("Sensitivity run of three_bus_v33.raw with 0 added, 2 changed, 0 removed.")
+    work = run / "work"
+    network = [element.text for element in ET.parse(work / "input_sensitivity.xml").iter() if str(element.tag).startswith("networkConfiguration")]
+    assert network == ["three_bus_v33_sensitivity.raw"]
+    edited = parse.read_case(work / "three_bus_v33_sensitivity.raw")
+    assert edited.records["load"][0].values[5] == "55.000" and edited.records["branch"][0].values[13] == "0"
+    record = json.loads((work / "sensitivity_changes.json").read_text())
+    assert (record["base_case"], record["summary"]) == ("three_bus_v33.raw", "0 added, 2 changed, 0 removed")
+    assert base.read_bytes() == before and result["data"]["run_id"] == run.name
+
+
+def test_a_sensitivity_run_refuses_changes_it_cannot_make(sensitivity_study):
+    tools, project, started = sensitivity_study
+    missing = tools.start_sensitivity_run([{"action": "set", "kind": "load", "bus": 102, "id": "7", "values": {"PL": 1}}], project="Sensitivity")
+    assert missing["error"]["code"] == "INVALID_CHANGE" and "the case has IDs 1 there" in missing["error"]["remedy"]
+    invalid = tools.start_sensitivity_run([{"action": "set", "kind": "load", "bus": 102, "values": {"PL": "a lot"}}], project="Sensitivity")
+    assert invalid["error"]["code"] == "INVALID_CHANGE" and "PL must be a number" in invalid["error"]["remedy"]
+    assert tools.start_sensitivity_run([], project="Sensitivity")["error"]["code"] == "INVALID_CHANGE"
+    assert not started

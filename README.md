@@ -9,8 +9,10 @@ branches in a copy of a PSS/E RAW case of version 33, 34, or 35, and runs GridPA
 It rewrites only the lines you edit, and the project's case stays as it is.
 
 The app also has an optional Agent tab: Clarke, a planning agent that answers questions about any project
-file in plain language, and can set up projects, configure and start runs, and build analyses for you. It
-runs Hermes Agent against a model served by Ollama on this machine, and never sends project data online.
+file in plain language, and can set up projects, configure and start runs, run edited copies of a case after
+you confirm the edits, say how the network is connected, search the standards you keep in a Reference
+documents folder, and build analyses for you. It runs Hermes Agent against a model served by Ollama on this
+machine, and never sends project data online.
 GridLens ships no model and no credentials; the first time you open the tab, it offers to install Hermes,
 Ollama, and a model for you. See [Clarke, the planning agent](docs/clarke.md).
 

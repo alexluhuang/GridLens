@@ -285,6 +285,9 @@ def _run_gridpack(job: dict, folder: Path) -> dict:
     project_data = ProjectData.from_dict(read_json(Path(job["project_root"]) / PROJECT_FILE))
     request = build_gridpack_run_request(project_data, Path(job["run_dir"]), RunFormValues(**job["request"]["form"]))
     request.notes = job["request"].get("notes", "")
+    # A sensitivity run's work folder already holds the edited case and a copy of the XML that names it.
+    if job["request"].get("xml_file"):
+        request.xml_filename = job["request"]["xml_file"]
     parser = GridpackProgressParser()
     progress_log = _ProgressLog(folder)
     _log(folder, f"Running GridPACK with {request.mpi_processes} MPI processes in {request.image}. The full GridPACK output is in {Path(job['run_dir']) / 'logs/run.log'}.")

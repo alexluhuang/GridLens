@@ -37,6 +37,8 @@ PROJECT_FILE = "project.json"
 # folder, and before that inside the project open when they started; both are still listed and opened, and
 # `migrate_legacy_sessions` moves the hidden ones into the visible folder.
 WORKSPACE_SESSIONS = Path("Clarke conversations")
+# Standards, planning criteria, and manuals the user keeps for Clarke to search, beside the projects.
+REFERENCE_DOCUMENTS = Path("Reference documents")
 LEGACY_WORKSPACE_SESSIONS = Path(".gridlens-agent/sessions")
 PROJECT_SESSIONS = Path("agent/sessions")
 CONVERSATION_LOG = "conversation.md"

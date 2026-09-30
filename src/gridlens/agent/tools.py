@@ -7,8 +7,10 @@ lives: a per-call identifier, paging by offset and limit (limit=0 returns every 
 any result too large to send inline, provenance for every file read, stable error codes, and an
 append-only audit record written before and after the call.
 
-`ToolService` combines these analysis tools with the file tools in `gridlens.agent.file_tools` and the
-GridLens operation tools in `gridlens.agent.gridlens_tools`, and `TOOL_NAMES` lists everything exposed
+`ToolService` combines these analysis tools with the topology tool in `gridlens.agent.network_tools`, the
+file tools in `gridlens.agent.file_tools`, the reference document search in
+`gridlens.agent.document_tools`, and the GridLens operation tools in `gridlens.agent.gridlens_tools`, and
+`TOOL_NAMES` lists everything exposed
 over MCP. Tools that read a run take `run_id` and an optional
 `project`. A blank project means the project open in the session; otherwise it is a project folder path
 or name, resolved by `gridlens.agent.session`. The analysis tools read the compact caches rather than a
@@ -29,8 +31,10 @@ import re
 from typing import get_args
 import xml.etree.ElementTree as ET
 
+from gridlens.agent.document_tools import DOCUMENT_TOOL_NAMES, DocumentTools
 from gridlens.agent.file_tools import FILE_TOOL_NAMES, FileTools
 from gridlens.agent.gridlens_tools import GRIDLENS_DESTRUCTIVE_TOOL_NAMES, GRIDLENS_TOOL_NAMES, GRIDLENS_WRITE_TOOL_NAMES, GridLensTools
+from gridlens.agent.network_tools import NETWORK_TOOL_NAMES, NetworkTools
 from gridlens.agent.objects import (
     BASE_CASE, CASE_INDEX_COLUMNS, CONTINGENCY_ATTRIBUTES, FACILITY_ATTRIBUTES, GROUP_DEFINITIONS, OBJECT_KINDS,
     ObjectField, ObjectFilter, ObjectGroup, ObjectKind, ObjectMetric, Order,
@@ -65,7 +69,7 @@ FACILITY_OPTIONS = {
 }
 
 ANALYSIS_TOOL_NAMES = ("rank", "rank_groups", "propose_analysis_script")
-TOOL_NAMES = ANALYSIS_TOOL_NAMES + FILE_TOOL_NAMES + GRIDLENS_TOOL_NAMES
+TOOL_NAMES = ANALYSIS_TOOL_NAMES + NETWORK_TOOL_NAMES + FILE_TOOL_NAMES + DOCUMENT_TOOL_NAMES + GRIDLENS_TOOL_NAMES
 # Tools that change something on disk or in Docker; every other tool only reads.
 WRITE_TOOL_NAMES = GRIDLENS_WRITE_TOOL_NAMES | {"propose_analysis_script"}
 DESTRUCTIVE_TOOL_NAMES = GRIDLENS_DESTRUCTIVE_TOOL_NAMES
@@ -631,5 +635,5 @@ class AnalysisTools(ToolBase):
         }
 
 
-class ToolService(AnalysisTools, FileTools, GridLensTools):
+class ToolService(AnalysisTools, NetworkTools, FileTools, DocumentTools, GridLensTools):
     """Every GridLens tool, bound to one session. TOOL_NAMES lists the ones exposed over MCP."""

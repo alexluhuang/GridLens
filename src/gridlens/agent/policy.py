@@ -16,6 +16,10 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
+# The Ollama origin GridLens uses unless a session names another loopback one.
+DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
+
+
 class AgentError(ValueError):
     """A refusal the user can act on: a stable code, and a remedy written for a person."""
     def __init__(self, code: str, remedy: str) -> None:
@@ -50,8 +54,11 @@ class _NoRedirect(HTTPRedirectHandler):
         raise AgentError("ENDPOINT_REDIRECT", "Ollama must answer directly on loopback without redirects.")
 
 
-def ollama_json(endpoint: str, path: str, body: dict | None = None) -> dict:
-    """Call a loopback Ollama endpoint and return its bounded JSON response."""
+def ollama_json(endpoint: str, path: str, body: dict | None = None, *, timeout: float = 5) -> dict:
+    """Call a loopback Ollama endpoint and return its bounded JSON response.
+
+    timeout is in seconds; an embedding request allows longer, since Ollama may first load the model.
+    """
     origin = local_endpoint(endpoint)
     request = Request(
         origin + path,
@@ -59,7 +66,7 @@ def ollama_json(endpoint: str, path: str, body: dict | None = None) -> dict:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with build_opener(ProxyHandler({}), _NoRedirect()).open(request, timeout=5) as response:
+        with build_opener(ProxyHandler({}), _NoRedirect()).open(request, timeout=timeout) as response:
             data = response.read(2 * 1024 * 1024 + 1)
         if len(data) > 2 * 1024 * 1024:
             raise ValueError

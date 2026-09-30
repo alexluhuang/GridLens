@@ -3,10 +3,12 @@
 GridLens is a local desktop application for GridPACK contingency analysis. A user sets up a project from
 PSS/E RAW and GridPACK XML files, runs GridPACK's contingency analysis (`ca.x`) in a Docker container, and
 reviews branch and transformer loading as tables and charts. An optional planning agent, Clarke, answers
-questions about the same projects and runs, and can set up and start studies, using a model that runs on the
-same machine.
+questions about the same projects and runs, can set up and start studies, including runs of edited copies of
+a case, and can search the user's reference documents, using a model that runs on the same machine.
 
-This document describes the `main` branch. It was last verified against commit `eee3511` on 2026-09-29.
+This document describes the `main` branch. It was last verified against commit `eee3511` on 2026-09-29, and
+updated on 2026-09-30 for four agent additions: sensitivity runs the agent can start, the topology tool, the
+reference document search, and time and token accounting.
 Update it in the same change as any change to a boundary, a process, a data store, or a dependency it
 describes, and re-verify it before each release. Where a fact cannot be established from the repository,
 this document says **Not evident from the repository**.
@@ -38,11 +40,14 @@ gridpack-workbench-dev/
 │   ├── gui/                      # PySide6 window, eight tabs, dialogs, QThread workers
 │   │   └── *_view_models.py      # Qt-free form logic, shared with the agent tools
 │   ├── core/                     # Settings, projects, validation, run manifests, sensitivity runs
-│   ├── psse/                     # PSS/E RAW record layouts, reader, byte-preserving patcher
+│   ├── psse/                     # PSS/E RAW record layouts, reader, byte-preserving patcher,
+│   │                             #   change requests by bus and ID
 │   ├── runner/                   # Docker probes, docker-run command builder, GridPACK execution
-│   ├── analysis/                 # Output parsers, csv_flat aggregation, caches, event index, exports
+│   ├── analysis/                 # Output parsers, csv_flat aggregation, caches, event index, exports,
+│   │                             #   network topology of a RAW case
 │   ├── agent/                    # Clarke: adapters, route policy, sessions, controller, tools,
-│   │                             #   MCP server, background jobs, script sandbox, setup
+│   │                             #   MCP server, background jobs, script sandbox, setup,
+│   │                             #   reference documents, time and token accounting
 │   └── resources/gridlens.svg    # Application icon
 ├── tests/                        # pytest suite (46 test modules and conftest.py)
 │   └── data/                     # Synthetic three-bus RAW cases, versions 33, 34, and 35
@@ -73,8 +78,10 @@ gridpack-workbench-dev/
 | A new GridPACK output format | `analysis/table_schemas.py` for whitespace text tables, `analysis/csv_flat.py` for CSV flat output, dispatched from `parse_all_output_tables` in `analysis/parsers.py`. Bump `PARSER_VERSION` in `analysis/parser_models.py` so old caches are rebuilt. |
 | Loading and utilization calculations | `analysis/loading.py` and `analysis/utilization.py`. The charts and the agent tools both call them, so a change moves both. |
 | A chart in Branch or Transformer Analysis | `gui/analysis_tab.py` (`_render_control_area_chart`, `_render_voltage_group_chart`, `_render_line_chart`). |
-| A PSS/E record field used by sensitivity runs | `psse/layouts.py`; editing rules are in `psse/patch.py`. |
-| A new agent tool | A method decorated with `@tool` on `AnalysisTools` (`agent/tools.py`), `FileTools` (`agent/file_tools.py`), or `GridLensTools` (`agent/gridlens_tools.py`), added to the matching `*_TOOL_NAMES` tuple and, if it writes, to the write or destructive sets. The model's instructions are `SYSTEM_PROMPT` in `agent/prompt.py`. |
+| A PSS/E record field used by sensitivity runs | `psse/layouts.py`; editing rules are in `psse/patch.py`; how the agent names records and scales loads is in `psse/changes.py`. |
+| A network question the topology tool answers | `analysis/topology.py` (the graph, paths, islands, and splitting outages) and `agent/network_tools.py` (the tool). |
+| A document format the reference search reads, or how passages are cut and scored | `agent/documents.py`; bump `INDEX_VERSION` so cached text is read again. |
+| A new agent tool | A method decorated with `@tool` on `AnalysisTools` (`agent/tools.py`), `NetworkTools` (`agent/network_tools.py`), `FileTools` (`agent/file_tools.py`), `DocumentTools` (`agent/document_tools.py`), or `GridLensTools` (`agent/gridlens_tools.py`), added to the matching `*_TOOL_NAMES` tuple and, if it writes, to the write or destructive sets. The model's instructions are `SYSTEM_PROMPT` in `agent/prompt.py`. |
 | A new agent runtime | A module implementing the `RuntimeAdapter` protocol (`agent/runtime.py`) and one `ProviderDescriptor` row in `agent/providers.py`. Nothing else should change. |
 | The project folder layout | `core/project.py`. |
 | Styling | `gui/theme.py` (Fusion style and one application style sheet). |
@@ -87,7 +94,8 @@ gridpack-workbench-dev/
 Everything runs on one machine. GridLens starts network traffic in three cases only: a Docker image pull,
 which happens only when a run's pull policy is `missing` or `always` rather than the default `never`; a
 hosted agent runtime, which is disabled by policy; and the optional download of Hermes Agent, Ollama, and
-models, after the user agrees in the Set up Clarke window.
+models, after the user agrees in the Set up Clarke window. The reference document search calls Ollama only on
+loopback, for embeddings, and only when the user has installed an embedding model.
 
 ```mermaid
 flowchart LR
@@ -291,8 +299,10 @@ These decisions are visible in the code and in the repository's documents. No fo
    variable and stay disabled by policy. *Why:* CEII rules in `CONTRIBUTING.md` and the security notes.
 10. **Agent actions reuse the GUI's functions.** Tools that create projects, write XML, and start runs call
     the same `core/`, `runner/`, and view-model functions as the tabs, so an agent-started run gets the same
-    Docker command as a Run tab run given the same settings. Changes that replace inputs, rewrite an existing
-    XML, or stop running work are held until the user replies in a later turn. *Consequence:* the view
+    Docker command as a Run tab run given the same settings, and a sensitivity run the agent starts writes its
+    edited case through the same `core/sensitivity.py` functions as the Sensitivity Analysis tab. Changes that
+    replace inputs, rewrite an existing XML, or stop running work, and runs of an edited case, are held until
+    the user replies in a later turn. *Consequence:* the view
     models, though under `gui/`, are imported by
     non-GUI code and must stay free of Qt.
 11. **Long work outlives the turn.** Runs and analysis builds that the agent starts run as detached
@@ -304,7 +314,9 @@ These decisions are visible in the code and in the repository's documents. No fo
     label-checked, network-free container.
 13. **Sensitivity edits are surgical text patches.** `psse/patch.py` rewrites only the characters of edited
     fields, removed lines, and added lines, reading and writing Latin-1 so every other byte is kept.
-    *Why:* GridPACK's parsers are sensitive to the RAW text, and a reviewer can diff the edited case.
+    *Why:* GridPACK's parsers are sensitive to the RAW text, and a reviewer can diff the edited case. The
+    agent names records by bus and ID instead of by line; `psse/changes.py` turns its requests into the same
+    `patch.Edit` list the tab builds, so both paths write identical cases.
 14. **One self-contained bundle per architecture.** PyInstaller bundles Python, Qt, and RAPIDS into
     `/opt/gridlens`, wrapped in a `.deb`. *Why:* one `apt install` on DGX OS provides the application, its
     Python libraries including RAPIDS, and Docker as a package dependency.
@@ -331,7 +343,7 @@ These decisions are visible in the code and in the repository's documents. No fo
 | Sensitivity Analysis | `SensitivityTab`, `gui/sensitivity_tab.py` | Edit loads, generators, and branches of the RAW case in a table model (`RecordTable`), then ask the Run tab to run the edited case. |
 | Results | `ResultsTab`, `gui/results_tab.py` | List runs and their output files, open a run folder, export a run ZIP. Emits `run_selected`. |
 | Branch Analysis, Transformer Analysis | `AnalysisTab` (two instances), `gui/analysis_tab.py` | Build or load a run's analysis through `AnalysisService` (`AnalysisWorker`), and chart maximum loading by control area, by voltage group, and by facility. The instances differ only in the facility filter. |
-| Agent | `AgentTab`, `gui/agent_tab.py` | Clarke: session setup, conversation (`gui/agent_conversation.py`), Activity and Sources panes, saved conversations, Set up Clarke (`gui/agent_setup.py`), script review (`gui/script_review.py`). |
+| Agent | `AgentTab`, `gui/agent_tab.py` | Clarke: session setup, conversation (`gui/agent_conversation.py`), Activity and Sources panes, saved conversations, Set up Clarke (`gui/agent_setup.py`), script review (`gui/script_review.py`), and the Open reference documents button. Each finished turn's process card shows its time and tokens. |
 
 Signal wiring in `MainWindow`:
 
@@ -378,10 +390,15 @@ on the user's machine.
 - **Name:** `gridlens.psse`.
 - **Description:** `layouts.py` defines the load, generator, and non-transformer branch fields of PSS/E
   versions 33, 34, and 35, with PSS/E's defaults, placed where GridPACK's block parsers read them.
-  `parse.py` reads a case into `Case`, `Bus`, and `Record` objects. `patch.py` validates edits (`check`,
-  `warnings`) and applies them (`apply`), changing only the edited text.
+  `parse.py` reads a case into `Case`, `Bus`, and `Record` objects, and reads transformers
+  (`read_transformers`) and area names (`read_areas`) from the sections after the branch data. `patch.py`
+  validates edits (`check`, `warnings`) and applies them (`apply`), changing only the edited text.
+  `changes.py` resolves change requests that name a record by bus and ID, or select in-service loads or
+  generators by area (number or name), zone, or bus to scale by a factor or a MW change, into `patch.Edit`s;
+  it also totals in-service load and generation and says when the swing generator must supply a change.
 - **Technologies:** Python standard library.
-- **Deployment:** In-process, used by the Sensitivity tab and `core/sensitivity.py`.
+- **Deployment:** In-process, used by the Sensitivity tab, `core/sensitivity.py`, the agent's
+  `start_sensitivity_run`, and `analysis/topology.py`.
 
 #### 3.2.3 GridPACK runner
 
@@ -422,6 +439,10 @@ on the user's machine.
     fresh cache or writes `reports/interactive_tables/`.
   - `event_index.py`: builds and queries a bucketed Parquet index of the flat result (`scan_cases`,
     `group_cases`) for per-contingency drill-down.
+  - `topology.py`: the in-service AC network of a RAW case (branches, two-winding transformers, and
+    three-winding transformers through a star point), with neighbourhoods, shortest paths, islands, and the
+    single outages that split the network (bridges, by Tarjan's method). Pure Python; used by the agent's
+    `topology` tool.
   - `master.py` and `distributions.py`: branch master CSVs and distribution plots. No GUI or agent code
     calls them on `main`; they are reachable only from Python.
   - `summary.py`: `export_run_zip`.
@@ -466,13 +487,17 @@ text output it is derived from MW flows and the RAW branch rating (Rate C). Faci
     server allowed. Usable only when the hosted gate is set and the user acknowledges the remote route.
   - `codex.py`: probes Codex CLI and refuses to start a turn, because its tool surface cannot be limited to
     GridLens tools.
-  - `policy.py`: `local_endpoint`, `ollama_json`, `verify_model`, and the hosted gate.
+  - `policy.py`: `DEFAULT_ENDPOINT`, `local_endpoint`, `ollama_json`, `verify_model`, and the hosted gate.
   - `prompt.py`: `SYSTEM_PROMPT` and the per-turn prompt, including a bounded replay of earlier turns when
     a runtime cannot resume.
   - `session.py`: `SessionContext`, written when a conversation starts and changed only when
     `migrate_legacy_sessions` moves a session from an older version and rewrites its `directory` and
     `projects_dir`; `find_project`, `resolve_run`, and `scoped_path`, which rejects traversal and symlinks.
-  - `conversation_log.py`: writes `conversation.md` from the audit files after every turn.
+  - `conversation_log.py`: writes `conversation.md` from the audit files after every turn, with each
+    answer's time and tokens.
+  - `accounting.py`: each turn's time, time in GridLens tools and per tool, time in the model and runtime,
+    and token counts, computed from `transcript.jsonl`, `tool_calls.jsonl`, and `runtime_events.jsonl`. It
+    keeps no state. The Agent tab, the conversation log, and the evaluation scripts use it.
   - `process.py`: the minimal child environment and process-group termination shared by adapters.
 - **Technologies:** `subprocess`, `selectors`, `urllib` for the Ollama API.
 - **Deployment:** In the GUI process, on the `AgentWorker` thread. The runtime CLI is a child process per
@@ -481,7 +506,7 @@ text output it is derived from MW flows and the RAW branch rating (Rate C). Faci
 #### 3.2.7 GridLens tool service and MCP server
 
 - **Name:** `ToolService` (`agent/tools.py`) and the MCP server (`agent/mcp_server.py`).
-- **Description:** `ToolService` combines three tool classes over `ToolBase` (`agent/tool_base.py`), which
+- **Description:** `ToolService` combines five tool classes over `ToolBase` (`agent/tool_base.py`), which
   gives every call an ID (`T1`, `T2`, ...), checks its arguments, maps exceptions to stable error codes,
   pages rows by `offset` and `limit`, records sources, and writes paired `started` and `completed` records
   to `tool_calls.jsonl`. A result larger than 36,000 bytes is saved whole in the session's `results/`
@@ -491,15 +516,18 @@ text output it is derived from MW flows and the RAW branch rating (Rate C). Faci
   |---|---|---|
   | `rank`, `rank_groups` | `AnalysisTools` | Read. Sort or group facilities, contingencies, or indexed cases by one metric, with qualifiers and optional run comparison. The vocabulary is in `agent/objects.py`. |
   | `propose_analysis_script` | `AnalysisTools` | Write. Saves a script for review; never runs it. |
+  | `topology` | `NetworkTools` | Read. From a run's own case or the project's: buses or elements within some hops of a bus, the shortest path between two buses, islands, and the single outages that split the network with what they cut off and, for a run, GridPACK's status for each. |
+  | `search_documents` | `DocumentTools` | Read. Passages of the user's reference documents that match a query, with document, page, page label, and section; with no query, the list of documents. |
   | `list_files`, `read_file` | `FileTools` | Read. Any file in a GridLens project or the session folder, as table rows, RAW sections, JSON or XML fields, or text lines, with filters, joins, grouping, and document comparison. |
   | `list_projects`, `get_project`, `get_run_configuration`, `get_status` | `GridLensTools` | Read. `get_status` can wait up to 1,500 s for a job. |
   | `create_project`, `start_run`, `run_analysis` | `GridLensTools` | Write. `start_run` can override the saved image, pull policy, memory limit, and extra Docker arguments without confirmation. |
+  | `start_sensitivity_run` | `GridLensTools` | Write, held for confirmation. Edits loads, generators, and non-transformer branches of a copy of the project's case (set, add, remove, or scale), and runs it with the Run tab's saved settings. The first call returns the changed fields and the load and generation totals before and after; the run starts only when the same call is repeated with `confirm=True` after the user's next message. |
   | `add_project_inputs`, `configure_run`, `stop` | `GridLensTools` | Destructive. A call that would replace an input with different content, switch the project's XML, rewrite an existing XML, or stop a running target returns a preview and changes nothing; the change is made only when the same call is repeated with `confirm=True` after the user has sent another message (`pending_changes.json`). New inputs, a project's first XML, and targets that are no longer running are handled at once. |
 
   Only the MCP server holds destructive changes for confirmation (`ToolService(context,
   confirm_changes=True)`); `--agent-tool` and other direct callers act at once, as a GUI button does.
 
-  `mcp_server.py` serves these 15 tools with the MCP SDK's `FastMCP` over stdio, marking each tool's
+  `mcp_server.py` serves these 18 tools with the MCP SDK's `FastMCP` over stdio, marking each tool's
   read-only and destructive hints, and returns results as compact JSON. `tool_cli` exposes the same tools
   without a model, as `gridlens --agent-tool <context.json> <tool> --arguments '<json>'`.
 - **Technologies:** `mcp==1.30.0` (FastMCP), pyarrow for Parquet reads.
@@ -512,7 +540,8 @@ text output it is derived from MW flows and the RAW branch rating (Rate C). Faci
 - **Name:** `gridlens.agent.jobs`.
 - **Description:** `start_job` records a job in `<project>/agent/jobs/<job id>/job.json` and starts
   `gridlens --agent-job <folder>` in a new session. The worker (`run_job`) runs a GridPACK run with the
-  settings `start_run` recorded (the Run tab's saved settings plus any overrides) or an analysis build
+  settings `start_run` or `start_sensitivity_run` recorded (the Run tab's saved settings plus any overrides,
+  and for a sensitivity run the XML copy that names its edited case, `request.xml_file`) or an analysis build
   through `AnalysisService`, records progress and the outcome in
   `job.json`, and appends a readable history to `job.log`. A completed run job goes on to build the branch
   and transformer analysis. `read_job` reports a job whose worker died without recording a result as
@@ -563,11 +592,13 @@ disk, written with the Python standard library, pandas, or pyarrow.
 
 - **Type:** Folder tree.
 - **Location:** The `default_projects_dir` setting, by default `~/GridLensProjects/`.
-- **Purpose:** Everything a user creates: projects, their runs, and Clarke's conversations.
+- **Purpose:** Everything a user creates: projects, their runs, Clarke's conversations, and the reference
+  documents Clarke searches.
 
 ```text
 ~/GridLensProjects/
 ├── Clarke conversations/          # Agent sessions, one folder each (4.5)
+├── Reference documents/           # Standards and criteria Clarke searches, and their cache (4.7)
 └── <Project_Folder>/
     ├── project.json               # The project record
     ├── original_inputs/           # Copies of the input files, and generated XML
@@ -629,7 +660,21 @@ disk, written with the Python standard library, pandas, or pyarrow.
   `cancelled`, `message`, `progress`, `result`) and `job.log`. Jobs written by older versions keep their
   state in `status.json` and output in `output.log`, and are still read.
 
-### 4.7 Per-user caches, installed tools, and temporary files
+### 4.7 Reference documents
+
+- **Type:** Folder of documents the user adds, and a cache GridLens writes.
+- **Location:** `<projects folder>/Reference documents/`, created by **Open reference documents** in the
+  Agent tab. The cache is its `.gridlens-index/` subfolder, `0700`, with `0600` files.
+- **Purpose:** Standards, planning criteria, and manuals that `search_documents` reads: PDF (through pypdf),
+  plain text, Markdown, and HTML, at most 1,000 files of at most 256 MB each. Hidden files and subfolders
+  are skipped.
+- **Cache (`agent/documents.py`):** `manifest.json` maps each file's relative path, size, and modification
+  time to its SHA-256; `<sha256>.json` holds a file's title and the text and printed label of each page, or
+  why it could not be read; `<sha256>.<INDEX_VERSION>.<model>.f32` holds the unit embeddings of its passages
+  when an embedding model was used. A changed file is read again; a changed `INDEX_VERSION` (`2026.09.30`)
+  rereads every file. The cache holds the documents' text, so it is as sensitive as the documents.
+
+### 4.8 Per-user caches, installed tools, and temporary files
 
 | Path | Purpose |
 |---|---|
@@ -641,7 +686,7 @@ disk, written with the Python standard library, pandas, or pyarrow.
 | `/tmp/gridlens-dask` | Dask's local spill folder (`GRIDLENS_DASK_TEMP_DIR`) |
 | `/tmp/gridlens-matplotlib` | `MPLCONFIGDIR`, unless already set |
 
-### 4.8 Docker's image store
+### 4.9 Docker's image store
 
 Docker's local image store holds the GridPACK images and the script sandbox image. GridLens reads it
 (`docker image inspect`) and adds to it only when a run's pull policy is `missing` or `always`.
@@ -655,7 +700,8 @@ download sites.
 |---|---|---|---|
 | Docker Engine | Run GridPACK and the script sandbox | Docker CLI as a subprocess | `runner/`, `agent/scripts.py` |
 | GridPACK images (default `pnnl/gridpack:latest`) | The contingency analysis solver, `mpirun ... ca.x <xml>` | Container with the run's `work/` at `/app/workspace` | `runner/docker_command.py` |
-| Ollama | Local inference for Clarke; model inventory, checks, downloads | HTTP on loopback: `/api/version`, `/api/tags`, `/api/show`, `/api/pull`, `/api/delete`; Hermes uses the OpenAI-compatible `/v1` | `agent/policy.py`, `agent/setup.py`, `agent/hermes.py` |
+| Ollama | Local inference for Clarke; model inventory, checks, downloads; embeddings for the reference search | HTTP on loopback: `/api/version`, `/api/tags`, `/api/show`, `/api/pull`, `/api/delete`, `/api/embed`; Hermes uses the OpenAI-compatible `/v1` | `agent/policy.py`, `agent/setup.py`, `agent/hermes.py`, `agent/documents.py` |
+| pypdf | Text and page labels of reference PDFs | Python library, imported when a PDF is first read | `agent/documents.py` |
 | Hermes Agent 0.21.4 | The validated agent runtime | CLI subprocess, stream-json on stdout, prompt from a file | `agent/hermes.py` |
 | Claude Code 2.1.278 | Hosted runtime, disabled by policy | CLI subprocess in print mode, stream-json | `agent/claude_code.py` |
 | Codex CLI 0.155.1 | Hosted runtime, detection only | CLI probes (`--version`, `login status`) | `agent/codex.py` |
@@ -763,8 +809,13 @@ user exports it.
     `NO_PROXY` for the runtime, and cloud or remote models are rejected, rechecked every turn.
   - Runtime CLIs get a minimal environment (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TMPDIR`) and an
     isolated profile with no skills, plugins, memory, telemetry, updates, or lazy installs.
-  - Tools read only inside GridLens project folders and the session folder, refuse symlinks, and bound what
-    reaches the model. Log lines, labels, and script output are treated as data, not instructions.
+  - Tools read only inside GridLens project folders, the session folder, and the Reference documents folder,
+    refuse symlinks, and bound what reaches the model. Log lines, labels, document text, and script output are
+    treated as data, not instructions.
+  - `search_documents` embeds passages only through a local Ollama embedding model on loopback, through the
+    same `ollama_json` that refuses redirects and proxies; with none installed it uses BM25 alone.
+  - A sensitivity run the agent starts waits for the user's confirmation in a later turn, like a destructive
+    change, because it runs a network the user has not reviewed.
   - Session files are `0600` in `0700` folders.
 
 The two containers GridLens runs are confined differently, on purpose:
@@ -802,7 +853,7 @@ Known exposures that the design accepts or leaves to operators:
   python3 scripts/check_environment.py   # Python, architecture, Docker, and socket permissions
   ```
 
-  Dependencies: `PySide6>=6.6,<7` and `mcp==1.30.0` at run time. The `analysis` extra adds matplotlib,
+  Dependencies: `PySide6>=6.6,<7`, `mcp==1.30.0`, and `pypdf>=6,<7` at run time. The `analysis` extra adds matplotlib,
   pandas, pyarrow, Dask, `distributed`, and RAPIDS for CUDA 13 (`cudf-cu13`, `dask-cudf-cu13`, `dask-cuda`,
   `cupy-cuda13x`, `numba-cuda`, `cuda-toolkit`, `nvidia-nccl-cu13`). The `dev` extra adds pytest and
   PyInstaller. `requires-python` is `>=3.10`.
@@ -846,7 +897,9 @@ Known exposures that the design accepts or leaves to operators:
 - **Evaluation tooling:** `scripts/prepare_agent_evaluation.py`, `scripts/agent_question_references.py`,
   `scripts/evaluate_agent_questions.py`, and `scripts/render_agent_evaluation.py` prepare a projects
   folder, compute reference answers, ask local models a question set through Hermes, and render a scored
-  report. `scripts/benchmark_agent_index.py` compares event-index layouts.
+  report. The harness records each question's accounting (`agent/accounting.py`), and the renderer adds a
+  Tokens column and a time-and-tokens table per model, taking accounting from the session folders for
+  reports that did not record it. `scripts/benchmark_agent_index.py` compares event-index layouts.
 
 ## 9. Future Considerations / Roadmap
 
@@ -886,6 +939,15 @@ Known exposures that the design accepts or leaves to operators:
   generation folder, and sessions and jobs have no retention policy.
 - **Hosted adapters.** Claude Code is disabled by policy, and Codex CLI cannot be isolated to GridLens
   tools, so its adapter refuses every turn.
+- **Agent case edits cover loads, generators, and non-transformer branches.** Transformers, shunts, and
+  other records cannot be edited, as in the Sensitivity tab. Scaling does not rebalance generation; the
+  preview says how much the swing generator must supply.
+- **Topology is the in-service AC network only.** DC lines, FACTS devices, and system switching devices
+  (versions 34 and 35) do not join buses in it. On the Texas7k sample run, all 82 contingencies GridPACK
+  reported as ISLANDED are among the 1,061 splitting outages it finds; GridPACK solved most of the others,
+  which cut off a single bus, without that bus.
+- **Document sections are a best guess.** Headings are found by pattern; pages are exact. A scanned PDF
+  without a text layer cannot be read.
 
 ### 9.2 Unclear boundaries
 
@@ -949,6 +1011,10 @@ The repository contains proposals, not implemented designs, for the next phase:
   for large results.
 - **Event index:** The bucketed Parquet copy of a flat result used for per-contingency drill-down.
 - **Clarke:** The planning agent in the Agent tab.
+- **Reference documents:** The standards, planning criteria, and manuals a user keeps in the projects
+  folder for Clarke's `search_documents`.
+- **Splitting outage:** A single branch or transformer outage after which some buses have no in-service
+  element joining them to the rest of the network (a bridge of the network's graph).
 - **Hermes Agent:** The agent CLI that drives the model and calls GridLens tools.
 - **Ollama:** The local inference server that serves the model.
 - **MCP:** Model Context Protocol, how the runtime calls GridLens tools.

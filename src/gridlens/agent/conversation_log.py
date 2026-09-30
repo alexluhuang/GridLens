@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 
+from gridlens.agent import accounting
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import CONVERSATION_LOG, FOCUS_FILE, scoped_path
 
@@ -124,6 +125,8 @@ def _header(directory: Path, notes: list[str]) -> list[str]:
     if manifest.get("runtime_version"):
         runtime += f" {manifest['runtime_version']}"
     runs = ", ".join(str(run) for run in focus.get("run_ids") or []) or "none"
+    spent = accounting.totals(accounting.turn_accounting(directory))
+    used = f"{spent['tokens']['total']:,} tokens" if spent["tokens"] else "no token counts reported"
     lines = [
         "# Clarke conversation",
         "",
@@ -133,6 +136,8 @@ def _header(directory: Path, notes: list[str]) -> list[str]:
         f"- Project in focus: {focus.get('project_root') or 'none'}",
         f"- Runs in focus: {runs}",
         f"- Folder: {directory}",
+        f"- Time and tokens: {spent['turns']} turn{'s' if spent['turns'] != 1 else ''}, {accounting.duration(spent['seconds'])} "
+        f"({accounting.duration(spent['tool_seconds'])} in GridLens tools), {used}",
         "",
         "This file is written by GridLens from the audit files in this folder. It contains your questions, the",
         "answers, and grid data read from your projects, so treat it as sensitive.",
@@ -187,12 +192,17 @@ def _jobs(data: dict) -> list[dict]:
 def _entries(directory: Path, notes: list[str]) -> list[tuple[str, int, list[str]]]:
     """Return every message, tool call, script run, and error of the conversation as (time, order, lines)."""
     entries = []
+    # Each answer ends with how long its turn took and how many tokens the model used.
+    spent = {turn["ended_at"]: accounting.sentence(turn) for turn in accounting.turn_accounting(directory) if turn["outcome"] == "answered"}
     for index, item in enumerate(_read_lines(directory, "transcript.jsonl", notes)):
         role = item.get("role")
         text = str(item.get("text", ""))
         heading = "## You" if role == "user" else "## Clarke" if role == "assistant" else f"## {str(role).title()}"
         body = _block(text) if role == "user" else text
-        entries.append((str(item.get("timestamp", "")), 0 if role == "user" else 3, [f"{heading} · {_local_time(item.get('timestamp'))}", "", body, ""]))
+        block = [f"{heading} · {_local_time(item.get('timestamp'))}", "", body, ""]
+        if role == "assistant" and item.get("timestamp") in spent:
+            block += [f"*{spent[item['timestamp']]}*", ""]
+        entries.append((str(item.get("timestamp", "")), 0 if role == "user" else 3, block))
     started: dict[str, dict] = {}
     completed: list[dict] = []
     for row in _read_lines(directory, "tool_calls.jsonl", notes):

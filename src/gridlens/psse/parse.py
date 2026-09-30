@@ -133,6 +133,83 @@ def parse_case(text: str) -> Case:
     return Case(version, sbase, lines, buses, records, ends)
 
 
+@dataclass(frozen=True)
+class Transformer:
+    """A transformer record: its buses, circuit, status, and name.
+
+    k is 0 for a two-winding transformer. status is 0 out of service and 1 in service; a three-winding
+    transformer also takes 2, 3, or 4 for only winding 2, 3, or 1 out of service.
+    """
+
+    line: int
+    i: int
+    j: int
+    k: int
+    circuit: str
+    status: str
+    name: str
+
+
+# The sections after the branch data that GridLens reads by position, up to the area data.
+_AFTER_BRANCH = {
+    33: ("transformer", "area"),
+    34: ("system switching device", "transformer", "area"),
+    35: ("system switching device", "transformer", "area"),
+}
+
+
+def later_sections(case: Case) -> dict[str, tuple[int, int]]:
+    """Return where the sections from the branch data's end to the area data's end start and end.
+
+    Each value is (index of the section's first line, index of the line that ends it). Raises ValueError
+    when the case ends before its area data does.
+    """
+    found = {}
+    start = case.ends["branch"] + 1
+    for section in _AFTER_BRANCH[case.version]:
+        end = _section_end(case.lines, start, section)
+        found[section] = (start, end)
+        start = end + 1
+    return found
+
+
+def read_transformers(case: Case) -> list[Transformer]:
+    """Return the case's transformers, from the first line of each record.
+
+    A record has four lines, or five for a three-winding transformer (K not 0). I, J, K, CKT, NAME, and
+    STAT are the 1st to 4th, 11th, and 12th fields of the first line in versions 33, 34, and 35.
+    """
+    start, end = later_sections(case)["transformer"]
+    lines = [index for index in range(start, end) if not _is_comment(case.lines[index])]
+    transformers = []
+    position = 0
+    while position < len(lines):
+        index = lines[position]
+        values = [*_values(case.lines[index]), *[""] * 12]
+        buses = [bus_number(text) for text in values[:3]]
+        if buses[0] is None or buses[1] is None:
+            position += 1
+            continue
+        k = buses[2] or 0
+        transformers.append(Transformer(index, buses[0], buses[1], k, values[3] or "1", values[11] or "1", values[10]))
+        position += 5 if k else 4
+    return transformers
+
+
+def read_areas(case: Case) -> dict[int, str]:
+    """Return the name of each area in the case's area data, by area number."""
+    start, end = later_sections(case)["area"]
+    areas = {}
+    for index in range(start, end):
+        if _is_comment(case.lines[index]):
+            continue
+        values = _values(case.lines[index])
+        number = bus_number(values[0]) if values else None
+        if number is not None:
+            areas[number] = values[4] if len(values) > 4 else ""
+    return areas
+
+
 def spans(line: str) -> list[tuple[int, int]]:
     """Return where each field of a data line starts and ends.
 

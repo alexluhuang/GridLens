@@ -763,7 +763,7 @@ def test_all_tool_names_have_a_direct_result_contract(agent_context):
         "propose_analysis_script": ("run_a", "Count rows", "print(1)"),
         "list_files": (), "read_file": ("runs/run_a/work/case_flat.csv",),
         "list_projects": (), "get_project": (), "create_project": ("Other", []), "add_project_inputs": ([],),
-        "get_run_configuration": (), "configure_run": ({},), "start_run": (), "get_status": (),
+        "get_run_configuration": (), "configure_run": ({},), "start_run": (), "start_sensitivity_run": ([],), "get_status": (), "topology": ("islands",), "search_documents": (),
         "stop": ("", "run_x"), "run_analysis": ("missing",),
     }
     assert set(arguments) == set(TOOL_NAMES)

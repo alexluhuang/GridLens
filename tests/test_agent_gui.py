@@ -389,3 +389,15 @@ def test_review_button_counts_proposed_scripts(agent_context):
     assert tab.shutdown()
     tab.deleteLater()
     app.processEvents()
+
+
+def test_reference_documents_button_opens_the_folder_clarke_searches(tmp_path, monkeypatch):
+    """The button creates <projects folder>/Reference documents if needed and opens it."""
+    app = QApplication.instance() or QApplication([])
+    opened = []
+    import gridlens.gui.agent_tab as agent_tab
+    monkeypatch.setattr(agent_tab.QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()))
+    tab = AgentTab(AppSettings(default_projects_dir=tmp_path / "projects"))
+    tab.documents_button.click()
+    folder = tmp_path / "projects" / "Reference documents"
+    assert folder.is_dir() and opened == [str(folder)]

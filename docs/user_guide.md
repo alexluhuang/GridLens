@@ -102,6 +102,10 @@ zero reactance. It warns before it runs a generator that is in service at a load
 GridPACK holds such a generator at its PG and QG instead of letting it regulate voltage. A column heading also
 says when GridPACK does not read a field, such as a load's owner or distributed generation.
 
+Clarke, in the **Agent** tab, can make the same kinds of edits when you ask in plain language, such as
+"increase the load in Coast by 5% and re-run". It shows you every changed field and the load and generation
+totals first, and runs the edited case only after you confirm. See [Clarke, the planning agent](clarke.md).
+
 A sensitivity run's `work/` folder holds three more files than a normal run:
 
 ```text
@@ -152,6 +156,8 @@ no separate GUI view yet.
 ## Ask Clarke, the planning agent
 
 The **Agent** tab is Clarke, a planning agent you talk to in plain language. It answers questions about any
-project file, and it can set up projects, configure and start runs, and build analyses for you. Clarke runs
+project file, and it can set up projects, configure and start runs, run edited copies of a case after you
+confirm the edits, say how the network is connected, search the standards you keep in the Reference
+documents folder, and build analyses for you. Clarke runs
 entirely on your computer; the first time you open the tab, GridLens offers to install what it needs. See
 [Clarke, the planning agent](clarke.md) for how to set it up, ask questions, and read its answers.

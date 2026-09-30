@@ -97,6 +97,26 @@ def test_gridpack_job_records_progress_and_outcome(agent_project, monkeypatch):
     assert "Failed: RuntimeError: docker is not running" in log and "Traceback" in log
 
 
+def test_a_sensitivity_run_job_runs_the_xml_that_names_the_edited_case(agent_project, monkeypatch):
+    """start_sensitivity_run records the XML copy it wrote; the worker runs that XML instead of the project's."""
+    xml = agent_project / "input.xml"
+    xml.write_text("<Configuration/>")
+    (agent_project / "project.json").unlink()
+    Project("Synthetic Project", agent_project).save([xml], "input.xml")
+    form = {"image": "pnnl/gridpack:test", "executable": "ca.x", "mpi_processes": 1, "pull_policy": "never", "network_disabled": True, "use_platform_flag": True, "use_host_user": True, "memory_limit": "", "extra_docker_args": ""}
+    folder = _job(agent_project, "gridpack_run", {"form": form, "notes": "Sensitivity run", "xml_file": "input_sensitivity.xml"})
+    seen = []
+
+    def fake_run(request, log_callback=None):
+        seen.append(request)
+        return GridpackRunResult(1, request.run_dir, request.run_dir / "logs/run.log", request.run_dir / "work/terminal.log", request.run_dir / "status.json", request.run_dir / "manifest.json")
+
+    import gridlens.runner.gridpack_runner as runner
+    monkeypatch.setattr(runner, "run_gridpack_case", fake_run)
+    jobs.run_job(folder)
+    assert (seen[0].xml_filename, seen[0].notes) == ("input_sensitivity.xml", "Sensitivity run")
+
+
 def test_lost_workers_are_reported_and_cancelling_stops_the_worker(agent_project, monkeypatch):
     """A worker that vanished is failed, not running forever, and cancel_job ends a live worker's group."""
     gone = subprocess.Popen([sys.executable, "-c", "pass"])

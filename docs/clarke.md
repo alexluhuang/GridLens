@@ -9,7 +9,14 @@ Clarke is the planning agent in the **Agent** tab. You talk to it in plain langu
 - set up and run studies, such as "create a project from /data/case.raw, run a full branch N-1, and list
   the lines above 100%". It creates the project, writes the XML, starts the GridPACK run, waits for it,
   and builds the branch and transformer analysis, using the same functions as the other tabs;
-- compare runs, such as "compare this run with the one before it", by naming both in the question.
+- compare runs, such as "compare this run with the one before it", by naming both in the question;
+- run what-if studies on an edited copy of the case, such as "take the line from 110045 to 110118 circuit 2
+  out of service and re-run" or "increase the load in Coast by 5% and re-run". It shows you the edits first,
+  and runs them only after you confirm;
+- say how the network is connected, such as "which buses are within two lines of LOUISE 1 1", "what is the
+  path between these two buses", or "which single outages island part of the system";
+- quote the standards and planning criteria you keep in the **Reference documents** folder, such as "what
+  does TPL-001 say about P1 events", citing the document, section, and page.
 
 Clarke is not the source of numerical truth. Every number in an answer comes from a GridLens function, and
 the answer cites the call that produced it, such as `[T1]`. Open **Full activity and sources** to inspect
@@ -108,12 +115,24 @@ build the branch and transformer analysis once GridPACK finishes. For an older r
 it, or use **Generate Graphs** in the Branch or Transformer Analysis tab. Questions about single
 contingencies also need the drill-down index; ask Clarke to build it.
 
-Before it stops a run, replaces an input file, or changes a project's XML, Clarke shows you what would change
-and asks you to confirm, even when you asked for the change. GridLens enforces this: the first request only
+Clarke can also run GridPACK on an edited copy of the project's RAW case, as the **Sensitivity Analysis**
+tab does. It can change fields of loads, generators, and non-transformer branches (for example, take a
+branch out of service or set a generator's output), add or remove one, or scale the load of every
+in-service load in an area, a zone, or at a bus, by a percentage or by a number of MW. The project's own case
+never changes; the run's `work/` folder holds the edited case and `sensitivity_changes.json`, as for a run
+from the tab. Clarke cannot edit transformers, and it does not rebalance generation: when load changes more
+than generation, the swing generator supplies the difference, and the preview says how much, since a swing
+generator pushed past its limits makes contingencies fail.
+
+Before it stops a run, replaces an input file, changes a project's XML, or runs an edited case, Clarke shows
+you what would change and asks you to confirm, even when you asked for the change. GridLens enforces this: the first request only
 returns a preview, such as each setting's old and new value and the XML diff, and the change is made only if
 you reply to confirm. The answer ends with a note while a change is waiting for you.
 
 ## Read the answer
+
+Each finished turn's **Process** card shows how long the turn took and how many tokens the model used, such
+as "Process · 3 tools · 1 min 28 s · 106,584 tokens".
 
 The **Activity** pane shows which tools ran and what each call asked for. The **Sources** pane shows each
 call, its filters, error or warnings, how many rows it returned, whether more rows remain, and the files it
@@ -147,6 +166,30 @@ utilization, in percentage points of line rating. It is not available transfer c
 or load-serving capacity, and calculating any of those needs a separate study. A facility with no positive
 rating in the case has unknown loading, even though GridPACK reports it as 0%.
 
+## Reference documents
+
+Clarke can search the standards, planning criteria, and manuals you keep in the **Reference documents**
+folder of your projects folder, `~/GridLensProjects/Reference documents/` by default. Click **Open reference
+documents** in **Session setup** to open it, creating it if needed, and copy PDF, plain text, Markdown, or
+HTML files into it. Subfolders are searched too.
+
+Ask about them in plain language, such as "which rating does the planning criteria document apply after a
+contingency?". Clarke cites each passage by document, section, and page, with the tool call that found it.
+The page is the PDF's page, with the number printed on it when the PDF records one. The section is the
+nearest heading above the passage, which GridLens finds by pattern, so check it against the page. A
+document says what is required; Clarke does not state that a study complies with it.
+
+GridLens reads each file once and keeps its text in the folder's `.gridlens-index/` subfolder until the file
+changes. A scanned PDF that has no text layer cannot be read; the answer says which files were skipped.
+
+Searches match the words in your question. If you install an embedding model in Ollama, such as
+`ollama pull embeddinggemma`, they also match passages that say the same thing in other words. GridLens uses
+the model through Ollama on this machine, and the first search after adding documents takes longer while it
+computes their embeddings.
+
+The documents and the cache stay on this machine. The cache holds the documents' text, so treat it as you
+treat the documents.
+
 ## Review a proposed script
 
 When no built-in function fits your question, Clarke can propose a Python script. It only saves the script.
@@ -166,7 +209,8 @@ GridLens records the output as untrusted, because no GridLens function has check
 Each conversation has a folder in `<projects folder>/Clarke conversations/`, named by the time it started.
 Click **Open session folder** to open it. `conversation.md` is the complete record, in order: each question,
 each tool call with its arguments and full result, each background job started, each error, and each
-answer. GridLens rewrites it after every turn. The other files are the machine-readable audit it is written
+answer, with how long its turn took, how much of that was in GridLens tools, and how many tokens the model
+read and wrote. GridLens rewrites it after every turn. The other files are the machine-readable audit it is written
 from:
 
 - `transcript.jsonl`: each question and answer;

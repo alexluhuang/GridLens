@@ -1,22 +1,51 @@
 # GridLens compared with the literature on LLM agents for power systems (2026-09-30)
 
-This note compares GridLens, and in particular its planning agent Clarke, with three papers the user supplied
+This note compares GridLens, and in particular its planning agent Clarke, with four papers the user supplied
 and with other published work found by searching journals, conference proceedings, and arXiv. For each of the
-three papers it answers four questions:
+four papers it answers four questions:
 
 1. What GridLens and the paper have in common.
 2. What GridLens could take from the paper.
 3. Where GridLens goes beyond the paper.
 4. What further work would make GridLens a significant contribution relative to the paper.
 
-Section 4 covers the other literature more briefly. Section 5 draws the per-paper findings into a research
-agenda. Section 6 lists the weaknesses in GridLens's own evidence, which any paper about it would have to
-address.
+Section 4.1 compares AgentiGrid in the same detail as the first three papers; Sections 4.2 to 4.7 cover
+the other literature more briefly. Section 5 draws the per-paper findings into a research agenda. Section 6
+lists the weaknesses in GridLens's own evidence, which any paper about it would have to address.
 
 GridLens facts are taken from `main` at `6c39141`, from `docs/ARCHITECTURE.md`, `docs/clarke.md`,
 `src/gridlens/agent/`, and the evaluation reports in `docs/plans/`. It extends
 `docs/comparison_with_literature.md` (2026-09-22), which covered GridMind alone and predates the agent's
 ability to create projects and start runs.
+
+The AgentiGrid comparison uses the supplied PDF of arXiv:2609.04544v1, dated 2026-09-03, especially
+Sections II to IV and Table III. The working tree also contains new `topology` and `start_sensitivity_run`
+tools, inspected for this addition. They are distinguished below from the `6c39141` baseline described in
+Section 0; their presence does not establish evaluation results for those capabilities.
+
+## Status of the recommendations
+
+Implemented on 2026-09-30, after this note was written; the comparison below describes `6c39141`, before them:
+
+- **§1.2 item 3, the RAW patcher for the agent.** `start_sensitivity_run` (`agent/gridlens_tools.py`, with
+  `psse/changes.py`) sets, adds, removes, or scales loads, generators, and non-transformer branches of a copy
+  of the project's case, by bus and ID or by area (number or name), zone, or bus. Its first call previews the
+  edits and the load and generation totals, names the swing generator that must supply an unbalanced change,
+  and starts nothing; the run starts after the user's next message confirms it.
+- **§2.2 item 3, document retrieval with section citations.** `search_documents` (`agent/documents.py`,
+  `agent/document_tools.py`) searches PDF, text, Markdown, and HTML files in `<projects folder>/Reference
+  documents/` and returns passages with document, page, printed page label, and section. Scoring is BM25,
+  blended with similarity from a local Ollama embedding model when one is installed. PDFs are read with pypdf,
+  a new runtime dependency.
+- **§2.2 item 4, topology queries.** `topology` (`analysis/topology.py`, `agent/network_tools.py`) answers
+  buses and elements within some hops of a bus, the shortest path between buses, islands, and the single
+  outages that split the network, with GridPACK's status for each in a run. On the Texas7k sample run it
+  finds 1,061 splitting outages, among them all 82 that GridPACK reported as ISLANDED.
+- **§3.2 item 7, latency and token accounting.** `agent/accounting.py` computes each turn's time, time in
+  GridLens tools, and tokens from the session's audit files. The Agent tab's process cards, `conversation.md`,
+  the evaluation harness, and the evaluation renderer show them. Rendered retroactively, the gemma4:31b
+  evaluation of 2026-09-23 spent 2 min 30 s of its 3 h 13 min in GridLens tools and the rest in the model,
+  which read 2.6 million prompt tokens and wrote 80,798.
 
 ## 0. GridLens facts the comparison relies on
 
@@ -54,7 +83,8 @@ ability to create projects and start runs.
   unselected run and refusal to answer from a stale cache. A 30-question (32-prompt) planning evaluation on
   Texas7k, with reference facts computed independently of the agent, scored gemma4:31b at 11 pass, 16
   partial, and 5 fail; after tool fixes, the 13 affected prompts went from 3/6/4 to 7/5/1. Each prompt was
-  asked once, and a person scored the answers.
+  asked once, and Claude scored the answers against the rubric and the reference facts. The repository has no
+  evaluation report for the preferred model, `nemotron-3.5-lightning`.
 
 ## 1. PowerAgent (Zhang and Xie, IEEE Power and Energy Magazine, 2025)
 
@@ -363,14 +393,421 @@ a different set and 165% maximum overload instead of 137%.
   (seasonal cases, a load-growth series, a before-and-after upgrade pair) with durable lineage between runs
   would address the planning workflow, which GridMind's operational framing does not.
 
-## 4. Other literature
+## 4. AgentiGrid and other literature
 
-*(Section filled in from the literature search; see below.)*
+### 4.1 AgentiGrid (Konjicija and Peles, arXiv 2026)
+
+> S. Konjicija and S. Peles, "Integrating Agentic Artificial Intelligence with High-Performance Computing
+> for Grid Planning," arXiv:2609.04544v1 [eess.SY], Sep. 2026.
+> [Paper and version record](https://arxiv.org/abs/2609.04544v1).
+
+**What it is.** A University of Sarajevo and Oak Ridge National Laboratory framework that connects an
+iterative LLM search to ExaGO. Three layers separate the Agent Loop Controller, the Analysis Orchestrator,
+and the solver executables. Its unified interface supports PFLOW, OPFLOW, DCOPFLOW, TCOPFLOW, SCOPFLOW,
+and SOPFLOW: AC power flow, AC/DC OPF, multiperiod OPF, security-constrained OPF, and stochastic OPF.
+The LLM emits structured commands; a deterministic engine checks them against the network and applies
+them to timestamped working copies of a MATPOWER case. Commands cover loads, generation, branch status
+and ratings, costs, voltage bounds, transformer taps, shunts, phase shifts, and time or wind profiles.
+Application-specific parsers retain full structured results and send compact 15–30-line summaries to the
+LLM. A journal records commands, feasibility, violations, objectives, and operator directives.
+
+Operators can steer a search with augment or replace directives, and pause or resume at iteration
+boundaries. For PFLOW optimization, one `explore` action proposes 2–8 variants, which run concurrently
+through a thread pool; Pareto filtering compares them and a `select` action chooses the next state.
+This differs from parallelism inside ExaGO's solver applications. A final LLM call classifies the goal
+and chooses the best iteration: lowest feasible cost, a feasibility boundary, constraint satisfaction,
+or informative parameter exploration. The Streamlit GUI and PDF report share Plotly chart builders.
+The backend interface supports OpenAI, Anthropic, local Ollama, and Ollama Cloud.
+
+**What was measured.** Table III reports twelve searches: three tasks on ACTIVSg200 with four backends
+(Claude Sonnet 4.6, GPT-5.4, GLM-5.1, and DeepSeek-V4-Pro; the last two through Ollama Cloud), temperature
+0.3, and a 20-iteration cap. The synthetic case has 200 buses, 246 branches, and 49 generators, 40 in
+service; experiments ran on a 14-core workstation with 32 GB RAM. Search times span 12–580 seconds and
+token counts 18,585–197,354. All searches completed without fatal JSON parsing failures, but task validity
+was uneven. In PFLOW, two models obtained apparent cost reductions by changing unit commitment despite
+a dispatch-only instruction. All models found the same economically critical SCOPFLOW outage, but one
+missed outage 29→30 and all four missed a second infeasible outage, 15→16. SOPFLOW assessed its scenarios
+in three iterations for every model, although reports differed in how many sensitive buses they named.
+The abstract's claim of near-perfect reliability therefore cannot be read as complete dangerous-case
+discovery or adherence to the allowed engineering action. No repeated-trial reliability distribution,
+large-network scaling curve, or controlled serial-versus-parallel speedup is reported.
+
+#### 4.1.1 What GridLens shares with AgentiGrid
+
+- **An agent orchestrating an HPC power-system solver.** AgentiGrid uses ExaGO; GridLens uses GridPACK's
+  MPI contingency analysis. Both place physical calculations in engineering software and return summaries
+  to the LLM. Agent-plus-HPC integration is already demonstrated by AgentiGrid.
+- **Separate model, orchestration, and solver responsibilities.** Clarke's runtime/controller, tool and
+  job services, and GridPACK runner play similar roles, with MCP as GridLens's tool protocol.
+- **Structured, validated actions and copied cases.** Both validate requests in code and preserve the
+  source case. GridLens's Sensitivity tab already makes edited copies; the working tree now exposes this
+  through `start_sensitivity_run`, with field and total-change previews.
+- **Compact model inputs backed by fuller results.** AgentiGrid separates full parsed outputs from prompt
+  summaries. GridLens separates raw results, caches, and a drill-down index from paged tool observations.
+- **Iteration records and operator participation.** AgentiGrid records search steps and steering history;
+  GridLens records tool calls, conversations, run inputs, and jobs, and has confirmation gates.
+- **A backend abstraction.** Both separate the agent from its model provider. AgentiGrid's local Ollama
+  support overlaps GridLens's local-model approach, although its reported experiments use hosted services.
+
+#### 4.1.2 What GridLens could take from AgentiGrid
+
+1. **A study journal with a declared objective.** Extend run provenance into a persisted table of parent
+   case, requested edits, approvals, solver status, coverage, and study metrics. Define the goal type and
+   comparison rule before a study starts. A load-growth boundary should select the highest validated
+   feasible load, rather than the lowest loading or cost. Compute that selection in code and expose it to
+   Clarke; AgentiGrid's final LLM classification and cost fallback are useful ideas to strengthen.
+2. **Batch scenario execution under one approved plan.** Let an engineer specify a load-growth series or
+   outage set and approve its bounded edits once. Run independent variants under explicit CPU, memory,
+   MPI, and solver-call budgets, and return one comparison table. AgentiGrid illustrates how batching can
+   amortize LLM calls. GridLens should measure this benefit because a full Texas7k N-1 is much more expensive
+   than the paper's approximately 0.02-second PFLOW simulation; extra concurrent MPI jobs can contend.
+3. **Steering at safe study boundaries.** Add persisted pause/resume and augment/replace directives between
+   scenario jobs, with a new goal version and explicit reapproval when the permitted action space changes.
+   A job surviving a turn is useful infrastructure, but does not itself implement mid-search steering.
+4. **Separate syntactic validity from task authorization.** AgentiGrid's modification engine rejected
+   invalid network commands, yet models still changed unit commitment in a dispatch-only task. Give each
+   GridLens study a machine-readable list of allowed edits and locked fields, including generator status,
+   ratings, and voltage limits. A valid RAW edit can still change the problem the engineer asked to solve.
+5. **Coverage and feasibility before economic ranking.** Require a complete status inventory of the declared
+   contingency set before naming its most critical cases. Keep nonconvergence, islanding, and validated
+   constraint violations visible alongside cost or loading rankings. An infeasible SCOPFLOW outcome is not
+   interchangeable with a GridPACK power-flow failure, but the paper's missed outages illustrate how a
+   top-loading screen can omit cases that need investigation.
+6. **Reports and cost accounting tied to study records.** Reuse chart builders for GUI and exported reports,
+   include the baseline, selected case, coverage, and steering history, and report tokens and wall time.
+   Score whether Clarke's final explanation preserves the objective and the full set of relevant findings.
+
+#### 4.1.3 Where GridLens goes beyond AgentiGrid
+
+- **The demonstrated contingency-result workload.** GridLens's Texas7k example has 8,891 recorded cases
+  and 8.7 GB of flat results, with GPU reductions and a Parquet index. AgentiGrid's reported experiments
+  use 200 buses and its conclusion identifies file storage and retrieval at scale as future work. This is
+  evidence of a larger data workload, not a measured speedup over ExaGO or proof of better search quality.
+- **Population queries with stated coverage.** GridLens computes rankings and group statistics over the
+  full selected population, reports denominators and paging, and preserves complete oversized results.
+  AgentiGrid has full parsed results and Pareto comparisons, but reports no comparable evaluation of
+  arbitrary aggregate questions over multi-gigabyte contingency output.
+- **Call-level evidence linked to reproducible runs.** GridLens has audited call IDs, citation checks,
+  input hashes, exact solver commands, and versioned caches. AgentiGrid's journal and per-iteration logs
+  are real provenance features; the supplied paper does not describe checking report claims against
+  call-level evidence, hashed input manifests, or stale-cache refusal. GridLens's citation existence check
+  still does not prove that a cited result supports a sentence (Section 6).
+- **Enforced inference locality and reviewed code execution.** AgentiGrid can use local Ollama, so local
+  inference itself is shared. GridLens additionally rejects nonlocal inference routes and places approved
+  generated code in a read-only, network-free sandbox. The paper describes no comparable enforced locality
+  policy, script-review mechanism, or confirmation gate for each consequential modification.
+- **Durable execution and industry inputs.** GridLens's detached jobs survive the conversation and app,
+  and its case path supports PSS/E RAW versions 33–35. AgentiGrid describes MATPOWER working copies,
+  subprocess timeouts, an in-memory journal, and pause/resume within the active search; it does not claim
+  recovery of an interrupted study after application exit.
+
+AgentiGrid goes further in solver breadth, automatic scenario exploration, Pareto comparison, live steering,
+and integrated PDF reporting. GridLens's contingency analysis does not establish ACOPF, SCOPF, stochastic
+or multiperiod optimization capability, and its larger case does not make those capabilities equivalent.
+
+#### 4.1.4 How GridLens could become a contribution relative to AgentiGrid
+
+- **Measure complete evidence-backed contingency reporting.** Use a declared full outage set, including
+  islanding and failed solutions, and independent references. Compare full deterministic status inventory
+  with loading-first screening and compact summaries. Measure dangerous-case recall, unsupported safe
+  claims, coverage disclosure, and tokens; distinguish investigated solver failures from proven physical
+  infeasibility. This tests the failure behind AgentiGrid's missed 15→16 outage at a larger study scale.
+- **Demonstrate task-preserving scenario studies.** A controlled dispatch-only task should reject status
+  changes, while a separately authorized unit-commitment task should permit them. Test locked ratings and
+  voltage bounds as well. Evaluate allowed edits, physical outcomes, and operator consent separately so an
+  apparent improvement cannot receive credit for relaxing the problem. Repeat across models and prompts.
+- **Quantify the analysis architecture.** On common cases and comparable tasks, measure solver time,
+  cache/index build time, query latency, LLM latency, memory, and tokens. Compare serial scenarios with
+  budgeted batches, and CPU reductions with GPU reductions. Include scripted workflows and summary-only
+  baselines; do not attribute GridPACK's solver parallelism to the agent. This would answer AgentiGrid's
+  stated open question about scale and storage with a reproducible experiment.
+- **Evaluate durable, supervised studies.** Persist goals, approved edits, parent cases, and job state;
+  test pause, changed directives, application restart, and resumed reporting. Measure whether the resumed
+  agent preserves the objective and consent, in addition to whether the solver finishes. Combined with
+  local models and traceable aggregate claims, this is a concrete research question beyond a solver wrapper.
+
+### 4.2 Other literature: the closest analogs
+
+The search covered IEEE, Elsevier, ACM, Nature-family, and NeurIPS/ICLR/ACL venues and arXiv, from 2023 to
+September 2026. Each entry below was checked against its abstract or DOI record; those marked *(partial)*
+were checked for metadata only. Many are 2026 preprints without peer review.
+
+### 4.1 The closest analogs
+
+**Mylonas, Foti, and Varvarigos, "A Governance-Aware Large Language Model Orchestrated Agentic Digital Twin
+for Transmission System Operator Control Room Decision Support," arXiv:2609.22476, Sep. 2026.** This is the
+work closest to GridLens. The LLM may only select and fill in whitelisted tools. A side-effect action returns a
+single-use approval token bound to the user, the session, the tool, and its validated arguments; the operator
+approves through a separate endpoint, not the chat, and approval and execution are logged separately. Backend
+results reach the model as typed facts (`F1`, `F2`, ...) that bind a value to its variable, unit, and time; the
+model cites numbers only by fact ID, the governance layer renders them, and it withholds any answer that
+contains a literal number (4 of 331 answers, 1.2%). Four self-hosted Ollama models (Mistral-Nemo 12B,
+gpt-oss 20B, Qwen2.5 32B, Command-R 35B) run at temperature 0. The primary model reached 96.5% tool selection
+and 93.7% task success over 590 runs; with governance removed, it executed all 45 approval-requiring actions
+without authorization. The grid is a pandapower model of the Greek transmission system with 35 buses.
+
+- *Shared with GridLens:* a whitelisted tool set, approval enforced outside the model, audit logs, and
+  local Ollama models.
+- *What GridLens should take:* (1) typed facts rendered by the application, which is stronger than GridLens's
+  post-turn citation rewriting because the model never writes a number; (2) approval bound to a change ID and
+  given through a GUI control, since GridLens counts any later user message as consent (Section 6); (3) the
+  governance ablation, which turns the controls off and counts what the model does, as an experiment
+  design; (4) checking invariants from the audit logs, not the model's account of itself; (5) temperature 0 and
+  temperature sweeps.
+- *Where GridLens goes further:* a 7,000-bus full N-1 against a 35-bus network, the GridPACK HPC solver and
+  PSS/E RAW inputs, population statistics with denominators, reviewed and sandboxed code, and jobs that outlive
+  the conversation.
+
+**Shamseldein, "Grid-Mind: An LLM-Orchestrated Multi-Fidelity Agent for Automated Connection Impact
+Assessment," arXiv:2602.20683, Feb. 2026.** Not the Argonne GridMind. An interconnection-request agent
+with an 11-tool registry (power flow, N-1, transient stability, and EMT screening on pandapower, ANDES, and
+ParaEMT), and a three-layer defense against invented numbers: a prompt rule, forced routing of capacity
+questions to a capacity tool, and a check after each answer that flags ungrounded numbers. DeepSeek-V3 on 50
+IEEE 118-bus scenarios scored 84.0% on tool selection. The same number-checking idea as GridLens's missing
+claim checker, already published; GridLens differs in local inference, PSS/E and GridPACK, and scale. It
+shows the interconnection use case GridLens could serve (Section 5).
+
+**Liu, Dong, and Lian, "Grid-Orch: An LLM-Powered Orchestrator for Distribution Grid Simulation and
+Analytics," *IEEE Open Access J. Power and Energy*, vol. 13, pp. 727–738, 2026; arXiv:2605.12728.** 36 MCP
+tools over OpenDSS in 11 categories, with cloud (Gemini, Claude) or local (Ollama, llama.cpp) models for
+air-gapped use. DER interconnection screening takes under two minutes and matches direct OpenDSS scripting.
+GridLens's architectural sibling for distribution. Its evaluation compares results with scripted ground truth,
+which GridLens also does; no audit or approval layer is reported. Its skills (multi-step tool recipes) are a
+form of the workflow templates GridLens plans.
+
+**Chen and Anderson, "Connecting Minds: AI Use Cases to Bridge Power Systems and Large Language Models for
+Practical Applications," PNNL-38003, May 2025.** Twenty use cases. Section 5.1, accelerated generator
+interconnection studies, describes an LLM that inserts a generator into the `.raw` and `.dyn` models, runs the
+solver, finds violations, and drafts the report. Section 7.2 says CEII "cannot be exposed to commercial LLM
+infrastructure." It reads close to a specification of GridLens with a patcher exposed to the agent.
+
+**Choi et al., "eGridGPT: Trustworthy AI in the Control Room," NREL/TP-5D00-87440, May 2024.** Recommends only
+open models running locally without network access to comply with NERC CIP, tests recommendations on a
+digital twin before an operator decides, and logs each action's source. Mostly a design report. GridLens
+implements its local-only and audit rules.
+
+### 4.3 Benchmarks and evaluation methods
+
+| Work | What it measures | What GridLens should take |
+|---|---|---|
+| Mylonas et al., "PowerAgentBench-SS," arXiv:2606.18789, Jun. 2026 | DC thermal N-2 search on IEEE 39-bus variants with a validation budget; evidence-backed recall, false-safe rate, severity regret | Evidence-backed recall (a found item counts only if a logged validation supports it) is GridLens's citation rule as a metric. A scripted base-loading screen (0.519) beat GPT-5.5 (0.300) and three Ollama models (0.013–0.081): include non-LLM baselines |
+| Zhang et al., "PowerAgentBench-Dyn," arXiv:2606.20401, Jun. 2026 | Dynamic-model review on PSS/E and security screening on PowerFactory via MCP; 10 repeats; constraint compliance scored apart from success | A machine-readable file of allowed edits and locked files, the right guard for a RAW patcher the agent can call |
+| Trashchenkov, "Power Systems Agent Benchmark," arXiv:2606.20950, 2026 | 41 task families with a deterministic evaluator; held-out cases synthesized from private seeds | Seeded variants of the evaluation case, so models cannot have memorized answers |
+| Wang et al., "PowerBench," arXiv:2609.34492, Sep. 2026 | Agentic retrieval over a synthetic utility world (761 devices, 13.35M telemetry records) under tool and time budgets | Synthetic worlds as the answer to CEII in public benchmarks |
+| Zhou et al., "ElecBench," IEEE PES GM 2025, doi:10.1109/PESGM52009.2025.11225826 | Question answering on dispatch; six dimensions including stability and security | Consistency across repeats as a scored dimension |
+| Wu, Wang, and Fan, arXiv:2605.31478, May 2026 | pandapower code generation; failures are mostly API errors; documentation injected on demand adds 32–56 points; 70–120B open models match commercial APIs | Evidence for local models; per-model tool descriptions |
+| Jia, Cui, and Hug, *IEEE Trans. Smart Grid* 16(6), 2025, doi:10.1109/TSG.2025.3589114 | Code-generating agent for Daline and MATPOWER; 93–97% success with execution-error feedback | The contrast case: free code generation needs feedback loops that fixed typed tools avoid |
+| Yao et al., "τ-bench," arXiv:2406.12045 | pass^k: GPT-4o below 25% at k = 8 on retail | Report pass^k, not one sample |
+| Patil et al., "Berkeley Function Calling Leaderboard," ICML 2025 | AST-level checking of calls, abstention, multi-turn | Score tool arguments structurally, not by regular expression |
+| Gao et al., "ALCE," EMNLP 2023, arXiv:2305.14627 | Citation recall and precision | Measure whether each cited call supports its sentence, not only that it exists |
+| Kapoor et al., "AI Agents That Matter," arXiv:2407.01502 | Cost-controlled, reproducible agent evaluation | Report cost (time, tokens, energy on the DGX Spark) with accuracy |
+
+### 4.4 Solver-calling agents, for positioning
+
+- **Zhang et al., "Grid-Agent," arXiv:2508.05702, 2025.** Planning and validation agents for corrective
+  control on IEEE 30 and 69-bus and CIGRE MV, with a sandbox that validates and rolls back automatically.
+  GridLens's sandbox runs code only after human approval and never changes the case.
+- **Badmus et al., "PowerChain: A Verifiable Agentic AI System for Automating Distribution Grid Analyses,"
+  arXiv:2508.17094, 2025.** Uses expert-annotated, verified reasoning trajectories as in-context examples with
+  GridLAB-D; reports up to 144% improvement over baselines on real utility data. Cited by X-GridAgent. The
+  trajectory library idea fits GridLens's audited sessions, which are verified trajectories once scored.
+- **She et al., "PFAgent," arXiv:2604.10846, 2026.** Power-flow agent scored on task success, convergence
+  validity, numerical consistency, and explanation quality, the same axes as GridLens's rubric.
+- **Wang, Yang, and Zhu, arXiv:2604.09995, 2026.** MATPOWER code generation with MCP and asynchronous MATLAB
+  execution, with static, dynamic, and semantic checks.
+- **Tripathi et al., "VeraGrid-Agent," arXiv:2607.25155, 2026.** Reads only the result sections a question
+  needs; 150-question benchmark accuracy rises from 43–49% unaided to 97–100% with the solver.
+- **Picault and Goubet (RTE), "Orchestrating Power Grid Studies with Multi-Agent AI and MCP Servers," IJCAI
+  2026 AISE workshop, arXiv:2607.14158.** A transmission operator's MCP server over pypowsybl, with human
+  supervision and auditability as goals. The strongest sign that TSOs are converging on MCP.
+- **Jin and Abhyankar, "ChatGrid," IEEE EnergyVis 2024, doi:10.1109/EnergyVis63885.2024.00007.** PNNL: an LLM
+  writes SQL over ExaGO outputs for visual analytics. Grounded in solver outputs, but through a cloud model.
+- **Pan et al., "Experiences with Model Context Protocol Servers for Science and High Performance Computing,"
+  arXiv:2508.18489, 2025.** MCP over Globus and HPC facility APIs; names evaluation and trust as open
+  problems. The HPC side of GridLens's GridPACK jobs.
+- **LLM as solver:** Bernier et al., "PowerGraph-LLM," *IEEE Trans. Power Syst.* 40(6), 2025, and the same
+  group's arXiv:2603.23004, 2026, which finds that LLMs fail most OPF tasks under constraints. The evidence for
+  GridLens's rule that numbers come from the solver.
+
+### 4.5 Safety, security, and governance
+
+- **NERC, "Artificial Intelligence and Machine Learning in Real-Time System Operations," white paper, Nov.
+  2024.** Warns that human oversight decays into habitual approval and must not be "in name only." This is
+  the argument for GridLens's confirmation in a later turn, and for measuring approval fatigue.
+- **Ruan et al., "Applying Large Language Models to Power Systems: Potential Security Threats," *IEEE Trans.
+  Smart Grid* 15(3), 2024, doi:10.1109/TSG.2024.3373256,** and **Li, Yang, and Sun, arXiv:2405.06237.** Threat
+  models, including data extraction and bad-data injection. GridLens treats case files, logs, and tool output
+  as untrusted, but has not tested an injection.
+- **Debenedetti et al., "AgentDojo," NeurIPS 2024 D&B, and "CaMeL," arXiv:2503.18813.** Prompt injection through
+  tool outputs, and defense by separating control flow from data. A PSS/E bus name or an XML comment is exactly
+  such a channel.
+- **Radosevich and Halloran, "MCP Safety Audit," arXiv:2504.03767.** MCP-specific attacks.
+- **Feng, McDonald, and Zhang, "Levels of Autonomy for AI Agents," arXiv:2506.12469.** GridLens is at the
+  "approver" level for destructive changes and higher for runs, which it should state.
+
+### 4.6 Knowledge grounding and foundation models
+
+- **Shi et al., "GridCodex," arXiv:2508.12682.** RAG over grid codes with multi-stage query refinement and
+  RAPTOR; the model for a standards-retrieval tool in GridLens.
+- **Manoharan and Sehgal, arXiv:2609.02011, 2026.** Deterministic, size-bounded extraction of a CIM/CGMES
+  subgraph for question answering; accuracy rose from 0.45 to 0.97 at 8,000 characters. A way to give a small
+  local model the neighborhood of a facility from a RAW case.
+- **Hamann et al., "Foundation models for the electric power grid," *Joule* 8(12), 2024,
+  doi:10.1016/j.joule.2024.11.002.** GridFM, now LF Energy's OpenGridFM. A future fast screening tool that
+  GridPACK would confirm.
+- **Majumder et al., *Joule* 8(6), 2024, doi:10.1016/j.joule.2024.05.009,** and **Cheng et al., GAIA,
+  *Scientific Reports* 15, 2025.** The fine-tuning route, which GridLens has not taken.
+
+### 4.7 Industry context *(partial)*
+
+EPRI's Open Power AI Consortium (March 2025) aims at domain models and agents that shorten interconnection
+studies at least fivefold, and an EPRI program page describes hierarchical agents for interconnection studies
+on PSS/E. Siemens markets agentic features in PSS/E. These show demand, and they are closed or hosted.
 
 ## 5. What would make GridLens a significant contribution
 
-*(See below.)*
+The literature has already published several of GridLens's principles, so a paper cannot claim them as new:
+the LLM orchestrates and the solver computes (GridMind, AgentiGrid, Mylonas et al.), MCP as the interface
+(X-GridAgent, Grid-Orch, RTE), local Ollama support (Grid-Orch, AgentiGrid, Mylonas et al.), approval gates
+(Mylonas et al.), and checks for ungrounded numbers (Shamseldein; Mylonas et al.). AgentiGrid also demonstrates
+an agent coupled to production-grade HPC software, concurrent scenario variants, goal-aware reporting, and
+interactive steering. GridPACK's MPI execution, a larger case, or a natural-language solver interface alone
+therefore cannot establish a new contribution.
+
+GridLens's strongest basis for a research contribution is the combination of full contingency-study data,
+deterministic population queries, explicit coverage and provenance, enforced inference locality, and durable
+supervised execution. Its Texas7k workload is demonstrated, but complete and correctly scoped agent answers
+are not guaranteed by the tools, and local inference alone does not establish CEII or NERC CIP compliance.
+A paper should turn this combination into testable claims about completeness, fidelity to the requested
+study, reproducibility, and cost. The work below would support those claims.
+
+1. **Scope-carrying typed evidence, measured.** Adopt Mylonas et al.'s typed facts, and extend each fact
+   with the metadata that GridLens's evaluation shows models drop: population and denominator, metric
+   definition and rating basis, converged coverage, and whether the base case is included. These are the
+   roadmap's `EvidenceRef`, `Coverage`, and `MetricDefinition` records. The application renders each number
+   with its scope sentence, and the validator withholds an answer that states a number or a scope the facts do
+   not support. Measure the change on the planning evaluation, including held-out paraphrases. AgentiGrid's
+   compact summaries and inconsistent lists of sensitive buses make coverage a concrete comparison: compare
+   summary-only reporting with full-population evidence, including missing and failed cases. The potential
+   contribution is verified aggregate claims over large studies; citation IDs or deterministic sorting alone
+   do not prove that every relevant finding reaches the report.
+2. **An open benchmark for transmission-planning agents at realistic scale.** Use the public synthetic grids
+   from Texas A&M (ACTIVSg2000, Texas7k, ACTIVSg10k, ACTIVSg25k, ACTIVSg70k), which are free of CEII, with full
+   N-1 in GridPACK. Release the questions, reference-fact generator, rubric, and harness (GridLens has all four
+   already). Add failure-behavior items, seeded variants (Trashchenkov), pass^k (τ-bench), evidence-backed
+   recall (PowerAgentBench-SS), non-LLM baselines, and structural scoring of tool arguments (BFCL). Separate
+   analysis of already completed studies from budgeted discovery and from scenario construction. AgentiGrid's
+   200-bus results supply useful task designs: a near-null dispatch task, an outage inventory containing
+   failed cases, and reporting all similarly affected facilities. A missed solver failure should be scored
+   as an omission without labeling it a proven blackout. Release the solver settings and independently
+   computed references so other systems can attempt comparable tasks at several network sizes.
+3. **A governance ablation and an injection red-team on case files.** Repeat Mylonas et al.'s ablation in the
+   planning setting: turn off the confirmation gate, the path scoping, and the citation rewriting one at a time,
+   and count unauthorized changes and unsupported claims. Then plant instructions in the places a planning
+   agent reads (bus and branch names in a RAW case, XML comments, GridPACK log lines, CSV fields), in the manner
+   of AgentDojo, and measure whether local models follow them. Add ordinary goal drift without an attack:
+   AgentiGrid's dispatch-only task was changed into unit commitment despite network-command validation.
+   Compare prompt instructions with a server-enforced allowed-edits contract, explicit approval bound to a
+   change ID, and locked study limits. Measure unauthorized actions and task violations independently of
+   physical feasibility and apparent objective improvement. Run ablations on isolated synthetic cases.
+4. **Studies that preserve the objective and scenario lineage.** Validate the working tree's sensitivity
+   tool, then persist each run's parent case, requested edits, approved action space, and goal version.
+   Implement user-specified load-growth series and before/after studies with a deterministic rule for the
+   selected result. AgentiGrid already implements iterative scenario exploration and goal classification;
+   GridLens could contribute verified selection under fixed limits, durable restart, and traceable aggregate
+   reporting. A boundary search must retain feasible and failed points and their uncertainty, rather than
+   calling the last converged case a certified transfer limit. Interconnection studies require additional
+   engineering scope and validation beyond thermal margins or a single steady-state rerun.
+5. **A study with planners and regulatory staff.** PowerAgent claims productivity gains, and NERC warns that
+   oversight can become a formality. Measure time to answer, errors caught, errors introduced, comprehension of
+   caveats, and approval behavior, with and without Clarke and with a scripted report. The four supplied
+   papers provide no such controlled planner study; AgentiGrid's interactive GUI is an interface feature,
+   rather than evidence of improved human decisions.
+6. **Architecture ablations.** Single agent against X-GridAgent's planning, coordination, and action layers;
+   query tools against schema-adaptive RAG or compact summaries; local models against hosted ones (on
+   synthetic cases only); model size and quantization. Add AgentiGrid's two parallelism levels: solver-level
+   MPI and orchestration-level scenario batching. Measure solver time, cache/index construction, query time,
+   LLM latency, total tokens, memory, and end-to-end study time separately. Compare CPU/GPU reductions and
+   serial/batched scenarios under equal resource and solver-call budgets. Agent exploration must show a
+   benefit over a scripted sweep before its extra calls are credited as useful intelligence.
+
+Items 1 to 3 build on code that exists, although their proposed evidence and authorization contracts still
+need implementation. Strong results on those experiments, with item 6's cost accounting, could support a
+paper on reliable local agents for large contingency studies. The benchmark could be a separate dataset
+contribution. The contribution would be established by measured gains and disclosed failure rates, rather
+than the combination of software components or a claim that HPC planning agents have not been built.
 
 ## 6. Weaknesses in GridLens's own evidence
 
-*(See below.)*
+A paper would have to fix or disclose these. AgentiGrid adds concrete comparison points, but its twelve
+preliminary searches and successful JSON parsing do not set a sufficient standard for engineering reliability.
+
+- **Small samples.** Each of the 32 prompts was asked once, of one model. The synthetic test has four questions.
+  There is no pass^k and no variance.
+- **Scoring by an LLM.** Claude scored the 30-question evaluation. A paper needs deterministic scoring where
+  possible and blinded human scoring with agreement statistics for the rest.
+- **Modest pass rates.** 11 of 32 prompts passed on the first run. The re-run covered only the 13 prompts the
+  fixes touched.
+- **The preferred model is not evaluated.** No report covers `nemotron-3.5-lightning`.
+- **No pinned decoding.** The Hermes profile sets no temperature or seed.
+- **Consent is inferred from any message.** `_held` in `agent/gridlens_tools.py` accepts `confirm=True` once the
+  user has sent any later message. The change must be identical to the preview and the state unchanged, but a
+  reply of "no" does not block a model that confirms anyway. An approval button bound to the `change_id` would
+  close this.
+- **Some writes are ungated.** `start_run` accepts image, pull-policy, and Docker-argument overrides without
+  confirmation.
+- **Answer checks are English regular expressions** (`group_mean_request`, `top_line_area_request`,
+  `CAPACITY_QUESTION`), so a question worded differently gets none of them.
+- **Voltage coverage is thin.** The compact caches hold loading only, and the index has voltages only at the ends
+  of monitored branches.
+- **No non-LLM baseline and no user study.**
+- **Two utilization definitions.** CSV flat output uses GridPACK's `loading_percent`, and the text path uses MW
+  over Rate C.
+- **HPC integration is already in the literature.** AgentiGrid couples an agent to ExaGO and batches variants.
+  GridLens has no comparison separating the agent's benefit from GridPACK's existing parallel solver or its
+  analysis pipeline. A 7,000-bus demonstration establishes a workload, not a scaling curve or an advantage
+  over another system. Report matched hardware, resource limits, solver calls, and each stage's cost.
+- **Less solver and search breadth.** GridLens's demonstrated agent workflow runs GridPACK contingency
+  analysis; it has not established the OPF, SCOPF, stochastic, or multiperiod capabilities AgentiGrid exposes.
+  Nor does the baseline implement concurrent candidate exploration, goal-dependent result selection, or
+  mid-search steering. The new sensitivity and topology tools need evaluated workflows before these gaps
+  can be claimed closed.
+- **A legal edit may violate the study.** Field validation and a copied RAW case do not enforce dispatch-only
+  scope, locked equipment ratings, or fixed voltage criteria. The working tree's sensitivity tool validates
+  edits and previews them for confirmation, but has no persisted per-study allowed-edits contract. Its prompt
+  says to make only requested changes; AgentiGrid's unit-commitment drift shows why that needs code checks.
+- **Finding some critical cases is not complete coverage.** Full N-1 execution and a thermal ranking do not
+  prove that Clarke reports every relevant failed, islanded, or voltage-violating case. AgentiGrid's models
+  all missed one infeasible contingency. GridLens needs independent coverage scoring that includes cases
+  without numeric loading, plus false-safe and evidence-backed recall metrics. Solver failure also needs
+  classification and investigation; it cannot automatically be called physical infeasibility or a blackout.
+- **Citation validity is weaker than claim validity.** A real `T1` citation can accompany the wrong number,
+  an unsupported population claim, or an omitted caveat. Existing controller corrections cover selected
+  question patterns, not a general claim-to-result entailment check. Deterministic tool outputs are therefore
+  insufficient evidence for a claim of hallucination-free or complete reporting.
+- **No study-level objective and recovery evaluation.** Background jobs are durable, but the baseline lacks
+  a persisted goal, authorized scenario set, and deterministic best-case rule tying multiple runs together.
+  There is no reported experiment on pause, goal replacement, restart, or resumed reporting. AgentiGrid
+  supplies steering and goal-aware reporting within its active search; GridLens must measure what its
+  durability adds and whether the objective and approval state survive.
+- **No reported cost-quality tradeoff.** The evaluation records per-question seconds and sessions record
+  usage, but there is no matched time/token/memory comparison with summary-only or scripted workflows.
+  AgentiGrid reports tokens and wall time and identifies inference as its PFLOW bottleneck. GridLens needs
+  its own breakdown because large contingency studies may instead be dominated by the solver or analysis.
+
+## References
+
+The four supplied papers:
+
+- Q. Zhang and L. Xie, "PowerAgent: A Road Map Toward Agentic Intelligence in Power Systems," *IEEE Power
+  Energy Mag.*, vol. 23, no. 5, pp. 93–101, 2025. doi:10.1109/MPE.2025.3579718.
+- Y. Wen and X. Chen, "X-GridAgent: An LLM-Powered Agentic AI System for Assisting Power Grid Analysis,"
+  arXiv:2512.20789, 2025.
+- H. Jin, K. Kim, and J. Kwon, "GridMind: LLMs-Powered Agents for Power System Analysis and Operations," *SC
+  Workshops '25*, ACM, pp. 560–568, 2025. doi:10.1145/3731599.3767409.
+- S. Konjicija and S. Peles, "Integrating Agentic Artificial Intelligence with High-Performance Computing
+  for Grid Planning," arXiv:2609.04544v1, 2026. [Version record](https://arxiv.org/abs/2609.04544v1).
+
+Others are cited inline above with their DOI or arXiv identifier. PowerMCP: https://github.com/Power-Agent/PowerMCP.
+The classical contingency-screening index: G. C. Ejebe and B. F. Wollenberg, "Automatic Contingency
+Selection," *IEEE Trans. Power App. Syst.*, vol. PAS-98, no. 1, pp. 97–109, 1979.

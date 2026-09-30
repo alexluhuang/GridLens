@@ -315,19 +315,22 @@ LOOKUP_TOOLS = ("list_files", "list_projects", "get_project")
 
 # What a user would call the items each kind of result lists, by the tool and, for the rank tools, the objects ranked.
 ITEM_NOUNS = {"branches": "lines", "transformers": "transformers", "both": "lines and transformers", "contingencies": "outages", "cases": "line results by outage"}
-TOOL_NOUNS = {"rank_groups": "groups", "list_files": "files", "list_projects": "projects", "read_file": "records"}
+TOOL_NOUNS = {"rank_groups": "groups", "list_files": "files", "list_projects": "projects", "read_file": "records", "search_documents": "matching passages"}
+TOPOLOGY_NOUNS = {"buses_near": "buses", "elements_near": "lines and transformers", "path": "steps", "islands": "islands", "islanding_outages": "outages"}
 
 
 def _items(row: dict) -> str:
     """Name, in plain words, the items a result lists, such as lines, outages, or groups."""
     if row.get("tool") == "rank":
         return ITEM_NOUNS.get((row.get("arguments") or {}).get("object", "branches"), "results")
+    if row.get("tool") == "topology":
+        return TOPOLOGY_NOUNS.get((row.get("arguments") or {}).get("query"), "results")
     return TOOL_NOUNS.get(row.get("tool"), "results")
 
 
 def _more_rows(row: dict) -> str:
-    """Say how a user gets the rest of a partial result: a larger number for the rank tools, else the next page."""
-    if row.get("tool") in ("rank", "rank_groups"):
+    """Say how a user gets the rest of a partial result: a larger number for the rank tools and the document search, else the next page."""
+    if row.get("tool") in ("rank", "rank_groups", "search_documents"):
         return "ask for a larger number, or for all of them, to see the rest"
     return "ask for the next page to see the rest"
 
@@ -555,7 +558,10 @@ def disclose_pending_changes(answer: str, turn_sources: list[dict]) -> str:
 
 
 # What a user would call each change that waits for confirmation, by the tool that previews it.
-CHANGE_NAMES = {"configure_run": "the change to the study settings", "add_project_inputs": "the replacement of the input files", "stop": "stopping the job"}
+CHANGE_NAMES = {
+    "configure_run": "the change to the study settings", "add_project_inputs": "the replacement of the input files", "stop": "stopping the job",
+    "start_sensitivity_run": "the run of the edited case",
+}
 
 
 def disclose_generated_output(answer: str, turn_sources: list[dict]) -> str:

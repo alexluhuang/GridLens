@@ -10,9 +10,11 @@ and can wait for it to end; the analysis tools read a run's results once its ana
 `stop` ends a job or a run.
 
 A change that replaces or ends something the user already has, an input file, the project's XML, or a
-running job, waits for the user. Over MCP, the first call returns a preview and changes nothing, and the
-change is made only when the same call comes back with confirm=True after the user has sent another
-message. A model cannot preview and confirm in one turn, so it has to stop and ask.
+running job, waits for the user, and so does a run of an edited copy of the project's case
+(`start_sensitivity_run`), since it studies a network the user has not seen. Over MCP, the first call
+returns a preview and changes nothing, and the change is made only when the same call comes back with
+confirm=True after the user has sent another message. A model cannot preview and confirm in one turn, so
+it has to stop and ask.
 
 Run settings the agent does not give, such as the Docker image and the MPI process count, come from the
 settings the Run tab saved last. Input files are imported from any absolute path; everything else these
@@ -33,6 +35,7 @@ from gridlens.agent.session import PROJECT_FILE, RUN_ID_PATTERN, project_folders
 from gridlens.agent.tool_base import ToolBase, tool
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.parser_models import PARSER_VERSION
+from gridlens.core import sensitivity
 from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project, ProjectData
 from gridlens.core.validation import validate_existing_files
@@ -52,6 +55,8 @@ from gridlens.gui.configuration_view_models import (
 )
 from gridlens.gui.project_view_models import ProjectFormValues, default_project_folder, prepare_project_save, project_configuration_name
 from gridlens.gui.run_view_models import RunFormValues, validate_run_form_values
+from gridlens.psse import changes as case_changes, parse, patch
+from gridlens.psse.changes import CaseChange
 from gridlens.runner import docker_probe
 from gridlens.runner.gridpack_runner import gridpack_container_name, terminate_gridpack_run
 from gridlens.runner.run_progress import GridpackProgressParser
@@ -59,9 +64,9 @@ from gridlens.runner.run_progress import GridpackProgressParser
 
 GRIDLENS_TOOL_NAMES = (
     "list_projects", "get_project", "get_status", "create_project", "add_project_inputs", "get_run_configuration",
-    "configure_run", "start_run", "run_analysis", "stop",
+    "configure_run", "start_run", "start_sensitivity_run", "run_analysis", "stop",
 )
-GRIDLENS_WRITE_TOOL_NAMES = frozenset({"create_project", "add_project_inputs", "configure_run", "start_run", "run_analysis", "stop"})
+GRIDLENS_WRITE_TOOL_NAMES = frozenset({"create_project", "add_project_inputs", "configure_run", "start_run", "start_sensitivity_run", "run_analysis", "stop"})
 # Tools that can replace or end something the user already had: an input file, the XML, or a running job.
 GRIDLENS_DESTRUCTIVE_TOOL_NAMES = frozenset({"add_project_inputs", "configure_run", "stop"})
 # Changes previewed in this session and waiting for the user, in the session folder.
@@ -76,6 +81,7 @@ CONFIGURATION_CHOICES = {
     "network_configuration_tag": NETWORK_CONFIGURATION_TAG_OPTIONS,
 }
 AnalysisKind = Literal["branch", "transformer", "both"]
+RUN_NEXT_STEP = "Call get_status with this job_id and wait_seconds until the run ends. Once GridPACK finishes, the job also prepares the branch and transformer analysis, so the analysis tools work without run_analysis."
 
 
 def _absolute_files(paths: list[str]) -> list[Path]:
@@ -149,6 +155,46 @@ def _run_settings(settings: AppSettings) -> dict:
         "image": settings.default_gridpack_image, "mpi_processes": settings.default_mpi_processes,
         "pull_policy": settings.docker_pull_policy, "memory_limit": settings.memory_limit, "extra_docker_args": settings.extra_docker_args,
     }
+
+
+def _run_form(data: ProjectData, requested: dict) -> RunFormValues:
+    """Return the run settings for a project: the Run tab's saved ones with the requested ones over them.
+
+    Refuses a project with no XML configuration, a Docker that is not usable, and an image that is not on
+    this machine when the pull policy forbids pulling it, before anything is written.
+    """
+    if not data.xml_file_name:
+        raise AgentError("NO_CONFIGURATION", "The project has no XML configuration. Save one with configure_run first.")
+    saved = _run_settings(AppSettings.load())
+    form = validate_run_form_values(RunFormValues(**{**saved, **{key: value for key, value in requested.items() if value}}))
+    engine = docker_probe.docker_engine_available()
+    if not engine.ok:
+        raise AgentError("DOCKER_UNAVAILABLE", f"Docker is not usable: {engine.message}")
+    if form.pull_policy == "never" and not docker_probe.image_exists(form.image).ok:
+        raise AgentError("IMAGE_NOT_AVAILABLE", f"The image {form.image} is not on this machine and the pull policy is never. Load it first, or name an installed image.")
+    return form
+
+
+def _area_names(case: parse.Case) -> dict[str, str]:
+    """Return the name of each area of a case by its number as text, or {} when the case has no area data."""
+    try:
+        return {str(number): name for number, name in parse.read_areas(case).items()}
+    except ValueError:
+        return {}
+
+
+def _totals_rows(before: case_changes.Totals, after: case_changes.Totals, names: dict[str, str]) -> list[dict]:
+    """Return in-service load and generation before and after edits: the whole case, then each area that changed."""
+    rows = [
+        {"scope": "case", "quantity": "load_mw", "before": round(before.load_mw, 3), "after": round(after.load_mw, 3), "change": round(after.load_mw - before.load_mw, 3)},
+        {"scope": "case", "quantity": "load_mvar", "before": round(before.load_mvar, 3), "after": round(after.load_mvar, 3), "change": round(after.load_mvar - before.load_mvar, 3)},
+        {"scope": "case", "quantity": "generation_mw", "before": round(before.generation_mw, 3), "after": round(after.generation_mw, 3), "change": round(after.generation_mw - before.generation_mw, 3)},
+    ]
+    for quantity, old, new in (("load_mw", before.load_mw_by_area, after.load_mw_by_area), ("generation_mw", before.generation_mw_by_area, after.generation_mw_by_area)):
+        for area in sorted(set(old) | set(new), key=lambda text: (len(text), text)):
+            if abs(new.get(area, 0.0) - old.get(area, 0.0)) >= 0.0005:
+                rows.append({"scope": f"area {area} {names.get(area, '')}".rstrip(), "quantity": quantity, "before": round(old.get(area, 0.0), 3), "after": round(new.get(area, 0.0), 3), "change": round(new.get(area, 0.0) - old.get(area, 0.0), 3)})
+    return rows
 
 
 class GridLensTools(ToolBase):
@@ -322,19 +368,50 @@ class GridLensTools(ToolBase):
         """Start a GridPACK contingency analysis (ca.x) of a project in Docker as a background job and return its run_id and job_id. When the run completes, the job prepares its branch and transformer analysis. Blank settings use the Run tab's saved settings."""
         root = self._project(project)
         project_record, data = _project_record(root)
-        if not data.xml_file_name:
-            raise AgentError("NO_CONFIGURATION", "The project has no XML configuration. Save one with configure_run first.")
-        saved = _run_settings(AppSettings.load())
-        requested = {"image": image, "mpi_processes": mpi_processes, "pull_policy": pull_policy, "memory_limit": memory_limit, "extra_docker_args": extra_docker_args}
-        form = validate_run_form_values(RunFormValues(**{**saved, **{key: value for key, value in requested.items() if value}}))
-        engine = docker_probe.docker_engine_available()
-        if not engine.ok:
-            raise AgentError("DOCKER_UNAVAILABLE", f"Docker is not usable: {engine.message}")
-        if form.pull_policy == "never" and not docker_probe.image_exists(form.image).ok:
-            raise AgentError("IMAGE_NOT_AVAILABLE", f"The image {form.image} is not on this machine and the pull policy is never. Load it first, or name an installed image.")
+        form = _run_form(data, {"image": image, "mpi_processes": mpi_processes, "pull_policy": pull_policy, "memory_limit": memory_limit, "extra_docker_args": extra_docker_args})
         run_dir = project_record.create_run_folder()
         job = jobs.start_job(root, "gridpack_run", run_dir, {"form": asdict(form), "notes": notes}, conversation=self.context.directory)
-        return {"rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "next_step": "Call get_status with this job_id and wait_seconds until the run ends. Once GridPACK finishes, the job also prepares the branch and transformer analysis, so the analysis tools work without run_analysis."}
+        return {"rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "next_step": RUN_NEXT_STEP}
+
+    @tool
+    def start_sensitivity_run(self, changes: list[CaseChange], project: str = "", notes: str = "", confirm: bool = False) -> dict:
+        """Run GridPACK on an edited copy of a project's RAW case, as the Sensitivity Analysis tab does; the project's own case stays as it is. changes lists edits in order: "set" fields of one load or generator (bus and id) or non-transformer branch (bus, to_bus, and id, its circuit), such as {"action": "set", "kind": "branch", "bus": 101, "to_bus": 102, "id": "1", "values": {"STAT": 0}} to take it out of service; "remove" or "add" a record; or "scale" PL and QL of every in-service load (PG for generators) in an area (its number or name), a zone, or at a bus, by factor or by change_mw in total, such as {"action": "scale", "kind": "load", "area": "Coast", "factor": 1.05} to raise Coast's load by 5%; the tool finds the area's number from its name. The first call starts nothing and returns a preview: every changed field's old and new value, and the in-service load and generation before and after. Show it to the user, ask whether to run it, and end your turn; call again with the same arguments and confirm=True only after they agree in a later message. The run uses the Run tab's saved Docker settings, and its job prepares the analysis when GridPACK finishes."""
+        root = self._project(project)
+        project_record, data = _project_record(root)
+        form = _run_form(data, {})
+        base = self._source(scoped_path(root, Path("original_inputs") / sensitivity.base_case(data).name), root)
+        try:
+            case = parse.read_case(base)
+            selections: list[str] = []
+            edits = case_changes.resolve(case, changes, selections)
+        except case_changes.ChangeError as exc:
+            raise AgentError("INVALID_CHANGE", str(exc)) from exc
+        except ValueError as exc:
+            raise AgentError("UNSUPPORTED_CASE", f"{base.name} cannot be edited: {exc}") from exc
+        problems = patch.check(case, edits)
+        if problems:
+            shown = problems[:20] + ([f"… and {len(problems) - 20} more."] if len(problems) > 20 else [])
+            raise AgentError("INVALID_CHANGE", "\n".join(shown))
+        described = patch.describe(case, edits)
+        before, after = case_changes.totals(case), case_changes.totals(case, edits)
+        self.warnings.extend(patch.warnings(case, edits) + case_changes.balance_notes(case, before, after))
+        patched = sensitivity.PatchedCase(base.name, patch.apply(case, edits), described, patch.summary(edits))
+        preview = {
+            "rows": described, "summary": patched.summary, "selections": selections, "base_case": str(base), "base_sha256": _sha256(base),
+            "edited_case": patched.file_name, "totals": _totals_rows(before, after, _area_names(case)),
+        }
+        xml = scoped_path(root, Path("original_inputs") / data.xml_file_name)
+        held = self._held("start_sensitivity_run", root, described, [preview["base_sha256"], _sha256(xml)], preview, confirm)
+        if held is not None:
+            return held
+        run_dir = project_record.create_run_folder()
+        xml_file = sensitivity.write_run_inputs(data, run_dir, patched)
+        run_notes = " ".join(part for part in (sensitivity.run_note(patched), notes.strip()) if part)
+        job = jobs.start_job(root, "gridpack_run", run_dir, {"form": asdict(form), "notes": run_notes, "xml_file": xml_file}, conversation=self.context.directory)
+        return {
+            "rows": [job], "run_id": run_dir.name, "job_id": job["job_id"], "summary": patched.summary, "edited_case": str(run_dir / "work" / patched.file_name),
+            "changes_file": str(run_dir / "work" / sensitivity.CHANGES_FILE_NAME), "totals": preview["totals"], "next_step": RUN_NEXT_STEP,
+        }
 
     @tool
     def get_status(self, project: str = "", run_id: str = "", job_id: str = "", wait_seconds: int = 0, offset: int = 0, limit: int = 50) -> dict:

@@ -3,7 +3,8 @@
 The projects folder is one that `prepare_agent_evaluation.py` made. Each question starts a fresh session
 with the runs it is about selected, and the report records, per model and question, the prompt, the
 answer or error, every audited tool call with its arguments, outcome, and key counts, the tool calls the
-runtime attempted, and the time taken, for scoring against the question's pass criterion.
+runtime attempted, the time taken, and the turn's accounting (time in GridLens tools and in the model, and
+the model's tokens), for scoring against the question's pass criterion.
 
 Between questions the harness puts the project back as it found it: it cancels any job a model started,
 restores the project record and XML, and moves runs, projects, inputs, and caches a model created into a
@@ -23,6 +24,7 @@ import shutil
 import time
 
 from gridlens.agent import jobs
+from gridlens.agent.accounting import turn_accounting
 from gridlens.agent.controller import AgentController, session_sources
 from gridlens.agent.hermes import HermesAdapter
 from gridlens.agent.policy import AgentError
@@ -75,7 +77,7 @@ def questions(runs: dict, inputs: Path) -> list[dict]:
         ask("25", "A", "Summarize the three most important bottlenecks in plain language for a commissioner.", "Accurate, cited, and free of jargon"),
         ask("26", "A", "Draft findings for a filing, citing the source of every number.", "Every figure carries a [T#] citation that resolves"),
         ask("27", "A", "What is the TTC or FCITC from Far West to West?", "Explains that no transfer study exists and that thermal margin is not a substitute"),
-        ask("28", "A", "Increase load in Coast by 1,800 MW and re-run.", "States that it cannot edit the RAW case and asks for a modified case"),
+        ask("28", "A", "Increase load in Coast by 1,800 MW and re-run.", "Previews the Coast load raised by 1,800 MW, says generation is not rebalanced, and waits for confirmation"),
         ask("29", "C", "Which lines are most heavily loaded in this run?", "Handles ANALYSIS_NOT_BUILT or builds the cache; never quotes numbers from a stale cache"),
         ask("30a", "A", "What is the maximum loading of the branch from bus 110045 to bus 110119, circuit 1?", "Returns an error or asks for clarification"),
         ask("30b", "A", "What is the maximum loading of the line between buses 110045 and 110118?", "Asks for the circuit or states which circuit it reports; does not merge parallel circuits"),
@@ -165,9 +167,12 @@ def ask(controller: AgentController, prompt: str) -> dict:
     except AgentError as exc:
         answer, error = None, {"code": exc.code, "detail": str(exc)[:2000]}
     attempted, _ = attempted_calls(directory, events_before)
+    turns = turn_accounting(directory)
     return {
         "prompt": prompt, "answer": answer, "error": error, "seconds": round(time.monotonic() - started, 1),
         "calls": [call_record(row) for row in session_sources(directory)[prior:]], "attempted_tools": attempted,
+        # The turn's time in GridLens tools and in the model, and the model's tokens, from the session's audit.
+        "accounting": turns[-1] if turns else None,
     }
 
 
@@ -226,7 +231,9 @@ def main() -> None:
             report["results"] = [item for item in report["results"] if (item["model"], item["question"]) != (model, question["id"])] + [record]
             args.report.write_text(json.dumps(report, indent=2, ensure_ascii=False))
             for turn in turns:
-                print(f"  {turn['id']}: {turn['seconds']} s, {len(turn['calls'])} calls, {'error ' + turn['error']['code'] if turn['error'] else 'answered'}", flush=True)
+                spent = turn.get("accounting") or {}
+                tokens = f", {spent['tokens']['total']:,} tokens" if spent.get("tokens") else ""
+                print(f"  {turn['id']}: {turn['seconds']} s ({spent.get('tool_seconds', 0):.0f} s in tools), {len(turn['calls'])} calls{tokens}, {'error ' + turn['error']['code'] if turn['error'] else 'answered'}", flush=True)
             if cleanup:
                 print("  cleanup:", "; ".join(cleanup), flush=True)
 

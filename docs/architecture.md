@@ -102,6 +102,13 @@ other byte, including line endings, comments, and the sections it does not read,
 A sensitivity run's `work/` folder holds three more files than a normal run: `<case>_sensitivity.raw`,
 `<xml>_sensitivity.xml`, and `sensitivity_changes.json`. The project's input files never change.
 
+Clarke starts the same runs with `start_sensitivity_run`. It names records by bus and ID, not by table row,
+and `psse/changes.py` turns its requests into the edits the tab would make: set fields of a load, generator,
+or branch; add or remove one; or scale PL and QL (or PG) of every in-service load or generator in an area,
+a zone, or at a bus, by a factor or by a change in MW. The first call only previews the edits with the load
+and generation totals before and after; the run starts after the user confirms in a later message, as a
+background job that runs the XML copy naming the edited case.
+
 ## Analysis layer
 
 The analysis layer is deliberately local and file-based. It can do the following:
@@ -195,20 +202,31 @@ one tool server.
   codes, provenance, and the paired audit records.
 - `agent/tools.py`: `rank` and `rank_groups`, which sort or group facilities, contingencies, and indexed
   cases, the script proposal tool, and `ToolService`, which combines every tool module. `TOOL_NAMES` lists
-  the fifteen tools exposed over MCP.
+  the eighteen tools exposed over MCP.
+- `agent/network_tools.py`: `topology`, which answers how a case's network is connected from its RAW file
+  through `analysis/topology.py`: buses and elements near a bus, the shortest path between two buses,
+  islands, and the single outages that split the network, with GridPACK's status for each in a run.
+- `agent/documents.py` and `agent/document_tools.py`: `search_documents`, which searches the PDF, text,
+  Markdown, and HTML files in `<projects folder>/Reference documents/` and returns passages with their
+  document, page, page label, and section. Text is cached by SHA-256 in the folder's `.gridlens-index/`.
+  Passages are scored with BM25, blended with similarity from a local Ollama embedding model when one is
+  installed.
 - `agent/objects.py`: the vocabulary `rank` and `rank_groups` take. For each object family it defines the
   valid metrics, fields, and groups, checks the model's choices, and builds the records qualifiers test.
 - `agent/file_tools.py`: `list_files` and `read_file`, which read any project file as rows: a table, one
   section of a RAW case (read by `analysis/raw_sections.py`), the fields of a JSON or XML document, or lines
   of text. `read_file` also groups rows and compares two documents.
 - `agent/gridlens_tools.py`: tools that list and describe projects and their runs, create projects, import
-  inputs, write the GridPACK XML, start runs, build analyses, report on runs and jobs, and stop either.
+  inputs, write the GridPACK XML, start runs and sensitivity runs, build analyses, report on runs and jobs,
+  and stop either.
 - `agent/jobs.py`: background jobs. A GridPACK run or an analysis build runs as `gridlens --agent-job`, a
   separate process that outlives the turn. Its folder under `<project>/agent/jobs/` holds `job.json`, the
   request and the live state, and `job.log`, a readable history the worker appends to. A run job that
   completes goes on to build the run's branch and transformer analysis, as the GUI does after a run.
 - `agent/conversation_log.py`: writes `conversation.md`, a readable record of a whole conversation, from
-  the session's audit files after every turn.
+  the session's audit files after every turn, with each answer's time and tokens.
+- `agent/accounting.py`: computes each turn's time, its time in GridLens tools, and the model's tokens from
+  the audit files. The Agent tab's process cards and the evaluation scripts show the same figures.
 - `agent/setup.py`: finds Hermes Agent, Ollama, and the installed models, starts an installed Ollama, and,
   once the user agrees in the Set up Clarke window (`gui/agent_setup.py`), installs Hermes at the validated
   commit, installs Ollama into GridLens's data folder, and pulls or removes models through the local

@@ -54,6 +54,19 @@ def base_case(project_data: ProjectData) -> Path:
     return _input_path(project_data, name)
 
 
+def network_file(xml_path: Path) -> str:
+    """Return the name of the network file a GridPACK XML configuration names.
+
+    Raises ValidationError when the file is not well-formed XML or names no network file.
+    """
+    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+    try:
+        root = ET.parse(xml_path, parser).getroot()
+    except ET.ParseError as exc:
+        raise ValidationError(f"{Path(xml_path).name} is not valid XML: {exc}") from exc
+    return _network_element(root).text.strip()
+
+
 def write_run_inputs(project_data: ProjectData, run_dir: Path,
                      case: PatchedCase) -> str:
     """Write an edited case and an XML that runs it into a run's work folder.

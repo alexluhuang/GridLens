@@ -197,6 +197,7 @@ class ProcessCard(QFrame):
         self.setObjectName("agentProcessCard")
         self.tool_count = 0
         self._steps: list[str] = []
+        self._summary = ""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(8)
@@ -283,9 +284,18 @@ class ProcessCard(QFrame):
         self.details_layout.addWidget(block)
         self._steps.append(title + ("\n" + detail if detail else ""))
 
-    def complete(self) -> None:
-        """Collapse a finished turn's process detail while keeping its tool count visible in chat."""
-        self.toggle.setText(f"Process · {self.tool_count} tool{'s' if self.tool_count != 1 else ''}")
+    def complete(self, summary: str | None = None) -> None:
+        """Collapse a finished turn's process detail while keeping its tool count visible in chat.
+
+        summary, such as "3 min 12 s · 88,588 tokens", is kept once given, so completing the card again
+        does not drop it.
+        """
+        if summary is not None:
+            self._summary = summary
+        text = f"Process · {self.tool_count} tool{'s' if self.tool_count != 1 else ''}"
+        if self._summary:
+            text += f" · {self._summary}"
+        self.toggle.setText(text)
         self.toggle.setChecked(False)
 
     def plain_text(self) -> str:
