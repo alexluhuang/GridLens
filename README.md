@@ -14,8 +14,19 @@ runs Hermes Agent against a model served by Ollama on this machine, and never se
 GridLens ships no model and no credentials; the first time you open the tab, it offers to install Hermes,
 Ollama, and a model for you. See [Clarke, the planning agent](docs/clarke.md).
 
-The intended deployment target is NVIDIA DGX Spark on DGX OS 7, which is Ubuntu 24.04 on ARM64. On other
-architectures, the app detects the host and passes the matching Docker platform flag.
+GridLens runs GridPACK in Docker, and uses an NVIDIA GPU for its analysis and for Clarke's local model. It
+runs on:
+
+| Platform | Install | Analysis |
+|---|---|---|
+| NVIDIA DGX Spark on DGX OS 7 (Ubuntu 24.04, ARM64) | The `.deb` package | RAPIDS on the GPU |
+| Other ARM64 or x86_64 Linux with an NVIDIA GPU | The `.deb` package on Ubuntu 24.04 or later, or from source | RAPIDS on the GPU |
+| Windows 10 or 11 x64, native | The Windows installer | CPU Dask |
+| Windows 11 x64, WSL2 | The `.deb` package in Ubuntu 24.04 | RAPIDS on the GPU |
+
+The app detects the host's architecture and passes the matching Docker platform flag. See the
+[DGX OS 7 install guide](docs/install_dgx_os7.md), which also covers other Linux machines, and the
+[Windows install guide](docs/install_windows.md).
 
 This app is local-only by design. Pull the GridPACK Docker image before you open sensitive files in the app.
 
@@ -29,6 +40,10 @@ python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev]"
 gridlens
 ```
+
+On Windows, in PowerShell, create the environment with `python -m venv .venv` and activate it with
+`.venv\Scripts\Activate.ps1`. The `analysis` extra adds the analysis libraries, with RAPIDS on Linux; see the
+[developer guide](docs/developer_guide.md).
 
 The full test suite expects the development dependencies, including PySide6:
 
@@ -53,13 +68,14 @@ docker run --rm \
   --platform linux/arm64 \
   -u "$(id -u):$(id -g)" \
   -e HOME=/tmp \
-  -v /path/to/project/runs/YYYY-MM-DD_HH-MM-SS/work:/app/workspace \
+  --mount type=bind,source=/path/to/project/runs/YYYY-MM-DD_HH-MM-SS/work,target=/app/workspace \
   -w /app/workspace \
   pnnl/gridpack:latest \
   mpirun -n 4 ca.x input.xml
 ```
 
-On x86_64 systems the platform is `linux/amd64`. On DGX Spark ARM64 it is usually `linux/arm64`.
+On x86_64 systems the platform is `linux/amd64`. On DGX Spark ARM64 it is usually `linux/arm64`. Windows
+has no user IDs to pass, so there the command has no `-u` or `HOME` setting.
 
 ## Repository layout
 
@@ -71,13 +87,14 @@ src/gridlens/
   runner/     Docker probing, command construction, GridPACK execution
   analysis/   local output parsing, graph data, metrics, exports
   agent/      runtime adapters, sessions, deterministic tools, background jobs, MCP server
+  system/     private files, locks, folders, and child processes on Linux and Windows
   resources/  application icon
 
 tests/        core unit tests
 tests/data/   synthetic three-bus RAW cases in versions 33, 34, and 35
 docs/         architecture, install, user, security, packaging notes
 docs/plans/   design notes and work in progress
-packaging/    PyInstaller, Debian, and agent sandbox image files
+packaging/    PyInstaller, Debian, Windows installer, and agent sandbox image files
 scripts/      local helper scripts
 samples/      small parser sample files
 ```
@@ -87,6 +104,7 @@ samples/      small parser sample files
 - [Architecture](docs/architecture.md)
 - [Developer guide](docs/developer_guide.md)
 - [DGX OS 7 install guide](docs/install_dgx_os7.md)
+- [Windows install guide](docs/install_windows.md)
 - [User guide](docs/user_guide.md)
 - [CEII security notes](docs/security_ceii.md)
 - [Packaging and distribution](docs/packaging_distribution.md)
