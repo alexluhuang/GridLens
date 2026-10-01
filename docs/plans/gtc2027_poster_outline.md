@@ -215,7 +215,8 @@ V2, architecture (left to right):
 1. Inputs: PSS/E RAW case (v33–35), GridPACK XML.
 2. Run: GridPACK `ca.x` with MPI, in Docker with `--network none`, or an edited copy of the case for what-if
    studies.
-3. Reduce: result CSV (8.7 GB, 74.7 M rows) to compact tables and a Parquet index, with RAPIDS cuDF.
+3. Reduce: result CSV (8.7 GB, 74.7 M rows) to compact tables on the GPU with RAPIDS cuDF, and to a Parquet
+   index on the CPU with PyArrow.
 4. Ask: the agent (Hermes Agent runtime, local model served by Ollama) calls tools over MCP. Tool groups:
    rank and aggregate results; read any project file; network topology; search reference documents; set up,
    run, and edit studies.
@@ -236,8 +237,9 @@ Draft text:
 - **One DGX Spark runs the whole study.** Its GB10 superchip's 20 Arm cores run GridPACK's 20 MPI ranks, and
   its Blackwell GPU runs both the result reduction and the language model. The 128 GB of unified memory holds
   an 8.7 GB result file and a 25 GB model at once, so no data moves between machines.
-- **RAPIDS cuDF and dask-cuDF (CUDA 13)** read and aggregate the full result file by facility on the GPU, with
-  CPU fallbacks. **[measure: GPU vs CPU time, 9.1]**
+- **RAPIDS cuDF (CUDA 13)** reduces the 8.7 GB result file to per-facility and per-contingency summaries on
+  the GPU in 13 s, 10 times faster than Dask on all 20 CPU cores (132 s), with identical maximum loadings.
+  CPU paths remain as fallbacks.
 - **Local inference on the GPU:** the preferred model, NVIDIA Nemotron 3.5 Lightning (30B parameters, 3B
   active per token, 1M-token context), is served by Ollama on loopback.
 - **Next:** a GridPACK build with NVIDIA cuDSS for the contingency power flows. **[measure, 9.2; show only if
@@ -245,11 +247,17 @@ Draft text:
 
 V3, resource map: a single box for the DGX Spark split into CPU cores, GPU, and unified memory. Arrows show
 which stage uses each (GridPACK on the cores; cuDF and the LLM on the GPU; the result file, the Parquet
-index, and the model weights in unified memory). Annotate each with its measured time or size.
+index, and the model weights in unified memory). Annotate each with its measured time or size: GridPACK
+227 s on 20 cores; cuDF reduction 13 s with a peak of 23 GB of unified memory; result file 8.7 GB; model
+25 GB.
 
 Sources: this machine (`nvidia-smi`: NVIDIA GB10, driver 580.178.04; `lscpu`: 10 Cortex-X925 and 10
 Cortex-A725 cores; `/etc/dgx-release`: DGX OS 7.2.3; `free`: 121 GiB visible of 128 GB); `pip list`:
-cudf-cu13 26.6.0, dask-cudf-cu13 26.6.0; `docs/clarke.md` model table.
+cudf-cu13 26.6.0, dask-cudf-cu13 26.6.0; `docs/clarke.md` model table; reduction timings from 9.1.
+
+Note for the author: lead with the 10 times against Dask on 20 cores, the strongest CPU path. GridLens's
+single-threaded Python fallback took 20.5 min (95 times slower than cuDF), but a reader will call it a weak
+baseline. Do not claim dask-cuDF speed: on this file it was slower than CPU Dask (9.1).
 
 Note for the author: the solver run of 2026-09-23 used the cuDSS image, but its log says "The NVIDIA Driver
 was not detected. GPU functionality will not be available", because GridLens starts the solver container
@@ -330,7 +338,8 @@ print; add a "code available" column only after checking each repository]**
 | Analysis | cudf-cu13 26.6.0, dask-cudf-cu13 26.6.0, pandas 2.3.3, pyarrow 23.0.1 |
 | Agent | Hermes Agent 0.21.4, Ollama 0.34.2; models nemotron-3.5-lightning, gemma4:31b, nemotron3:33b; 18 MCP tools |
 | Agent evaluation | 30 regulator-style questions (32 prompts), each in a fresh session; reference answers computed from the data independently of the agent; scored Pass, Partial, or Fail on numbers, evidence, citations, claims of action, and plain language **[state who scored: currently Claude; add blinded human scoring, 9.3]** |
-| Timing | Wall clock from audit timestamps: turn time, time in tools, time in model, and tokens (`agent/accounting.py`) |
+| Reduction timing | Analysis cache rebuilt from the 8.7 GB result file in a fresh process with a cold page cache; three trials per backend, median reported; peak memory is the rise in system-wide used memory, which includes GPU allocations on unified memory (`scripts/benchmark_csv_flat_backends.py`) |
+| Agent timing | Wall clock from audit timestamps: turn time, time in tools, time in model, and tokens (`agent/accounting.py`) |
 | Tests | 450 automated tests on synthetic fixtures |
 
 Sources: this machine; `scripts/prepare_agent_evaluation.py`; `docs/plans/agent_question_evaluation.md`;
@@ -420,7 +429,7 @@ a public benchmark of regulator questions on synthetic grids.
 |---|---|---|---|
 | V1 | Review gap: utility lane, regulator lane, GridLens bridge | 1 | To draw |
 | V2 | Architecture, inputs to cited answer, with the offline boundary | 4 | To draw from `docs/ARCHITECTURE.md` §2 |
-| V3 | DGX Spark resource map: cores, GPU, unified memory, with measured sizes | 5 | To draw; needs 9.1 |
+| V3 | DGX Spark resource map: cores, GPU, unified memory, with measured sizes | 5 | To draw; data ready (9.1) |
 | V4 | Five-question review storyboard, with one Agent tab screenshot (synthetic data) | 6 | Needs 9.4 |
 | Table 7 | Comparison with published systems | 7 | Draft above; verify cells |
 | V5 | Topology validation, 1,061 outages by GridPACK status | 9 | Data ready |
@@ -435,13 +444,13 @@ a public benchmark of regulator questions on synthetic grids.
 | 2 Goal and scope | 80 |
 | 3 Trust controls | 80 |
 | 4 System | 60 |
-| 5 NVIDIA technology | 90 |
+| 5 NVIDIA technology | 110 |
 | 6 Case study | 110 |
 | 7 Distinctiveness | 50 |
-| 8 Methods | 70 |
+| 8 Methods | 90 |
 | 9 Results | 80 |
 | 10 Limits and next | 60 |
-| **Total** | **about 770**: cut to about 600 in layout, starting with Panels 3 and 6 |
+| **Total** | **about 810**: cut to about 600 in layout, starting with Panels 3 and 6 |
 
 ## 8. What to leave off
 
@@ -456,11 +465,38 @@ a public benchmark of regulator questions on synthetic grids.
 
 Each item names what to run, how, and what the poster needs from it.
 
-1. **GPU vs CPU result reduction** (Panel 5, V3). On the 8.7 GB flat result of run `2026-07-28_14-46-26`,
-   copied to a scratch project, build the analysis cache with `GRIDLENS_CSV_FLAT_BACKEND` set to `cudf`,
-   `dask_cudf`, `dask` (with `GRIDLENS_ALLOW_CPU_DASK=1`), and `python`. Three cold runs each, `rebuild=True`.
-   Record wall time and peak host memory, and check that every backend yields the same maximum loading per
-   facility.
+1. **GPU vs CPU result reduction** (Panel 5, V3). **Done 2026-10-01.** `scripts/benchmark_csv_flat_backends.py`
+   on the 8.7 GB flat result of run `2026-07-28_14-46-26`, copied to `~/GridLensProjects-bench`. Each trial
+   ran in a fresh process with the run's inputs evicted from the page cache (`posix_fadvise`; `mincore`
+   showed the file going from 100% to 0% resident), rebuilt the cache with `rebuild=True`, and alternated
+   backends within each of three rounds. Results: `~/GridLensProjects-bench/results_2026-10-01/summary.json`.
+
+   | Backend | Reduction, median (range) | Whole cache build, median | Peak memory rise | GPU use, peak / mean |
+   |---|---|---|---|---|
+   | cuDF | 13.0 s (12.7–13.5) | 13.5 s | 22.7 GB | 96% / 32% |
+   | dask-cuDF | 141.2 s (141.0–142.5) | 141.8 s | 8.9 GB | 39% / 6% |
+   | Dask, 20 CPU threads | 131.6 s (130.6–132.2) | 132.1 s | 30.4 GB | 0% (see below) |
+   | Python streaming | 1,231.9 s (1,229.4–1,234.9) | 1,232.4 s | 0.1 GB (RSS) | 0% (see below) |
+
+   - **Agreement.** In every trial, all four backends give identical maximum loading, overload count, and
+     contingency count for all 8,646 facilities. The binding contingency differs only where the maximum is
+     tied. 1,070 facilities reach their maximum in more than one contingency, 407 of them at 0% loading.
+     cuDF and dask-cuDF choose among the tied contingencies differently on each run. All 1,177 mismatches
+     at nonzero loading were checked against the raw rows, and every one is an exact tie. Python and CPU
+     Dask always agree. Make the GPU tie-break deterministic before claiming identical results without
+     qualification.
+   - **CPU Dask** runs in GridLens only when cuDF and dask-cuDF are missing, so for that trial the script
+     makes them look unavailable. `GRIDLENS_ALLOW_CPU_DASK=1` alone silently falls back to Python
+     streaming on this machine. Otherwise the timed code is the production path.
+   - **dask-cuDF is slower than CPU Dask here**: one Dask-CUDA worker, with mean GPU use of 6–8%. GridLens
+     chooses it automatically only for result files larger than 75% of available memory, so it does not run
+     on this file in normal use. Leave it off the poster, or measure it on a file that needs it.
+   - **Memory** is system-wide used memory (MemTotal − MemAvailable) above the pre-run baseline, so on
+     unified memory it includes GPU allocations; it is not a GPU-only figure. Python's rise was within the
+     noise from other processes, so its RSS is given.
+   - The 13 s includes importing cuDF and creating the CUDA context. The desktop session briefly used the
+     GPU during some CPU trials (peaks of 24–30%, means of 2% or less). CPU times varied by under 1.5%
+     between trials.
 2. **GridPACK with GPU sparse solves** (Panel 5 "Next", optional V8). Run the same case with the cuDSS image
    given GPU access (add `--gpus all` in extra Docker arguments; the network stays off), with its KLU
    fallback, and with `pnnl/gridpack:ca-scalability-v2`; three runs each. Check that convergence counts and

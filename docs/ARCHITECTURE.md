@@ -89,6 +89,11 @@ gridpack-workbench-dev/
 
 ## 2. High-Level System Diagram
 
+A one-page rendering of the whole system, with its boundary, components, flows, security controls, error
+paths, and hardware, is [`diagrams/gridlens_architecture.svg`](diagrams/gridlens_architecture.svg) (also as
+PNG). `scripts/draw_architecture_diagram.py` redraws it; redraw it in the same change as any change to a
+component or flow it shows. The Mermaid diagrams below show each view separately.
+
 ### 2.1 System context
 
 Everything runs on one machine. GridLens starts network traffic in three cases only: a Docker image pull,
@@ -670,9 +675,15 @@ disk, written with the Python standard library, pandas, or pyarrow.
   are skipped.
 - **Cache (`agent/documents.py`):** `manifest.json` maps each file's relative path, size, and modification
   time to its SHA-256; `<sha256>.json` holds a file's title and the text and printed label of each page, or
-  why it could not be read; `<sha256>.<INDEX_VERSION>.<model>.f32` holds the unit embeddings of its passages
-  when an embedding model was used. A changed file is read again; a changed `INDEX_VERSION` (`2026.09.30`)
-  rereads every file. The cache holds the documents' text, so it is as sensitive as the documents.
+  why it could not be read; `<sha256>.<INDEX_VERSION>.<model>.<format>.f32` holds the unit embeddings of its
+  passages when an embedding model was used, where `<format>` is a hash of the document prompt format. A
+  changed file is read again; a changed `INDEX_VERSION` (`2026.09.30`) rereads every file; a changed document
+  format embeds the passages again. The cache holds the documents' text, so it is as sensitive as the
+  documents.
+- **Embedding prompts:** retrieval embedding models are trained with task prompts, and Ollama adds none, so
+  `EMBEDDING_PROMPTS` in `agent/documents.py` writes each query and passage in its model family's format
+  from the model card. For EmbeddingGemma, a query is `task: search result | query: <query>` and a passage
+  is `title: <document>, <section> | text: <passage>`. Families without prompts get plain text.
 
 ### 4.8 Per-user caches, installed tools, and temporary files
 

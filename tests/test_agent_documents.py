@@ -159,6 +159,48 @@ def test_an_installed_embedding_model_adds_similarity_and_its_vectors_are_cached
     assert data["rows"][0]["section"] in ("R2", "Voltage") and data["total_matching"] == data["passages_searched"]
     first = len(embedded)
     assert first == data["passages_searched"] + 1
+    # Passages go in EmbeddingGemma's document format, titled by document and section, and the query in its query format.
+    assert "title: TPL-001-5.1 Transmission System Planning Performance, R1 | text: B. Requirements and Measures" in "\n".join(embedded)
+    assert embedded[-1] == "task: search result | query: limits on voltage"
     tools.search_documents("voltage", magnitude=3)
     # Only the query is embedded the second time; the passages' vectors come from the cache.
-    assert len(embedded) == first + 1 and list((library / documents.INDEX_FOLDER).glob("*.embeddinggemma_latest.f32"))
+    assert len(embedded) == first + 1 and list((library / documents.INDEX_FOLDER).glob("*.embeddinggemma_latest.*.f32"))
+    assert "retrieval prompt format" in data["retrieval"]
+
+
+def test_each_embedding_family_gets_its_model_cards_prompts():
+    passage = documents.Passage("TPL-001-5.1", "tpl.pdf", 7, "7", "R2.1", "Each Planning Coordinator shall study P1 events.")
+    assert documents.query_prompt("embeddinggemma:latest", "what  is TTC?") == "task: search result | query: what is TTC?"
+    assert documents.document_prompt("embeddinggemma:300m", passage) == "title: TPL-001-5.1, R2.1 | text: Each Planning Coordinator shall study P1 events."
+    assert documents.query_prompt("nomic-embed-text:v1.5", "TTC") == "search_query: TTC"
+    assert documents.document_prompt("nomic-embed-text", passage).startswith("search_document: TPL-001-5.1, R2.1\n")
+    assert documents.query_prompt("mxbai-embed-large", "TTC") == "Represent this sentence for searching relevant passages: TTC"
+    assert documents.query_prompt("snowflake-arctic-embed2:568m", "TTC") == "query: TTC"
+    assert documents.query_prompt("qwen3-embedding:0.6b", "TTC").startswith("Instruct: ") and documents.query_prompt("qwen3-embedding:0.6b", "TTC").endswith("\nQuery:TTC")
+    # Models without retrieval prompts get the text itself, still titled.
+    assert documents.query_prompt("bge-m3", "TTC") == "TTC"
+    untitled = documents.Passage("notes", "notes.txt", None, "", "", "Rate B")
+    assert documents.document_prompt("bge-m3", untitled) == "notes\nRate B"
+    assert documents.document_prompt("embeddinggemma", documents.Passage("", "x.txt", None, "", "", "Rate B")) == "title: none | text: Rate B"
+
+
+def test_changing_the_document_format_embeds_the_passages_again(library, monkeypatch):
+    """Vectors are cached under the document format they were made with, so a new format does not reuse them."""
+    calls = []
+
+    def fake(endpoint, path, body=None, *, timeout=5):
+        if path == "/api/tags":
+            return {"models": [{"name": "embeddinggemma:latest"}]}
+        if path == "/api/show":
+            return {"capabilities": ["embedding"]}
+        calls.append(len(body["input"]))
+        return {"embeddings": [[1.0, float(len(text))] for text in body["input"]]}
+
+    monkeypatch.setattr(documents, "ollama_json", fake)
+    loaded = documents.load_library(library)
+    documents.passage_embeddings(loaded, "http://127.0.0.1:11434", "embeddinggemma:latest")
+    documents.passage_embeddings(loaded, "http://127.0.0.1:11434", "embeddinggemma:latest")
+    once = sum(calls)
+    monkeypatch.setitem(documents.EMBEDDING_PROMPTS, "embeddinggemma", ("q: {query}", "doc: {title}: {text}"))
+    documents.passage_embeddings(loaded, "http://127.0.0.1:11434", "embeddinggemma:latest")
+    assert once == len(loaded.passages) and sum(calls) == 2 * len(loaded.passages)

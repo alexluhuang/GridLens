@@ -185,7 +185,9 @@ changes. A scanned PDF that has no text layer cannot be read; the answer says wh
 Searches match the words in your question. If you install an embedding model in Ollama, such as
 `ollama pull embeddinggemma`, they also match passages that say the same thing in other words. GridLens uses
 the model through Ollama on this machine, and the first search after adding documents takes longer while it
-computes their embeddings.
+computes their embeddings. It writes your question and each passage in the form the model was trained on
+for search, such as `task: search result | query: ...` for EmbeddingGemma; the search's result names the
+model it used.
 
 The documents and the cache stay on this machine. The cache holds the documents' text, so treat it as you
 treat the documents.

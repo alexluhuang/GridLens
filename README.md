@@ -87,6 +87,7 @@ samples/      small parser sample files
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [System architecture diagram](docs/diagrams/gridlens_architecture.svg)
 - [Developer guide](docs/developer_guide.md)
 - [DGX OS 7 install guide](docs/install_dgx_os7.md)
 - [User guide](docs/user_guide.md)

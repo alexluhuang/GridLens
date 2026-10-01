@@ -210,7 +210,8 @@ one tool server.
   Markdown, and HTML files in `<projects folder>/Reference documents/` and returns passages with their
   document, page, page label, and section. Text is cached by SHA-256 in the folder's `.gridlens-index/`.
   Passages are scored with BM25, blended with similarity from a local Ollama embedding model when one is
-  installed.
+  installed. Queries and passages are sent to that model in its family's retrieval prompt format, such as
+  `task: search result | query: ...` for EmbeddingGemma.
 - `agent/objects.py`: the vocabulary `rank` and `rank_groups` take. For each object family it defines the
   valid metrics, fields, and groups, checks the model's choices, and builds the records qualifiers test.
 - `agent/file_tools.py`: `list_files` and `read_file`, which read any project file as rows: a table, one
