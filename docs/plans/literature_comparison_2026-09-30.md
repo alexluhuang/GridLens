@@ -534,7 +534,8 @@ were checked for metadata only. Many are 2026 preprints without peer review.
 
 **Mylonas, Foti, and Varvarigos, "A Governance-Aware Large Language Model Orchestrated Agentic Digital Twin
 for Transmission System Operator Control Room Decision Support," arXiv:2609.22476, Sep. 2026.** This is the
-closest governance comparison to GridLens. The LLM may only select and fill in whitelisted tools. A side-effect action returns a
+closest governance comparison to GridLens. The LLM may only select and fill in whitelisted tools. A
+side-effect action returns a
 single-use approval token bound to the user, the session, the tool, and its validated arguments; the operator
 approves through a separate endpoint, not the chat, and approval and execution are logged separately. Backend
 results reach the model as typed facts (`F1`, `F2`, ...) that bind a value to its variable, unit, and time; the
