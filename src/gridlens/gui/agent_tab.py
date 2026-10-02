@@ -38,6 +38,7 @@ from gridlens.core.app_settings import AppSettings
 from gridlens.core.project import Project
 from gridlens.gui.agent_conversation import AgentPromptEdit, ConversationView, ProcessCard
 from gridlens.gui.agent_setup import AgentSetupDialog, SetupProbe
+from gridlens.gui.indexing import IndexingStatus
 from gridlens.gui.results_view_models import read_run_status
 from gridlens.gui.theme import configure_form_layout, set_button_role, set_context_label
 
@@ -223,6 +224,8 @@ class AgentTab(QWidget):
         history_row.addWidget(self.history_combo, 1)
         history_row.addWidget(self.new_button)
         layout.addLayout(history_row)
+        self.indexing = IndexingStatus(self.reference_documents_path, self)
+        layout.addWidget(self.indexing)
 
         self.conversation = ConversationView()
         layout.addWidget(self.conversation, 1)
@@ -527,6 +530,7 @@ class AgentTab(QWidget):
                 )
                 self.controller = AgentController(context, create_adapter(context.runtime, context.endpoint))
                 self.session_directory = context.directory
+                self.start_indexing()
             elif self.project is not None:
                 self.controller.refocus(self.project.root_dir, run_ids)
             self.controller.cancelled.clear()
@@ -830,9 +834,14 @@ class AgentTab(QWidget):
         if self.session_directory:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.session_directory)))
 
+    def reference_documents_path(self) -> Path:
+        """Return the folder of reference documents Clarke searches."""
+        projects = Path(self.settings.default_projects_dir).expanduser()
+        return reference_folder(projects)
+
     def reference_documents_folder(self) -> Path:
         """Return the folder of reference documents Clarke searches, creating it so the user can fill it."""
-        folder = reference_folder(Path(self.settings.default_projects_dir).expanduser())
+        folder = self.reference_documents_path()
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -843,6 +852,21 @@ class AgentTab(QWidget):
             QMessageBox.warning(self, "Reference documents", f"GridLens could not create the reference documents folder: {exc}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        self.start_indexing()
+
+    def start_indexing(self) -> None:
+        """Index the reference documents in the background.
+
+        The local Ollama checked for this session embeds the passages.
+        """
+        status = self.runtime_status
+        endpoint = status.endpoint if status and status.endpoint else ""
+        try:
+            self.indexing.start(endpoint or self.endpoint)
+        except (AgentError, OSError) as exc:
+            self.activity.appendPlainText(
+                f"The reference documents could not be indexed: {exc}"
+            )
 
     def shutdown(self) -> bool:
         self.stop()

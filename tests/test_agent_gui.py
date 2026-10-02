@@ -401,3 +401,47 @@ def test_reference_documents_button_opens_the_folder_clarke_searches(tmp_path, m
     tab.documents_button.click()
     folder = tmp_path / "projects" / "Reference documents"
     assert folder.is_dir() and opened == [str(folder)]
+
+
+def test_opening_the_reference_documents_starts_indexing_them(
+    tmp_path, monkeypatch, inline_indexer
+):
+    app = QApplication.instance() or QApplication([])
+    import gridlens.gui.agent_tab as agent_tab
+    monkeypatch.setattr(agent_tab.QDesktopServices, "openUrl",
+                        lambda url: None)
+    tab = AgentTab(AppSettings(default_projects_dir=tmp_path / "projects"))
+    tab.documents_button.click()
+    folder = tmp_path / "projects" / "Reference documents"
+    assert inline_indexer == [(folder, "http://127.0.0.1:11434")]
+    assert tab.indexing.label.text().startswith("Reference documents: ")
+    tab.deleteLater()
+    app.processEvents()
+
+
+def test_a_new_conversation_starts_indexing_the_reference_documents(
+    tmp_path, monkeypatch, inline_indexer
+):
+    app = QApplication.instance() or QApplication([])
+    tab = AgentTab(AppSettings(default_projects_dir=tmp_path / "projects"))
+    tab.check_runtime = lambda: None
+    tab.on_probed(RuntimeStatus(True, "Local", "/bin/hermes", "0.21.4",
+                                "http://127.0.0.1:11434", ("test:model",)))
+    monkeypatch.setattr("gridlens.gui.agent_tab.AgentWorker",
+                        lambda *_args: MagicMock())
+    tab.input.setPlainText("What does TPL-001 require for P1 events?")
+    tab.send()
+    folder = tmp_path / "projects" / "Reference documents"
+    assert inline_indexer == [(folder, "http://127.0.0.1:11434")]
+    controller = tab.controller
+    tab.worker = SimpleNamespace(deleteLater=lambda: None)
+    tab.finish_turn()
+    tab.input.setPlainText("And for P2 events?")
+    assert tab.send_button.isEnabled()
+    tab.send()
+    # The second turn continues the conversation, so it starts no indexer.
+    assert tab.controller is controller and len(inline_indexer) == 1
+    tab.worker = None
+    assert tab.shutdown()
+    tab.deleteLater()
+    app.processEvents()
