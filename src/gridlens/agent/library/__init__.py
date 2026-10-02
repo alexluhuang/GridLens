@@ -5,5 +5,6 @@ The user keeps standards, planning criteria, and manuals in
 read those documents and cache what they derive from them:
 
 - `cache`: the folder's `.gridlens-index/` and its private files;
-- `reading`: the files, their text, and their passages.
+- `reading`: the files, their text, and their passages;
+- `vectors`: the passages' embedding vectors, as float32 matrices.
 """

@@ -712,7 +712,8 @@ download sites.
 | Docker Engine | Run GridPACK and the script sandbox | Docker CLI as a subprocess | `runner/`, `agent/scripts.py` |
 | GridPACK images (default `pnnl/gridpack:latest`) | The contingency analysis solver, `mpirun ... ca.x <xml>` | Container with the run's `work/` at `/app/workspace` | `runner/docker_command.py` |
 | Ollama | Local inference for Clarke; model inventory, checks, downloads; embeddings for the reference search | HTTP on loopback: `/api/version`, `/api/tags`, `/api/show`, `/api/pull`, `/api/delete`, `/api/embed`; Hermes uses the OpenAI-compatible `/v1` | `agent/policy.py`, `agent/setup.py`, `agent/hermes.py`, `agent/documents.py` |
-| pypdf | Text and page labels of reference PDFs | Python library, imported when a PDF is first read | `agent/documents.py` |
+| pypdf | Text and page labels of reference PDFs | Python library, imported when a PDF is first read | `agent/library/reading.py` |
+| NumPy | Passage vectors as float32 matrices; one matrix-vector product per document | Python library | `agent/library/vectors.py` |
 | Hermes Agent 0.21.4 | The validated agent runtime | CLI subprocess, stream-json on stdout, prompt from a file | `agent/hermes.py` |
 | Claude Code 2.1.278 | Hosted runtime, disabled by policy | CLI subprocess in print mode, stream-json | `agent/claude_code.py` |
 | Codex CLI 0.155.1 | Hosted runtime, detection only | CLI probes (`--version`, `login status`) | `agent/codex.py` |
@@ -864,7 +865,7 @@ Known exposures that the design accepts or leaves to operators:
   python3 scripts/check_environment.py   # Python, architecture, Docker, and socket permissions
   ```
 
-  Dependencies: `PySide6>=6.6,<7`, `mcp==1.30.0`, and `pypdf>=6,<7` at run time. The `analysis` extra adds matplotlib,
+  Dependencies: `PySide6>=6.6,<7`, `mcp==1.30.0`, `numpy>=1.26,<3`, and `pypdf>=6,<7` at run time. The `analysis` extra adds matplotlib,
   pandas, pyarrow, Dask, `distributed`, and RAPIDS for CUDA 13 (`cudf-cu13`, `dask-cudf-cu13`, `dask-cuda`,
   `cupy-cuda13x`, `numba-cuda`, `cuda-toolkit`, `nvidia-nccl-cu13`). The `dev` extra adds pytest and
   PyInstaller. `requires-python` is `>=3.10`.

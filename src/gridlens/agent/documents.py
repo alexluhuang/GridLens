@@ -9,54 +9,30 @@ Ollama has an embedding model, the score also counts how close each passage's me
 each score is scaled to 0 to 1 over the passages searched, and the two are averaged. Embeddings are
 computed by Ollama on loopback and cached beside the text.
 
-Retrieval embedding models are trained with task prompts: a query is written one way and a document
-another, such as "task: search result | query: ..." and "title: ... | text: ..." for EmbeddingGemma.
-Ollama adds no prompt of its own, so `EMBEDDING_PROMPTS` gives each supported family's formats, from its
-model card, and `embedding_prompts` picks the installed model's. A change to a document format changes the
-cache file name, so passages embedded the old way are embedded again.
+`gridlens.agent.library.vectors` writes the query and the passages in the embedding model's task prompts
+and keeps each document's vectors as one float32 matrix, so a search is a matrix-vector product per
+document.
 """
 from __future__ import annotations
 
-from array import array
 from collections import Counter
 from dataclasses import dataclass
-import hashlib
 import json
 import math
 from pathlib import Path
 import re
 
-from gridlens.agent.library import cache
+import numpy as np
+
+from gridlens.agent.library import cache, vectors
 from gridlens.agent.library.cache import INDEX_VERSION
 from gridlens.agent.library.reading import Passage, document_files, extract, split_passages
-from gridlens.agent.policy import AgentError, local_endpoint, ollama_json
+from gridlens.agent.policy import AgentError, local_endpoint
 
 
 BM25_K1 = 1.5
 BM25_B = 0.75
 HYBRID_WEIGHT = 0.5
-# Embedding models from the Ollama library, in the order GridLens prefers them when several are installed.
-EMBEDDING_FAMILIES = ("embeddinggemma", "qwen3-embedding", "nomic-embed-text", "mxbai-embed-large", "bge-m3", "snowflake-arctic-embed2", "snowflake-arctic-embed", "granite-embedding", "all-minilm")
-EMBED_BATCH = 16
-# Each family's retrieval prompts, as (query format, document format), from its model card. {query} is the
-# search; {title} is the passage's document and section; {text} is the passage. EmbeddingGemma: "task:
-# search result | query:" and "title: | text:"; nomic-embed-text: "search_query:" and "search_document:";
-# mxbai-embed-large and snowflake-arctic-embed (v1): a query instruction only; snowflake-arctic-embed2:
-# "query: "; qwen3-embedding: "Instruct: <task>\nQuery:<query>", documents as they are. bge-m3,
-# granite-embedding, and all-minilm take text without prompts.
-EMBEDDING_PROMPTS = {
-    "embeddinggemma": ("task: search result | query: {query}", "title: {title} | text: {text}"),
-    "nomic-embed-text": ("search_query: {query}", "search_document: {title}\n{text}"),
-    "mxbai-embed-large": ("Represent this sentence for searching relevant passages: {query}", "{title}\n{text}"),
-    "snowflake-arctic-embed": ("Represent this sentence for searching relevant passages: {query}", "{title}\n{text}"),
-    "snowflake-arctic-embed2": ("query: {query}", "{title}\n{text}"),
-    "qwen3-embedding": (
-        "Instruct: Given a question about transmission planning, retrieve passages from standards, planning criteria, and manuals that answer it\nQuery:{query}",
-        "{title}\n{text}",
-    ),
-}
-PLAIN_PROMPTS = ("{query}", "{title}\n{text}")
-EMBED_TIMEOUT_SECONDS = 120
 _TOKEN = re.compile(r"[a-z0-9]+(?:[.\-/][a-z0-9]+)*")
 _STOP_WORDS = frozenset("a an and are as at be by for from has have in is it its of on or that the this to was were which with".split())
 
@@ -150,84 +126,28 @@ def bm25_scores(passages: list[Passage], query: str) -> list[float]:
     return scores
 
 
-def embedding_model(endpoint: str) -> str:
-    """Return the name of an installed local embedding model, or "" when Ollama has none or does not answer."""
-    try:
-        names = [str(item.get("name", "")) for item in ollama_json(endpoint, "/api/tags").get("models", [])]
-    except AgentError:
-        return ""
-    for family in EMBEDDING_FAMILIES:
-        for name in sorted(names):
-            if name.split(":")[0].split("/")[-1] != family or "cloud" in name.split(":")[-1].lower():
-                continue
-            try:
-                info = ollama_json(endpoint, "/api/show", {"model": name})
-            except AgentError:
-                continue
-            if "embedding" in info.get("capabilities", ["embedding"]) and not (info.get("remote_host") or info.get("remote_model")):
-                return name
-    return ""
+def passage_embeddings(library: Library, endpoint: str, model: str, dimensions: int = 0) -> list[np.ndarray]:
+    """Return the vectors of each document's passages as a float32 matrix, in the library's order.
 
-
-def _embed(endpoint: str, model: str, texts: list[str]) -> list[list[float]]:
-    """Return an embedding for each text from the local Ollama, in batches."""
-    vectors = []
-    for start in range(0, len(texts), EMBED_BATCH):
-        batch = texts[start:start + EMBED_BATCH]
-        result = ollama_json(endpoint, "/api/embed", {"model": model, "input": batch}, timeout=EMBED_TIMEOUT_SECONDS)
-        found = result.get("embeddings")
-        if not isinstance(found, list) or len(found) != len(batch):
-            raise AgentError("EMBEDDING_FAILED", f"Ollama returned no embeddings from {model}.")
-        vectors.extend(found)
-    return vectors
-
-
-def embedding_prompts(model: str) -> tuple[str, str]:
-    """Return the (query, document) prompt formats of an embedding model's family, or plain text for one without prompts."""
-    family = model.split(":")[0].split("/")[-1]
-    return EMBEDDING_PROMPTS.get(family, PLAIN_PROMPTS)
-
-
-def query_prompt(model: str, query: str) -> str:
-    """Return a search query written as the embedding model expects a retrieval query."""
-    return embedding_prompts(model)[0].format(query=" ".join(query.split()))
-
-
-def document_prompt(model: str, passage: Passage) -> str:
-    """Return a passage written as the embedding model expects a retrieval document, titled by its document and section."""
-    title = ", ".join(part for part in (passage.document, passage.section) if part) or "none"
-    return embedding_prompts(model)[1].format(title=title, text=passage.text)
-
-
-def _unit(vector: list[float]) -> list[float]:
-    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
-    return [value / norm for value in vector]
-
-
-def passage_embeddings(library: Library, endpoint: str, model: str) -> list[list[float]]:
-    """Return a unit embedding of every passage, computing only those of documents not embedded before."""
+    Only documents with no cached matrix, or one of another width when dimensions is given, are embedded.
+    Documents without passages have no matrix.
+    """
     index = cache.index_folder(library.folder)
-    # The document format is part of the name, so vectors made with another format are not reused.
-    prompt = hashlib.sha256(embedding_prompts(model)[1].encode()).hexdigest()[:8]
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", model) + f".{prompt}"
-    vectors: list[list[float]] = []
     by_file: dict[str, list[Passage]] = {}
     for passage in library.passages:
         by_file.setdefault(passage.file, []).append(passage)
+    matrices = []
     for document in library.documents:
         passages = by_file.get(document["file"], [])
-        path = index / f"{document['sha256']}.{INDEX_VERSION}.{slug}.f32"
-        stored = array("f")
-        if path.is_file():
-            stored.frombytes(path.read_bytes())
-        if passages and len(stored) and len(stored) % len(passages) == 0:
-            size = len(stored) // len(passages)
-            vectors.extend(list(stored[offset:offset + size]) for offset in range(0, len(stored), size))
+        if not passages:
             continue
-        found = [_unit(vector) for vector in _embed(endpoint, model, [document_prompt(model, passage) for passage in passages])]
-        cache.private_write(path, array("f", [value for vector in found for value in vector]).tobytes())
-        vectors.extend(found)
-    return vectors
+        path = vectors.vector_file(index, document["sha256"], model)
+        matrix = vectors.load_vectors(path, len(passages), dimensions)
+        if matrix is None:
+            matrix = vectors.embed(endpoint, model, [vectors.document_prompt(model, passage) for passage in passages])
+            vectors.save_vectors(path, matrix)
+        matrices.append(matrix)
+    return matrices
 
 
 def search(library: Library, query: str, endpoint: str = "", document: str = "") -> tuple[list[tuple[Passage, float, float, float | None]], str]:
@@ -243,16 +163,22 @@ def search(library: Library, query: str, endpoint: str = "", document: str = "")
     model = ""
     if endpoint and passages:
         try:
-            model = embedding_model(local_endpoint(endpoint))
+            model = vectors.embedding_model(local_endpoint(endpoint))
         except AgentError:
             model = ""
     if not model:
         ranked = sorted((item for item in zip(passages, lexical) if item[1] > 0), key=lambda item: -item[1])
         return [(passage, score, score, None) for passage, score in ranked], "BM25 (no local embedding model is installed in Ollama)"
-    everything = passage_embeddings(library, local_endpoint(endpoint), model)
-    lookup = {id(passage): vector for passage, vector in zip(library.passages, everything)}
-    (query_vector,) = [_unit(vector) for vector in _embed(local_endpoint(endpoint), model, [query_prompt(model, query)])]
-    similarity = [sum(a * b for a, b in zip(query_vector, lookup[id(passage)])) for passage in passages]
+    origin = local_endpoint(endpoint)
+    matrices = passage_embeddings(library, origin, model)
+    query_vector = vectors.query_vector(origin, model, query)
+    if any(matrix.shape[1] != query_vector.size for matrix in matrices):
+        # A cached matrix of another width came from another version of the model.
+        matrices = passage_embeddings(library, origin, model, query_vector.size)
+    # One matrix-vector product per document, so a document's similarities do not depend on the others.
+    closeness = np.concatenate([matrix @ query_vector for matrix in matrices]) if matrices else np.zeros(0, np.float32)
+    position = {id(passage): number for number, passage in enumerate(library.passages)}
+    similarity = closeness[[position[id(passage)] for passage in passages]].tolist()
     top_lexical = max(lexical, default=0.0) or 1.0
     low, high = min(similarity, default=0.0), max(similarity, default=0.0)
     spread = (high - low) or 1.0
@@ -261,5 +187,5 @@ def search(library: Library, query: str, endpoint: str = "", document: str = "")
         for passage, lexical_score, close in zip(passages, lexical, similarity)
     ]
     scored.sort(key=lambda item: -item[1])
-    prompted = "in the model's retrieval prompt format" if embedding_prompts(model) != PLAIN_PROMPTS else "as plain text"
+    prompted = "in the model's retrieval prompt format" if vectors.embedding_prompts(model) != vectors.PLAIN_PROMPTS else "as plain text"
     return scored, f"BM25 and {model} embeddings (query and passages {prompted}), each scaled to 0 to 1 over the passages searched, averaged"
