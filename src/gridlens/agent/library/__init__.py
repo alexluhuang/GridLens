@@ -6,5 +6,7 @@ read those documents and cache what they derive from them:
 
 - `cache`: the folder's `.gridlens-index/` and its private files;
 - `reading`: the files, their text, and their passages;
+- `index`: the passages and an inverted index of their words, in
+  SQLite;
 - `vectors`: the passages' embedding vectors, as float32 matrices.
 """
