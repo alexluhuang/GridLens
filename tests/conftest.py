@@ -10,6 +10,8 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 import pytest
 
+from gridlens.agent.library import index, vectors
+from gridlens.agent.policy import AgentError
 from gridlens.agent.session import SessionContext
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
 from gridlens.analysis.parser_models import PARSER_VERSION
@@ -175,3 +177,54 @@ def reference_library(tmp_path) -> Path:
     (folder / "scanned.pdf").write_bytes(_pdf([[]]))
     (folder / "notes.docx").write_bytes(b"PK")
     return folder
+
+
+# The words whose counts make the stand-in embedding model's vectors.
+EMBEDDED_TERMS = ("rate", "voltage", "contingency", "bus", "model")
+EMBEDDING_MODEL = "embeddinggemma:latest"
+
+
+@pytest.fixture(autouse=True)
+def offline_ollama(monkeypatch):
+    """Keep tests off any real Ollama: it answers only when faked."""
+    def unavailable(endpoint, path, body=None, *, timeout=5):
+        raise AgentError("OLLAMA_UNAVAILABLE", "Start Ollama.")
+
+    monkeypatch.setattr(vectors, "ollama_json", unavailable)
+
+
+@pytest.fixture
+def local_embeddings(monkeypatch):
+    """Serve EMBEDDING_MODEL from a stand-in for the local Ollama.
+
+    A text's vector counts the EMBEDDED_TERMS in it, plus a constant.
+    Returns the list of every text embedded, in order; a test can set
+    local_embeddings.width to change the vectors' width.
+    """
+    embedded = _Embedded()
+
+    def answer(endpoint, path, body=None, *, timeout=5):
+        if path == "/api/tags":
+            names = ["gemma4:31b", EMBEDDING_MODEL]
+            return {"models": [{"name": name} for name in names]}
+        if path == "/api/show":
+            return {"capabilities": ["embedding"]}
+        assert path == "/api/embed"
+        embedded.extend(body["input"])
+        return {"embeddings": [embedded.vector(text)
+                               for text in body["input"]]}
+
+    monkeypatch.setattr(vectors, "ollama_json", answer)
+    return embedded
+
+
+class _Embedded(list):
+    """The texts the stand-in model embedded, and its vectors' width."""
+
+    width = len(EMBEDDED_TERMS) + 1
+
+    def vector(self, text):
+        """Return the stand-in embedding of a text."""
+        words = index.tokens(text)
+        counts = [float(words.count(term)) for term in EMBEDDED_TERMS]
+        return (counts + [0.1] * self.width)[:self.width]

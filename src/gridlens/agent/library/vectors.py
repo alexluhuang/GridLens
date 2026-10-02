@@ -70,6 +70,7 @@ EMBEDDING_PROMPTS = {
 }
 PLAIN_PROMPTS = ("{query}", "{title}\n{text}")
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
+_FLOAT_BYTES = np.dtype(np.float32).itemsize
 
 
 def model_family(model: str) -> str:
@@ -187,6 +188,15 @@ def query_vector(endpoint: str, model: str, query: str) -> np.ndarray:
     return embed(endpoint, model, [query_prompt(model, query)])[0]
 
 
+def model_dimensions(endpoint: str, model: str) -> int:
+    """Return how many values the model's vectors have now.
+
+    A model pulled again can change its width, so the indexer asks the
+    model itself before it trusts a cached matrix.
+    """
+    return int(query_vector(endpoint, model, "dimensions").size)
+
+
 def vector_file(index: Path, sha256: str, model: str) -> Path:
     """Return where a document's vectors from a model are cached.
 
@@ -216,6 +226,19 @@ def load_vectors(
         if whole and dimensions in (0, width):
             matrix = values.reshape(count, width)
     return matrix
+
+
+def vectors_ready(path: Path, count: int, dimensions: int = 0) -> bool:
+    """Say whether a matrix of count rows is cached, by its size alone.
+
+    With dimensions, its rows must also be that wide.
+    """
+    size = path.stat().st_size if path.is_file() else 0
+    values, remainder = divmod(size, _FLOAT_BYTES)
+    whole = count > 0 and values > 0 and not remainder
+    return whole and values % count == 0 and dimensions in (
+        0, values // count
+    )
 
 
 def save_vectors(path: Path, matrix: np.ndarray) -> None:

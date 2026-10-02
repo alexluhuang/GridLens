@@ -8,5 +8,7 @@ read those documents and cache what they derive from them:
 - `reading`: the files, their text, and their passages;
 - `index`: the passages and an inverted index of their words, in
   SQLite;
-- `vectors`: the passages' embedding vectors, as float32 matrices.
+- `vectors`: the passages' embedding vectors, as float32 matrices;
+- `indexer`: brings the index and the vectors up to date;
+- `search`: which documents are ready, and their best passages.
 """
