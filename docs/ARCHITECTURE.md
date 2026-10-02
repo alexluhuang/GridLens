@@ -35,7 +35,8 @@ There is no separate server or web front end.
 ```text
 gridpack-workbench-dev/
 ├── src/gridlens/                 # The application package
-│   ├── main.py                   # Entry point: GUI, --mcp-server, --agent-tool, --agent-job
+│   ├── main.py                   # Entry point: GUI, --mcp-server, --agent-tool, --agent-job,
+│   │                             #   --index-documents
 │   ├── __main__.py               # Makes `python -m gridlens` call main()
 │   ├── gui/                      # PySide6 window, eight tabs, dialogs, QThread workers
 │   │   └── *_view_models.py      # Qt-free form logic, shared with the agent tools
@@ -46,10 +47,12 @@ gridpack-workbench-dev/
 │   ├── analysis/                 # Output parsers, csv_flat aggregation, caches, event index, exports,
 │   │                             #   network topology of a RAW case
 │   ├── agent/                    # Clarke: adapters, route policy, sessions, controller, tools,
-│   │                             #   MCP server, background jobs, script sandbox, setup,
-│   │                             #   reference documents, time and token accounting
+│   │   │                         #   MCP server, background jobs, script sandbox, setup,
+│   │   │                         #   time and token accounting
+│   │   └── library/              # Reference documents: reading, passage index, vectors,
+│   │                             #   search, and the background indexer
 │   └── resources/gridlens.svg    # Application icon
-├── tests/                        # pytest suite (46 test modules and conftest.py)
+├── tests/                        # pytest suite (59 test modules and conftest.py)
 │   └── data/                     # Synthetic three-bus RAW cases, versions 33, 34, and 35
 ├── scripts/                      # Environment check, launcher, version reader, agent evaluation tools
 ├── packaging/
@@ -80,7 +83,7 @@ gridpack-workbench-dev/
 | A chart in Branch or Transformer Analysis | `gui/analysis_tab.py` (`_render_control_area_chart`, `_render_voltage_group_chart`, `_render_line_chart`). |
 | A PSS/E record field used by sensitivity runs | `psse/layouts.py`; editing rules are in `psse/patch.py`; how the agent names records and scales loads is in `psse/changes.py`. |
 | A network question the topology tool answers | `analysis/topology.py` (the graph, paths, islands, and splitting outages) and `agent/network_tools.py` (the tool). |
-| A document format the reference search reads, or how passages are cut and scored | `agent/documents.py`; bump `INDEX_VERSION` so cached text is read again. |
+| A document format the reference search reads, or how passages are cut and scored | `agent/library/reading.py` (formats and passages), `agent/library/index.py` (word index and BM25), `agent/library/search.py` (ranking). Bump `INDEX_VERSION` in `agent/library/cache.py` so cached text is read again, and `SCHEMA_VERSION` in `agent/library/index.py` when the index's tables change. |
 | A new agent tool | A method decorated with `@tool` on `AnalysisTools` (`agent/tools.py`), `NetworkTools` (`agent/network_tools.py`), `FileTools` (`agent/file_tools.py`), `DocumentTools` (`agent/document_tools.py`), or `GridLensTools` (`agent/gridlens_tools.py`), added to the matching `*_TOOL_NAMES` tuple and, if it writes, to the write or destructive sets. The model's instructions are `SYSTEM_PROMPT` in `agent/prompt.py`. |
 | A new agent runtime | A module implementing the `RuntimeAdapter` protocol (`agent/runtime.py`) and one `ProviderDescriptor` row in `agent/providers.py`. Nothing else should change. |
 | The project folder layout | `core/project.py`. |
@@ -99,8 +102,8 @@ component or flow it shows. The Mermaid diagrams below show each view separately
 Everything runs on one machine. GridLens starts network traffic in three cases only: a Docker image pull,
 which happens only when a run's pull policy is `missing` or `always` rather than the default `never`; a
 hosted agent runtime, which is disabled by policy; and the optional download of Hermes Agent, Ollama, and
-models, after the user agrees in the Set up Clarke window. The reference document search calls Ollama only on
-loopback, for embeddings, and only when the user has installed an embedding model.
+models, after the user agrees in the Set up Clarke window. The reference document indexer and search call Ollama
+only on loopback, for embeddings, and only when the user has installed an embedding model.
 
 ```mermaid
 flowchart LR
@@ -113,6 +116,7 @@ flowchart LR
         gpu["NVIDIA GPU<br/>RAPIDS cuDF"]
         hermes["Hermes Agent CLI<br/>optional"]
         mcp["GridLens MCP server<br/>gridlens --mcp-server"]
+        indexer["Document indexer<br/>gridlens --index-documents"]
         ollama["Ollama<br/>127.0.0.1:11434<br/>optional"]
     end
     downloads["hermes-agent.nousresearch.com<br/>ollama.com and its model library"]
@@ -126,6 +130,10 @@ flowchart LR
     hermes -->|"OpenAI-compatible HTTP /v1"| ollama
     hermes <-->|"MCP over stdio"| mcp
     mcp <--> files
+    app -->|"starts, detached"| indexer
+    mcp -->|"starts, detached"| indexer
+    indexer <-->|"Reference documents/ and its index"| files
+    indexer -->|"/api/embed"| ollama
     app -.->|"only after user consent"| downloads
 ```
 
@@ -522,7 +530,7 @@ text output it is derived from MW flows and the RAW branch rating (Rate C). Faci
   | `rank`, `rank_groups` | `AnalysisTools` | Read. Sort or group facilities, contingencies, or indexed cases by one metric, with qualifiers and optional run comparison. The vocabulary is in `agent/objects.py`. |
   | `propose_analysis_script` | `AnalysisTools` | Write. Saves a script for review; never runs it. |
   | `topology` | `NetworkTools` | Read. From a run's own case or the project's: buses or elements within some hops of a bus, the shortest path between two buses, islands, and the single outages that split the network with what they cut off and, for a run, GridPACK's status for each. |
-  | `search_documents` | `DocumentTools` | Read. Passages of the user's reference documents that match a query, with document, page, page label, and section; with no query, the list of documents. |
+  | `search_documents` | `DocumentTools` | Read. Passages of the user's reference documents that match a query, with document, page, page label, and section; with no query, the list of documents. Reads only the passage index; files the index does not hold yet are left out, named in `being_indexed`, and handed to the background indexer. |
   | `list_files`, `read_file` | `FileTools` | Read. Any file in a GridLens project or the session folder, as table rows, RAW sections, JSON or XML fields, or text lines, with filters, joins, grouping, and document comparison. |
   | `list_projects`, `get_project`, `get_run_configuration`, `get_status` | `GridLensTools` | Read. `get_status` can wait up to 1,500 s for a job. |
   | `create_project`, `start_run`, `run_analysis` | `GridLensTools` | Write. `start_run` can override the saved image, pull policy, memory limit, and extra Docker arguments without confirmation. |
@@ -576,6 +584,37 @@ text output it is derived from MW flows and the RAW branch rating (Rate C). Faci
   `nemotron-3.5-lightning:latest` preferred.
 - **Technologies:** `urllib`, `subprocess`, `tar` with `zstd`.
 - **Deployment:** On a `SetupWorker` thread in the GUI process.
+
+#### 3.2.11 Reference library and its indexer
+
+- **Name:** `gridlens.agent.library` (`cache`, `reading`, `index`, `vectors`, `indexer`, `search`, `worker`)
+  and the Clarke tab's indexing row (`gui/indexing.py`).
+- **Description:** `reading` extracts each file's text by page and splits it into passages that keep their
+  page, page label, and nearest heading. `index` stores the passages in SQLite with an inverted index of
+  their words, a `WITHOUT ROWID` B-tree keyed by (word, document, passage), and computes BM25 from it with
+  the same formula and order of operations as a scan of every passage, so the scores are identical.
+  `vectors` keeps each document's passage embeddings as one float32 matrix, so similarity is one
+  matrix-vector product per document, exact over every passage. `search` reads only the index: a file is
+  searched once the index holds it at its present size and modification time and, with an embedding model,
+  once its vectors are cached; every other file is pending, named, and left out.
+
+  `indexer.update` hashes new and changed files, records the folder's files first so each new document can
+  be searched as soon as it is indexed, reads PDFs in ranges of 40 pages with a `spawn` process pool across
+  all but two cores (a range that takes ten minutes marks its PDF unreadable), indexes each document in one
+  transaction, forgets removed files, and embeds documents not embedded yet, after asking the model for its
+  vector width. `worker` runs it as `gridlens --index-documents <folder> [--endpoint <url>]`: detached, in
+  its own session, at niceness 10. At most one indexer runs and one waits per folder (`flock` on
+  `indexer.lock` and `indexer-wait.lock`), so every request is followed by a scan that starts after it. The
+  running indexer writes `status.json` and `indexer.log`.
+
+  The Clarke tab starts an indexer when a conversation starts and when **Open reference documents** is
+  clicked, and when files arrive in the folder (a `QFileSystemWatcher` on the folder and its subfolders,
+  settled for two seconds, and only if the documents changed). Its row shows the stage and progress. A search
+  starts one when the index lacks a file, and waits, for at most 15 seconds, only when nothing can be
+  searched yet.
+- **Technologies:** pypdf, SQLite (Python's `sqlite3`, write-ahead log), NumPy, `multiprocessing`, `fcntl`.
+- **Deployment:** Search runs in the MCP server; the indexer is a detached process that keeps running after
+  the turn and after GridLens closes; the row is in the GUI process.
 
 ## 4. Data Stores
 
@@ -673,17 +712,27 @@ disk, written with the Python standard library, pandas, or pyarrow.
 - **Purpose:** Standards, planning criteria, and manuals that `search_documents` reads: PDF (through pypdf),
   plain text, Markdown, and HTML, at most 1,000 files of at most 256 MB each. Hidden files and subfolders
   are skipped.
-- **Cache (`agent/documents.py`):** `manifest.json` maps each file's relative path, size, and modification
-  time to its SHA-256; `<sha256>.json` holds a file's title and the text and printed label of each page, or
-  why it could not be read; `<sha256>.<INDEX_VERSION>.<model>.<format>.f32` holds the unit embeddings of its
-  passages when an embedding model was used, where `<format>` is a hash of the document prompt format. A
-  changed file is read again; a changed `INDEX_VERSION` (`2026.09.30`) rereads every file; a changed document
-  format embeds the passages again. The cache holds the documents' text, so it is as sensitive as the
-  documents.
+- **Index (`agent/library/`):** `.gridlens-index/` holds
+  - `index.sqlite`, the passage index: `files` (each file's relative path, size, modification time, and
+    SHA-256), `documents` (title, page and passage counts, each passage's word count, or why the file could
+    not be read), `passages` (page, page label, section, text), and `postings` (how often each word appears
+    in each passage). Schema version `1` in `PRAGMA user_version`; an index of another version, or a damaged
+    one, is rebuilt;
+  - `<sha256>.json`, a file's title and the text and printed label of each page, or why it could not be read.
+    The index is rebuilt from these without reading the files again;
+  - `<sha256>.<INDEX_VERSION>.<model>.<format>.f32`, the unit embeddings of a document's passages as one
+    float32 matrix, row by row, where `<format>` is a hash of the document prompt format;
+  - `status.json` (the running or last indexer's state, stage, progress, and message), `indexer.log`, and the
+    lock files `indexer.lock` and `indexer-wait.lock`.
+
+  A changed file is read again; a changed `INDEX_VERSION` (`2026.09.30`) rereads every file; a changed
+  document format, model, or vector width embeds the passages again. Indexes written before the passage
+  index left a `manifest.json`, which is no longer read. The cache holds the documents' text, so it is as
+  sensitive as the documents.
 - **Embedding prompts:** retrieval embedding models are trained with task prompts, and Ollama adds none, so
-  `EMBEDDING_PROMPTS` in `agent/documents.py` writes each query and passage in its model family's format
-  from the model card. For EmbeddingGemma, a query is `task: search result | query: <query>` and a passage
-  is `title: <document>, <section> | text: <passage>`. Families without prompts get plain text.
+  `EMBEDDING_PROMPTS` in `agent/library/vectors.py` writes each query and passage in its model family's
+  format from the model card. For EmbeddingGemma, a query is `task: search result | query: <query>` and a
+  passage is `title: <document>, <section> | text: <passage>`. Families without prompts get plain text.
 
 ### 4.8 Per-user caches, installed tools, and temporary files
 
@@ -711,7 +760,8 @@ download sites.
 |---|---|---|---|
 | Docker Engine | Run GridPACK and the script sandbox | Docker CLI as a subprocess | `runner/`, `agent/scripts.py` |
 | GridPACK images (default `pnnl/gridpack:latest`) | The contingency analysis solver, `mpirun ... ca.x <xml>` | Container with the run's `work/` at `/app/workspace` | `runner/docker_command.py` |
-| Ollama | Local inference for Clarke; model inventory, checks, downloads; embeddings for the reference search | HTTP on loopback: `/api/version`, `/api/tags`, `/api/show`, `/api/pull`, `/api/delete`, `/api/embed`; Hermes uses the OpenAI-compatible `/v1` | `agent/policy.py`, `agent/setup.py`, `agent/hermes.py`, `agent/documents.py` |
+| Ollama | Local inference for Clarke; model inventory, checks, downloads; embeddings for the reference search | HTTP on loopback: `/api/version`, `/api/tags`, `/api/show`, `/api/pull`, `/api/delete`, `/api/embed`; Hermes uses the OpenAI-compatible `/v1` | `agent/policy.py`, `agent/setup.py`, `agent/hermes.py`, `agent/library/vectors.py` |
+| SQLite | The passage index of the reference documents | Python's `sqlite3`, write-ahead log, one database per Reference documents folder | `agent/library/index.py` |
 | pypdf | Text and page labels of reference PDFs | Python library, imported when a PDF is first read | `agent/library/reading.py` |
 | NumPy | Passage vectors as float32 matrices; one matrix-vector product per document | Python library | `agent/library/vectors.py` |
 | Hermes Agent 0.21.4 | The validated agent runtime | CLI subprocess, stream-json on stdout, prompt from a file | `agent/hermes.py` |
@@ -746,7 +796,8 @@ download sites.
 3. The package depends on `docker.io | docker-ce` and the X11 and XCB libraries Qt needs. Its `postinst`
    enables the Docker service and adds the installing user to the `docker` group.
 
-The frozen executable serves every entry point: the GUI, `--mcp-server`, `--agent-job`, and `--agent-tool`.
+The frozen executable serves every entry point: the GUI, `--mcp-server`, `--agent-job`, `--agent-tool`, and
+`--index-documents`.
 The package bundles no GridPACK image, no sandbox image, no model, and no inference engine.
 
 ### 6.2 Deployment topology
@@ -759,6 +810,7 @@ flowchart TB
             aw["Analysis worker<br/>spawned per build"]
             mcp["MCP server<br/>--mcp-server, per turn"]
             job["Job workers<br/>--agent-job, detached"]
+            idx["Document indexer<br/>--index-documents, detached"]
         end
         hermes["hermes CLI, per turn"]
         ollama["ollama serve<br/>127.0.0.1:11434"]
@@ -782,13 +834,18 @@ flowchart TB
     mcp --> disk
     job --> disk
     gp --> disk
+    gui --> idx
+    mcp --> idx
+    idx --> ollama
+    idx --> disk
 ```
 
 - **CI/CD Pipeline:** **Not evident from the repository.** It has no CI configuration; `CONTRIBUTING.md` lists
   the checks to run by hand.
 - **Monitoring & Logging:** No telemetry, crash reporting, or remote logging, by design. Everything is
   written to local files: `logs/run.log` and `work/terminal.log` per run, `job.log` per agent job, the
-  session audit files per conversation, `ollama-serve.log`, and `cufile.log`. The GUI shows the run log
+  session audit files per conversation, `indexer.log` beside the reference documents' index, `ollama-serve.log`,
+  and `cufile.log`. The GUI shows the run log
   live and each tab's status line.
 - **Release process and update mechanism:** **Not evident from the repository** beyond the version in
   `pyproject.toml` (`0.1.0`), read by `scripts/package_version.py`, and the `.deb` build. There is no update
@@ -824,8 +881,10 @@ user exports it.
   - Tools read only inside GridLens project folders, the session folder, and the Reference documents folder,
     refuse symlinks, and bound what reaches the model. Log lines, labels, document text, and script output are
     treated as data, not instructions.
-  - `search_documents` embeds passages only through a local Ollama embedding model on loopback, through the
-    same `ollama_json` that refuses redirects and proxies; with none installed it uses BM25 alone.
+  - `search_documents` and the document indexer embed passages only through a local Ollama embedding model
+    on loopback, through the same `ollama_json` that refuses redirects and proxies; with none installed the
+    search uses BM25 alone. The indexer reads only the Reference documents folder, writes only its private
+    `.gridlens-index/`, and runs at low priority.
   - A sensitivity run the agent starts waits for the user's confirmation in a later turn, like a destructive
     change, because it runs a network the user has not reviewed.
   - Session files are `0600` in `0700` folders.
@@ -878,6 +937,7 @@ Known exposures that the design accepts or leaves to operators:
   | `gridlens --mcp-server` | The MCP tool server for the session named by `GRIDLENS_AGENT_CONTEXT` |
   | `gridlens --agent-tool <context.json> <tool> --arguments '<json>'` | One tool call without a model |
   | `gridlens --agent-job <job folder>` | A background job worker |
+  | `gridlens --index-documents <folder> [--endpoint <url>]` | The reference document indexer |
   | `GRIDLENS_DIAGNOSTICS=imports gridlens` | Import checks for cuDF, dask-cuDF, and Dask |
   | `packaging/deb/build_deb.sh [version]` | The PyInstaller bundle and the `.deb` |
 

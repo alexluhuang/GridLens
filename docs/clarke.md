@@ -179,13 +179,19 @@ The page is the PDF's page, with the number printed on it when the PDF records o
 nearest heading above the passage, which GridLens finds by pattern, so check it against the page. A
 document says what is required; Clarke does not state that a study complies with it.
 
-GridLens reads each file once and keeps its text in the folder's `.gridlens-index/` subfolder until the file
-changes. A scanned PDF that has no text layer cannot be read; the answer says which files were skipped.
+GridLens indexes the documents in the background: when a conversation starts, when you open the folder, and
+when files arrive in it. A row above the conversation shows how far it has got, such as "Reference documents:
+reading 412 of 1,180 pages, TPL-001-5.1.pdf", and what the index holds when it finishes. Long PDFs are read
+on several processor cores at once. Each document can be searched as soon as it is indexed; a search does not
+wait for the rest, and the answer names any document that was still being indexed and so was not searched.
+GridLens reads each file once and keeps its text and passages in the folder's `.gridlens-index/` subfolder
+until the file changes. A scanned PDF that has no text layer cannot be read; the answer says which files were
+skipped.
 
 Searches match the words in your question. If you install an embedding model in Ollama, such as
 `ollama pull embeddinggemma`, they also match passages that say the same thing in other words. GridLens uses
-the model through Ollama on this machine, and the first search after adding documents takes longer while it
-computes their embeddings. It writes your question and each passage in the form the model was trained on
+the model through Ollama on this machine; a document is searched once its passages are embedded, which the
+indexer does after reading it. It writes your question and each passage in the form the model was trained on
 for search, such as `task: search result | query: ...` for EmbeddingGemma; the search's result names the
 model it used.
 

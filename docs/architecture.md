@@ -206,12 +206,15 @@ one tool server.
 - `agent/network_tools.py`: `topology`, which answers how a case's network is connected from its RAW file
   through `analysis/topology.py`: buses and elements near a bus, the shortest path between two buses,
   islands, and the single outages that split the network, with GridPACK's status for each in a run.
-- `agent/documents.py` and `agent/document_tools.py`: `search_documents`, which searches the PDF, text,
+- `agent/library/` and `agent/document_tools.py`: `search_documents`, which searches the PDF, text,
   Markdown, and HTML files in `<projects folder>/Reference documents/` and returns passages with their
-  document, page, page label, and section. Text is cached by SHA-256 in the folder's `.gridlens-index/`.
-  Passages are scored with BM25, blended with similarity from a local Ollama embedding model when one is
-  installed. Queries and passages are sent to that model in its family's retrieval prompt format, such as
-  `task: search result | query: ...` for EmbeddingGemma.
+  document, page, page label, and section. A background indexer (`gridlens --index-documents`) reads each
+  file, PDFs in page ranges on several cores, and keeps its passages in an SQLite index in the folder's
+  `.gridlens-index/`, with a B-tree of word postings that BM25 is computed from. Each document's embedding
+  vectors, from a local Ollama embedding model when one is installed, are one float32 matrix; queries and
+  passages are sent to the model in its family's retrieval prompt format, such as
+  `task: search result | query: ...` for EmbeddingGemma. A search reads only the index and names the files
+  still being indexed.
 - `agent/objects.py`: the vocabulary `rank` and `rank_groups` take. For each object family it defines the
   valid metrics, fields, and groups, checks the model's choices, and builds the records qualifiers test.
 - `agent/file_tools.py`: `list_files` and `read_file`, which read any project file as rows: a table, one

@@ -280,6 +280,10 @@ def _draw_application(c: Canvas) -> None:
            "Set up Clarke window installs Hermes, Ollama, and models; the "
            "review dialog runs approved scripts",
            fontsize=7.5, color=MUTED, va="center")
+    c.text(25, 89.2,
+           "The Clarke tab starts the document indexer, watches the "
+           "Reference documents folder, and shows its progress",
+           fontsize=7.5, color=MUTED, va="center")
     c.box(99, 88, 57.5, 21.5, "agent",
           "Agent controller  (AgentController, in the GUI process)", [
               "Runs one turn: writes the prompt file, starts the runtime, "
@@ -357,17 +361,16 @@ def _draw_processes(c: Canvas) -> None:
            "agent starts, through the same", "functions as the GUI"],
           title_size=9.5, size=7.6,
           tags=[("err", "dead worker reported failed")])
-    # Labelled at its top right, so the search_documents arrow enters
-    # clear of the label.
+    # Labelled between the two arrows that enter it, clear of both.
     c.zone(124.5, 33, 32, 17.5, "", LAYERS["process"][1], dashed=False,
            fill="#F2FAF9")
-    c.text(155.8, 49.8, "Document search", ha="right", va="top",
+    c.text(145.2, 49.8, "Document search", ha="center", va="top",
            fontsize=8.6, fontweight="bold", color=LAYERS["process"][1],
            zorder=4)
     c.box(125.5, 34, 13, 13.4, "process", "Document index",
-          ["In the MCP server", "pypdf text by page,", "cached by SHA-256",
-           "BM25 + similarity,", "averaged"],
-          title_size=8.6, size=7.0)
+          ["Detached indexer;", "PDFs read in parallel", "SQLite passages,",
+           "word B-tree (BM25),", "float32 vectors"],
+          title_size=8.6, size=7.0, tags=[("err", "pending listed")])
     c.box(142.3, 34, 13.7, 13.4, "agent", "Embedding model",
           ["embeddinggemma via", "the same local Ollama",
            "(/api/embed), apart", "from the chat model",
@@ -389,7 +392,8 @@ def _draw_files_and_hardware(c: Canvas) -> None:
             ["transcript, tool_calls audit,", "results/, conversation.md",
              "(files 0600)"], size=7.6)
     c.store(129.5, 17.5, 14, 11.5, "Reference docs/",
-            ["PDF, text, HTML;", ".gridlens-index/"], size=7.4)
+            ["PDF, text, HTML;", ".gridlens-index/:", "SQLite, vectors"],
+            size=7.4)
     c.store(145.5, 17.5, 11, 11.5, "Installs",
             ["settings.json,", "Hermes, Ollama,", "model weights"], size=7.2)
     c.box(23.5, 13.8, 133, 2.6, "hardware", "", (), title_size=1,
@@ -446,7 +450,9 @@ def _draw_agent_arrows(c: Canvas) -> None:
     c.arrow((112.5, 56.8), (112.5, 50.5))
     c.label(113.2, 53.8, "start job", size=7.0)
     c.arrow((136.8, 56.8), (136.8, 47.4))
-    c.label(137.5, 53.8, "search_documents", size=7.0)
+    c.label(137.5, 53.8, "search_documents;\nstarts indexer", size=7.0)
+    c.arrow((152, 56.8), (152, 47.4), both=True)
+    c.label(152.7, 52.1, "query", size=6.8)
     c.arrow((138.5, 42.5), (142.3, 42.5), both=True)
     c.text(140.4, 45.3, "text", ha="center", va="center", fontsize=6.3,
            color=INK, zorder=6)
@@ -460,7 +466,7 @@ def _draw_agent_arrows(c: Canvas) -> None:
     c.arrow((123.25, 56.8), (123.25, 29))
     c.arrow((99.6, 56.8), (98.6, 29))
     c.arrow((133, 34), (133, 29))
-    c.label(133.7, 31.0, "reads; caches text and vectors", size=6.8)
+    c.label(133.7, 31.0, "reads files; writes the index", size=6.8)
     c.label(99.3, 31.0, "scoped reads", size=6.8)
     c.label(113.5, 31.0, "audit appends", size=6.8)
 
