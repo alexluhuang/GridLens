@@ -45,6 +45,9 @@ LAYERS = {
 SECURITY = "#9B2C2C"
 ERROR = "#C05621"
 DEFAULT_OUTPUT = Path("docs/diagrams/gridlens_architecture")
+# A fixed salt for the SVG's element IDs, and no date in its metadata,
+# so redrawing an unchanged diagram writes the same file.
+SVG_ID_SALT = "gridlens-architecture"
 
 
 def commit() -> str:
@@ -137,7 +140,7 @@ class Canvas:
                   fontsize=size, fontweight="bold", color=edge, zorder=4)
 
     def tag(self, x, y, text, kind):
-        """Draw a tag: security control ("sec") or error path ("err")."""
+        """Draw a tag for a security control or an error path."""
         color = SECURITY if kind == "sec" else ERROR
         mark = "SEC" if kind == "sec" else "ERR"
         backing = dict(boxstyle="round,pad=0.18,rounding_size=0.3",
@@ -166,9 +169,12 @@ class Canvas:
     def save(self, output: Path) -> None:
         """Write the diagram as output.svg and output.png."""
         output.parent.mkdir(parents=True, exist_ok=True)
-        for suffix, dpi in ((".svg", None), (".png", 160)):
-            self.figure.savefig(output.with_suffix(suffix), dpi=dpi,
-                                bbox_inches="tight", facecolor="white")
+        with matplotlib.rc_context({"svg.hashsalt": SVG_ID_SALT}):
+            self.figure.savefig(output.with_suffix(".svg"),
+                                bbox_inches="tight", facecolor="white",
+                                metadata={"Date": None})
+        self.figure.savefig(output.with_suffix(".png"), dpi=160,
+                            bbox_inches="tight", facecolor="white")
 
 
 def draw(output: Path) -> None:

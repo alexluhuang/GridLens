@@ -1,0 +1,3 @@
+# Drawn by scripts/draw_architecture_diagram.py. matplotlib ends the lines of
+# its glyph paths with a space, so whitespace checks do not apply.
+docs/diagrams/*.svg -whitespace
