@@ -28,7 +28,7 @@ from matplotlib.patches import (
 )
 
 
-WIDTH, HEIGHT = 160, 124
+WIDTH, HEIGHT = 182, 124
 FONT = "DejaVu Sans"
 INK = "#1F2933"
 MUTED = "#52606D"
@@ -71,7 +71,7 @@ class Canvas:
 
     def __init__(self) -> None:
         """Start an empty figure with no axes shown."""
-        self.figure, self.axes = plt.subplots(figsize=(20, 15.5))
+        self.figure, self.axes = plt.subplots(figsize=(22.75, 15.5))
         self.axes.set_xlim(0, WIDTH)
         self.axes.set_ylim(0, HEIGHT)
         self.axes.axis("off")
@@ -134,7 +134,8 @@ class Canvas:
         for index, (kind, text) in enumerate(reversed(tags)):
             self.tag(x + 0.9, y + 1.3 + index * 2.0, text, kind)
 
-    def store(self, x, y, w, h, title, lines=(), *, size=8.0):
+    def store(self, x, y, w, h, title, lines=(), *, size=8.0,
+              title_size=9.6):
         """Draw a data store as a cylinder."""
         fill, edge = LAYERS["data"]
         cap = 1.6
@@ -154,7 +155,8 @@ class Canvas:
                                linewidth=1.6, zorder=3),
                        "store", title, "top")
         self.text(x + 0.9, y + h - cap - 0.5, title, ha="left", va="top",
-                  fontsize=9.6, fontweight="bold", color=edge, zorder=4)
+                  fontsize=title_size, fontweight="bold", color=edge,
+                  zorder=4)
         for index, line in enumerate(lines):
             self.text(x + 0.9, y + h - cap - 2.6 - index * size * 0.185,
                       line, ha="left", va="top", fontsize=size, color=INK,
@@ -253,7 +255,7 @@ def _draw_external_systems(c: Canvas) -> None:
           ["Claude Code, Codex adapters;", "disabled by policy, refused",
            "unless an operator enables them"],
           title_size=10, size=7.6, dashed=True, edge=SECURITY)
-    c.zone(22, 13, 136, 101,
+    c.zone(22, 13, 158, 101,
            "User's workstation: NVIDIA DGX Spark, DGX OS 7 (Ubuntu 24.04, "
            "ARM64)", "#1F4E79", size=11)
     c.tag(98.5, 113.25,
@@ -299,19 +301,24 @@ def _draw_application(c: Canvas) -> None:
                         "marked invalid")])
     c.zone(23.5, 56, 68.5, 25, "Application core  (plain Python, no Qt)",
            LAYERS["core"][1], dashed=False, fill="#F7F8FA", size=10)
+    # The view models live in gui/ but use no Qt; the tabs, the tool
+    # server, and the job workers all call them.
     core = [
-        ("runner/", ["docker run command", "as an argument list;",
-                     "run and stop;", "progress from output"]),
-        ("core/", ["Projects; inputs with", "SHA-256 hashes; run",
-                   "manifests; sensitivity", "runs; settings"]),
-        ("psse/", ["PSS/E RAW v33-35", "reader; byte-preserving",
-                   "patcher; edits named", "by bus and ID"]),
-        ("analysis/", ["Output parsers; GPU", "CSV aggregation;",
-                       "caches; event index;", "network topology"]),
+        ("runner/", ["docker run", "command as an", "argument list;",
+                     "run and stop;", "progress from", "output"]),
+        ("core/", ["Projects; inputs", "with SHA-256;", "run manifests;",
+                   "sensitivity runs;", "settings"]),
+        ("psse/", ["PSS/E RAW v33-35", "reader; byte-", "preserving patcher;",
+                   "edits named by", "bus and ID"]),
+        ("view models", ["gui/*_view_models", "(no Qt): project,",
+                         "XML settings, and", "run forms; shared",
+                         "with Clarke"]),
+        ("analysis/", ["Output parsers;", "GPU CSV", "aggregation;",
+                       "caches; event", "index; topology"]),
     ]
     for index, (name, lines) in enumerate(core):
-        c.box(25 + index * 16.6, 58, 15.6, 18.5, "core", name, lines,
-              title_size=10, size=8.0)
+        c.box(25 + index * 13.28, 58, 12.28, 18.5, "core", name, lines,
+              title_size=10, size=7.4)
 
 
 def _draw_agent_runtime(c: Canvas) -> None:
@@ -335,14 +342,18 @@ def _draw_agent_runtime(c: Canvas) -> None:
           ], title_size=8.8, size=7.3, tags=[
               ("sec", "paths scoped; inputs, XML, stop, and edited-case runs "
                       "wait for the user's next message"),
-              ("err", "stale caches and indexes refused, never quoted"),
+              ("err", "stale caches and indexes refused, never quoted; "
+                      "unindexed documents named"),
           ])
 
 
 def _draw_processes(c: Canvas) -> None:
     """Draw the processes and containers GridLens starts."""
-    c.zone(23.5, 33, 46.5, 17.5, "Docker Engine", LAYERS["process"][1],
-           dashed=False, fill="#F2FAF9", size=10)
+    # Labelled between the two arrows that enter it, clear of both.
+    c.zone(23.5, 33, 46.5, 17.5, "", LAYERS["process"][1], dashed=False,
+           fill="#F2FAF9")
+    c.text(49, 49.8, "Docker Engine", ha="center", va="top", fontsize=10,
+           fontweight="bold", color=LAYERS["process"][1], zorder=4)
     c.box(25, 34.3, 21.5, 13.2, "process", "GridPACK container",
           ["mpirun -n <N> ca.x <xml>", "Mounts only the run's work/",
            "Host UID and GID"],
@@ -356,22 +367,23 @@ def _draw_processes(c: Canvas) -> None:
           ["Spawned process per build;", "one build at a time (lock)",
            "RAPIDS cuDF / dask-cuDF", "on the GPU"],
           title_size=9.5, size=7.6, tags=[("err", "GPU -> CPU fallbacks")])
-    c.box(100, 33, 22, 17.5, "process", "Agent job workers",
+    c.box(100, 33, 19.2, 17.5, "process", "Agent job workers",
           ["gridlens --agent-job, detached", "Runs and analysis builds the",
            "agent starts, through the same", "functions as the GUI"],
           title_size=9.5, size=7.6,
           tags=[("err", "dead worker reported failed")])
-    # Labelled between the two arrows that enter it, clear of both.
-    c.zone(124.5, 33, 32, 17.5, "", LAYERS["process"][1], dashed=False,
+    # Labelled between the two arrows that enter it, clear of both. The
+    # search's own arrow to the index passes to its left.
+    c.zone(124.4, 33, 32.1, 17.5, "", LAYERS["process"][1], dashed=False,
            fill="#F2FAF9")
-    c.text(145.2, 49.8, "Document search", ha="center", va="top",
+    c.text(143, 49.8, "Document search", ha="center", va="top",
            fontsize=8.6, fontweight="bold", color=LAYERS["process"][1],
            zorder=4)
-    c.box(125.5, 34, 13, 13.4, "process", "Document index",
-          ["Detached indexer;", "PDFs read in parallel", "SQLite passages,",
-           "word B-tree (BM25),", "float32 vectors"],
-          title_size=8.6, size=7.0, tags=[("err", "pending listed")])
-    c.box(142.3, 34, 13.7, 13.4, "agent", "Embedding model",
+    c.box(125.6, 34, 13.8, 13.4, "process", "Document indexer",
+          ["Detached process,", "low priority;", "PDFs read in parallel;",
+           "builds the index", "and its vectors"],
+          title_size=8.2, size=6.6, tags=[("err", "failures logged")])
+    c.box(143, 34, 13, 13.4, "agent", "Embedding model",
           ["embeddinggemma via", "the same local Ollama",
            "(/api/embed), apart", "from the chat model",
            "Task prompts on query", "and passages"],
@@ -380,7 +392,7 @@ def _draw_processes(c: Canvas) -> None:
 
 def _draw_files_and_hardware(c: Canvas) -> None:
     """Draw the files on the local disk and the hardware strip."""
-    c.store(23.5, 17.5, 76, 11.5,
+    c.store(23.5, 17.5, 95.5, 11.5,
             "Projects folder  ~/GridLensProjects/<project>/", [
                 "project.json; original_inputs/ (RAW case, GridPACK XML); "
                 "agent/jobs/ (job.json, job.log)",
@@ -388,15 +400,24 @@ def _draw_files_and_hardware(c: Canvas) -> None:
                 "work/ (GridPACK outputs, CSV flat ~8.7 GB);",
                 "reports/ (analysis caches, Parquet event index)",
             ], size=7.6)
-    c.store(102, 17.5, 25, 11.5, "Clarke conversations/",
-            ["transcript, tool_calls audit,", "results/, conversation.md",
-             "(files 0600)"], size=7.6)
-    c.store(129.5, 17.5, 14, 11.5, "Reference docs/",
-            ["PDF, text, HTML;", ".gridlens-index/:", "SQLite, vectors"],
-            size=7.4)
-    c.store(145.5, 17.5, 11, 11.5, "Installs",
-            ["settings.json,", "Hermes, Ollama,", "model weights"], size=7.2)
-    c.box(23.5, 13.8, 133, 2.6, "hardware", "", (), title_size=1,
+    # Beside the agent runtime, whose three parts all write it.
+    c.store(162, 56, 16, 25, "Clarke conversations/",
+            ["One folder per", "conversation:", "transcript, prompts,",
+             "context.json,", "tool_calls audit,", "results/, the Hermes",
+             "profile and its", "history, scratch/,", "conversation.md",
+             "(files 0600)"], size=7.2, title_size=8.0)
+    # The index the search reads, apart from the documents it is built
+    # from; it lives in the documents folder's .gridlens-index/.
+    c.store(122, 17.5, 11.6, 11.5, "Document index",
+            ["SQLite database:", "passages, word", "B-tree; float32",
+             "vectors (.f32)"], size=7.2, title_size=8.0)
+    c.store(134.6, 17.5, 11.9, 11.5, "Reference docs/",
+            ["PDF, text,", "Markdown, and", "HTML you add"], size=7.4,
+            title_size=8.0)
+    c.store(147.5, 17.5, 9, 11.5, "Installs",
+            ["settings.json;", "Hermes and", "Ollama; model", "weights"],
+            size=7.2)
+    c.box(23.5, 13.8, 154.5, 2.6, "hardware", "", (), title_size=1,
           radius=0.4)
     c.text(25, 15.1,
            "Hardware:  20 Arm cores (10 Cortex-X925, 10 Cortex-A725): "
@@ -424,14 +445,23 @@ def _draw_application_arrows(c: Canvas) -> None:
     c.label(95.5, 96.7, "question,\nanswer", size=6.8, ha="center")
     c.arrow((57.75, 88), (57.75, 81))
     c.label(58.5, 84.5, "function calls")
-    c.arrow((38.5, 58), (38.5, 47.5))
-    c.label(39.2, 53.6, "docker run (argument list)")
+    c.arrow((36.6, 58), (36.6, 47.5))
+    c.label(37.3, 53.6, "docker run (argument list)")
+    # A reviewed script sees the selected run's folder, read-only.
+    c.arrow((50, 29), (50, 34.3))
+    c.label(50.7, 31.0, "run folder,\nread-only", size=7.0)
     c.arrow((35.75, 34.3), (35.75, 29))
     c.label(36.5, 31.4, "bind mount work/")
-    c.arrow((82.6, 58), (82.6, 50.5))
-    c.label(83.3, 54.2, "spawn; progress queue")
+    # The queue carries progress and the build's result back up.
+    c.arrow((82.6, 58), (82.6, 50.5), both=True)
+    c.label(83.3, 54.4, "spawn; progress and\nresults (queue)", size=7.0)
+    # The core reads and writes the project's own files: projects and
+    # inputs (core/), RAW cases (psse/), run status and logs (runner/).
+    c.arrow((71.25, 56), (71.25, 29), both=True)
+    c.label(70.6, 31.0, "projects, cases,\nmanifests, run status", size=7.0,
+            ha="right")
     c.arrow((84.5, 33), (84.5, 29), both=True)
-    c.label(83.8, 31.0, "read outputs, write caches", size=7.0, ha="right")
+    c.label(85.2, 31.0, "read outputs,\nwrite caches", size=7.0)
 
 
 def _draw_agent_arrows(c: Canvas) -> None:
@@ -449,31 +479,48 @@ def _draw_agent_arrows(c: Canvas) -> None:
     c.label(95.75, 64.6, "same\nfunction\ncalls", size=6.6, ha="center")
     c.arrow((112.5, 56.8), (112.5, 50.5))
     c.label(113.2, 53.8, "start job", size=7.0)
-    c.arrow((136.8, 56.8), (136.8, 47.4))
-    c.label(137.5, 53.8, "search_documents;\nstarts indexer", size=7.0)
+    # The search reads the index itself; it only starts the indexer.
+    c.arrow((123, 56.8), (123, 29))
+    c.label(123.7, 53.6, "search_documents:\nreads the index", size=6.8)
+    c.arrow((134, 56.8), (134, 47.4))
+    c.label(134.7, 53.8, "starts", size=7.0)
     c.arrow((152, 56.8), (152, 47.4), both=True)
     c.label(152.7, 52.1, "query", size=6.8)
-    c.arrow((138.5, 42.5), (142.3, 42.5), both=True)
-    c.text(140.4, 45.3, "text", ha="center", va="center", fontsize=6.3,
+    c.arrow((139.4, 42.5), (143, 42.5), both=True)
+    c.text(141.2, 45.3, "text", ha="center", va="center", fontsize=6.0,
            color=INK, zorder=6)
-    c.text(140.4, 39.8, "vectors", ha="center", va="center", fontsize=6.3,
+    c.text(141.2, 39.8, "vectors", ha="center", va="center", fontsize=6.0,
            color=INK, zorder=6)
     c.arrow((100, 42), (96.5, 42))
     c.line([106, 106, 61], [50.5, 52.6, 52.6], "line", "runs GridPACK",
            color=INK, linewidth=1.5, zorder=5)
     c.arrow((61, 52.6), (61, 50.5))
     c.label(64.5, 52.6, "runs GridPACK", size=6.8)
-    c.arrow((123.25, 56.8), (123.25, 29))
+    c.arrow((108, 33), (108, 29))
+    c.label(108.7, 31.0, "job.json, job.log;\nrun folders", size=6.8)
+    # The session folder: the controller writes the transcript and
+    # prompts, Hermes keeps its profile and history, and the tool server
+    # appends the audit.
+    c.line([156.5, 170], [93, 93], "line", "controller session",
+           color=INK, linewidth=1.5, zorder=5)
+    c.arrow((170, 93), (170, 81))
+    c.label(169.3, 86.0, "transcript, prompts,\nconversation.md", size=6.8,
+            ha="right")
+    c.arrow((155.5, 73.3), (162, 73.3), both=True)
+    c.label(158.75, 75.7, "profile,\nhistory", size=6.6, ha="center")
+    c.arrow((155.5, 61.6), (162, 61.6))
+    c.label(158.75, 64.0, "audit,\nresults", size=6.6, ha="center")
     c.arrow((99.6, 56.8), (98.6, 29))
-    c.arrow((133, 34), (133, 29))
-    c.label(133.7, 31.0, "reads files; writes the index", size=6.8)
+    c.arrow((128, 34), (128, 29))
+    c.label(128.7, 31.0, "writes", size=6.8)
+    c.arrow((137, 29), (137, 34))
+    c.label(137.7, 31.0, "reads documents", size=6.8)
     c.label(99.3, 31.0, "scoped reads", size=6.8)
-    c.label(113.5, 31.0, "audit appends", size=6.8)
 
 
 def _draw_legend(c: Canvas) -> None:
     """Draw the legend and the footer naming the commit drawn."""
-    c.add_patch(Rectangle((1, 1.2), 157, 9.4, facecolor="#FAFBFC",
+    c.add_patch(Rectangle((1, 1.2), 179, 9.4, facecolor="#FAFBFC",
                           edgecolor="#CBD2D9", linewidth=1.0, zorder=1),
                 "legend", "frame")
     c.text(2, 9.3, "Legend", ha="left", va="center", fontsize=9.5,
@@ -496,7 +543,8 @@ def _draw_legend(c: Canvas) -> None:
                         facecolor=LAYERS["data"][0],
                         edgecolor=LAYERS["data"][1], linewidth=1.4,
                         zorder=2), "legend", "data")
-    c.text(x + 4, 6.5, "Files on local disk", ha="left", va="center",
+    c.text(x + 4, 6.5, "Files and databases on local disk", ha="left",
+           va="center",
            fontsize=8.2, color=INK)
     c.add_patch(FancyArrowPatch((2, 2.9), (7, 2.9), arrowstyle="-|>",
                                 mutation_scale=12, color=INK,
@@ -515,7 +563,7 @@ def _draw_legend(c: Canvas) -> None:
            fontsize=8.2, color=INK)
     c.tag(104, 2.9, "Security control", "sec")
     c.tag(127, 2.9, "Error handling or fallback", "err")
-    c.text(158, 0.2,
+    c.text(180, 0.2,
            f"Source: docs/ARCHITECTURE.md and the code at commit {commit()}. "
            "Drawn by scripts/draw_architecture_diagram.py.",
            ha="right", va="bottom", fontsize=7.0, color=MUTED)
