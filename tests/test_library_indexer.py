@@ -126,3 +126,15 @@ def test_vectors_of_another_width_are_embedded_again(reference_library,
     local_embeddings.width = 8
     indexer.update(reference_library, ENDPOINT)
     assert len(local_embeddings) == 2 * first
+
+
+def test_a_new_document_format_embeds_the_passages_again(
+    reference_library, local_embeddings, monkeypatch
+):
+    indexer.update(reference_library, ENDPOINT)
+    first = len(local_embeddings)
+    monkeypatch.setitem(vectors.EMBEDDING_PROMPTS, "embeddinggemma",
+                        ("q: {query}", "doc: {title}: {text}"))
+    indexer.update(reference_library, ENDPOINT)
+    assert len(local_embeddings) == 2 * first
+    assert local_embeddings[-1].startswith("doc: ")

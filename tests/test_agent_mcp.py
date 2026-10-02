@@ -66,6 +66,20 @@ def test_official_sdk_client_tools_and_scope(agent_context):
     asyncio.run(exercise())
 
 
+def test_tool_descriptions_are_docstrings_without_their_indentation(
+    agent_context
+):
+    import gridlens.agent.mcp_server as mcp_server
+
+    tools = asyncio.run(mcp_server.create_server(agent_context).list_tools())
+    searching = next(tool for tool in tools
+                     if tool.name == "search_documents")
+    assert searching.description.startswith("Search the reference documents")
+    assert "\n        " not in searching.description
+    assert all(tool.description == tool.description.strip()
+               for tool in tools)
+
+
 def test_mcp_server_holds_destructive_changes_for_confirmation(agent_context, monkeypatch):
     """Every model reaches the tools through the MCP server, so it is the one that makes changes wait for the user."""
     import gridlens.agent.mcp_server as mcp_server

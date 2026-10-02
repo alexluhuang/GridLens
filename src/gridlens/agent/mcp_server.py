@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from functools import wraps
+import inspect
 import json
 import os
 from pathlib import Path
@@ -44,7 +45,12 @@ def create_server(context: SessionContext):
     service = ToolService(context, confirm_changes=True)
     for name in TOOL_NAMES:
         annotations = ToolAnnotations(readOnlyHint=name not in WRITE_TOOL_NAMES, destructiveHint=name in DESTRUCTIVE_TOOL_NAMES, openWorldHint=False)
-        server.add_tool(compact_json(getattr(service, name)), annotations=annotations, structured_output=False)
+        method = getattr(service, name)
+        # The docstring, without its indentation, is what the model reads.
+        server.add_tool(
+            compact_json(method), description=inspect.getdoc(method),
+            annotations=annotations, structured_output=False,
+        )
     return server
 
 
