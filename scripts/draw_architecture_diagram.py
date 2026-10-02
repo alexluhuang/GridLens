@@ -17,6 +17,7 @@ docs/diagrams/gridlens_architecture.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 import subprocess
 
@@ -74,11 +75,39 @@ class Canvas:
         self.axes.set_xlim(0, WIDTH)
         self.axes.set_ylim(0, HEIGHT)
         self.axes.axis("off")
+        self.names: dict[str, int] = {}
+
+    def name(self, artist, kind: str, *key) -> None:
+        """Name an element's SVG group by what it draws.
+
+        matplotlib numbers groups in drawing order, so adding an
+        element would renumber every one drawn after it. A name from
+        the element's kind and key changes only when the element does.
+        """
+        digest = hashlib.sha256(repr(key).encode("utf-8")).hexdigest()[:10]
+        name = f"{kind}-{digest}"
+        count = self.names.get(name, 0)
+        self.names[name] = count + 1
+        artist.set_gid(f"{name}-{count}" if count else name)
+
+    def add_patch(self, patch, kind: str, *key) -> None:
+        """Add a shape to the diagram, named by its kind and key."""
+        self.axes.add_patch(patch)
+        self.name(patch, kind, *key)
+
+    def line(self, xs, ys, kind: str, *key, **style) -> None:
+        """Draw a line through the points, named by its kind and key."""
+        (drawn,) = self.axes.plot(xs, ys, **style)
+        self.name(drawn, kind, *key)
 
     def text(self, x, y, text, **style) -> None:
         """Write text in the diagram's font."""
         style.setdefault("family", FONT)
-        self.axes.text(x, y, text, **style)
+        written = self.axes.text(x, y, text, **style)
+        self.name(written, "text", x, y, text)
+        backing = written.get_bbox_patch()
+        if backing is not None:
+            self.name(backing, "backing", x, y, text)
 
     def box(self, x, y, w, h, layer, title, lines=(), *, title_size=10.5,
             size=8.2, dashed=False, align="left", radius=0.8, tags=(),
@@ -89,11 +118,11 @@ class Canvas:
         """
         fill, layer_edge = LAYERS[layer]
         edge = edge or layer_edge
-        self.axes.add_patch(FancyBboxPatch(
+        self.add_patch(FancyBboxPatch(
             (x, y), w, h, boxstyle=f"round,pad=0,rounding_size={radius}",
             facecolor=fill, edgecolor=edge, linewidth=1.6,
             linestyle=(0, (4, 3)) if dashed else "solid", zorder=2,
-        ))
+        ), "box", x, y, title)
         anchor = x + 0.9 if align == "left" else x + w / 2
         self.text(anchor, y + h - 1.0, title, ha=align, va="top",
                   fontsize=title_size, fontweight="bold",
@@ -109,18 +138,21 @@ class Canvas:
         """Draw a data store as a cylinder."""
         fill, edge = LAYERS["data"]
         cap = 1.6
-        self.axes.add_patch(Rectangle((x, y + cap / 2), w, h - cap,
-                                      facecolor=fill, edgecolor="none",
-                                      zorder=2))
-        self.axes.add_patch(Ellipse((x + w / 2, y + cap / 2), w, cap,
-                                    facecolor=fill, edgecolor=edge,
-                                    linewidth=1.6, zorder=2))
+        self.add_patch(Rectangle((x, y + cap / 2), w, h - cap,
+                                 facecolor=fill, edgecolor="none",
+                                 zorder=2), "store", title, "body")
+        self.add_patch(Ellipse((x + w / 2, y + cap / 2), w, cap,
+                               facecolor=fill, edgecolor=edge,
+                               linewidth=1.6, zorder=2),
+                       "store", title, "bottom")
         for side in (x, x + w):
-            self.axes.plot([side, side], [y + cap / 2, y + h - cap / 2],
-                           color=edge, linewidth=1.6, zorder=3)
-        self.axes.add_patch(Ellipse((x + w / 2, y + h - cap / 2), w, cap,
-                                    facecolor=fill, edgecolor=edge,
-                                    linewidth=1.6, zorder=3))
+            self.line([side, side], [y + cap / 2, y + h - cap / 2],
+                      "store", title, side, color=edge, linewidth=1.6,
+                      zorder=3)
+        self.add_patch(Ellipse((x + w / 2, y + h - cap / 2), w, cap,
+                               facecolor=fill, edgecolor=edge,
+                               linewidth=1.6, zorder=3),
+                       "store", title, "top")
         self.text(x + 0.9, y + h - cap - 0.5, title, ha="left", va="top",
                   fontsize=9.6, fontweight="bold", color=edge, zorder=4)
         for index, line in enumerate(lines):
@@ -131,11 +163,11 @@ class Canvas:
     def zone(self, x, y, w, h, label, edge, *, size=9.5, dashed=True,
              fill="none"):
         """Draw a boundary or grouping, labelled at its top left."""
-        self.axes.add_patch(FancyBboxPatch(
+        self.add_patch(FancyBboxPatch(
             (x, y), w, h, boxstyle="round,pad=0,rounding_size=1.2",
             facecolor=fill, edgecolor=edge, linewidth=2.0,
             linestyle=(0, (6, 4)) if dashed else "solid", zorder=1,
-        ))
+        ), "zone", x, y, label)
         self.text(x + 1.0, y + h - 0.7, label, ha="left", va="top",
                   fontsize=size, fontweight="bold", color=edge, zorder=4)
 
@@ -152,12 +184,12 @@ class Canvas:
 
     def arrow(self, start, end, *, color=INK, dashed=False, both=False):
         """Draw an arrow from start to end, with two heads if both."""
-        self.axes.add_patch(FancyArrowPatch(
+        self.add_patch(FancyArrowPatch(
             start, end, arrowstyle="<|-|>" if both else "-|>",
             mutation_scale=13, color=color, linewidth=1.5,
             linestyle=(0, (4, 3)) if dashed else "solid",
             connectionstyle="arc3,rad=0.0", zorder=5, shrinkA=1, shrinkB=1,
-        ))
+        ), "arrow", start, end)
 
     def label(self, x, y, text, *, size=7.3, ha="left", color=INK):
         """Write an arrow label on a white backing, legible on lines."""
@@ -421,8 +453,8 @@ def _draw_agent_arrows(c: Canvas) -> None:
     c.text(140.4, 39.8, "vectors", ha="center", va="center", fontsize=6.3,
            color=INK, zorder=6)
     c.arrow((100, 42), (96.5, 42))
-    c.axes.plot([106, 106, 61], [50.5, 52.6, 52.6], color=INK,
-                linewidth=1.5, zorder=5)
+    c.line([106, 106, 61], [50.5, 52.6, 52.6], "line", "runs GridPACK",
+           color=INK, linewidth=1.5, zorder=5)
     c.arrow((61, 52.6), (61, 50.5))
     c.label(64.5, 52.6, "runs GridPACK", size=6.8)
     c.arrow((123.25, 56.8), (123.25, 29))
@@ -435,9 +467,9 @@ def _draw_agent_arrows(c: Canvas) -> None:
 
 def _draw_legend(c: Canvas) -> None:
     """Draw the legend and the footer naming the commit drawn."""
-    c.axes.add_patch(Rectangle((1, 1.2), 157, 9.4, facecolor="#FAFBFC",
-                               edgecolor="#CBD2D9", linewidth=1.0,
-                               zorder=1))
+    c.add_patch(Rectangle((1, 1.2), 157, 9.4, facecolor="#FAFBFC",
+                          edgecolor="#CBD2D9", linewidth=1.0, zorder=1),
+                "legend", "frame")
     c.text(2, 9.3, "Legend", ha="left", va="center", fontsize=9.5,
            fontweight="bold", color=INK)
     items = [("gui", "Desktop GUI"), ("core", "Application layers"),
@@ -447,27 +479,28 @@ def _draw_legend(c: Canvas) -> None:
     for index, (layer, name) in enumerate(items):
         fill, edge = LAYERS[layer]
         x = 2 + index * 19
-        c.axes.add_patch(FancyBboxPatch(
+        c.add_patch(FancyBboxPatch(
             (x, 5.4), 3.2, 2.2, boxstyle="round,pad=0,rounding_size=0.3",
             facecolor=fill, edgecolor=edge, linewidth=1.4, zorder=2,
-        ))
+        ), "legend", layer)
         c.text(x + 4, 6.5, name, ha="left", va="center", fontsize=8.2,
                color=INK)
     x = 2 + 5 * 19
-    c.axes.add_patch(Ellipse((x + 1.6, 6.5), 3.2, 2.0,
-                             facecolor=LAYERS["data"][0],
-                             edgecolor=LAYERS["data"][1], linewidth=1.4,
-                             zorder=2))
+    c.add_patch(Ellipse((x + 1.6, 6.5), 3.2, 2.0,
+                        facecolor=LAYERS["data"][0],
+                        edgecolor=LAYERS["data"][1], linewidth=1.4,
+                        zorder=2), "legend", "data")
     c.text(x + 4, 6.5, "Files on local disk", ha="left", va="center",
            fontsize=8.2, color=INK)
-    c.axes.add_patch(FancyArrowPatch((2, 2.9), (7, 2.9), arrowstyle="-|>",
-                                     mutation_scale=12, color=INK,
-                                     linewidth=1.5))
+    c.add_patch(FancyArrowPatch((2, 2.9), (7, 2.9), arrowstyle="-|>",
+                                mutation_scale=12, color=INK,
+                                linewidth=1.5), "legend", "flow")
     c.text(8, 2.9, "Control or data flow, labelled with what crosses it",
            ha="left", va="center", fontsize=8.2, color=INK)
-    c.axes.add_patch(FancyArrowPatch((48, 2.9), (53, 2.9), arrowstyle="-|>",
-                                     mutation_scale=12, color=MUTED,
-                                     linewidth=1.5, linestyle=(0, (4, 3))))
+    c.add_patch(FancyArrowPatch((48, 2.9), (53, 2.9), arrowstyle="-|>",
+                                mutation_scale=12, color=MUTED,
+                                linewidth=1.5, linestyle=(0, (4, 3))),
+                "legend", "optional")
     c.text(54, 2.9, "Optional or conditional connection", ha="left",
            va="center", fontsize=8.2, color=INK)
     c.text(84, 2.9, "x", ha="center", va="center", fontsize=13,
