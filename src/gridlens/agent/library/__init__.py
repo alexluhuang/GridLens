@@ -10,5 +10,6 @@ read those documents and cache what they derive from them:
   SQLite;
 - `vectors`: the passages' embedding vectors, as float32 matrices;
 - `indexer`: brings the index and the vectors up to date;
+- `worker`: the background process that runs the indexer;
 - `search`: which documents are ready, and their best passages.
 """

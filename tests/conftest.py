@@ -10,7 +10,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 import pytest
 
-from gridlens.agent.library import index, vectors
+from gridlens.agent.library import index, vectors, worker
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import SessionContext
 from gridlens.analysis.dataset import ANALYSIS_DATASET_VERSION
@@ -191,6 +191,29 @@ def offline_ollama(monkeypatch):
         raise AgentError("OLLAMA_UNAVAILABLE", "Start Ollama.")
 
     monkeypatch.setattr(vectors, "ollama_json", unavailable)
+
+
+@pytest.fixture(autouse=True)
+def inline_indexer(monkeypatch):
+    """Run the background indexer at once, in the test's own process.
+
+    No test starts a real indexer process. Returns the (folder,
+    endpoint) of each start; its original attribute is the real
+    worker.start.
+    """
+    starts = _Starts()
+    starts.original = worker.start
+
+    def start(folder, endpoint=""):
+        starts.append((folder, endpoint))
+        worker.run(folder, endpoint)
+
+    monkeypatch.setattr(worker, "start", start)
+    return starts
+
+
+class _Starts(list):
+    """The indexer starts a test made, and the real start function."""
 
 
 @pytest.fixture

@@ -23,6 +23,7 @@ format, so a change to any of them embeds the passages again.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 import hashlib
 from pathlib import Path
 import re
@@ -137,10 +138,14 @@ def document_prompt(model: str, passage: Passage) -> str:
     return document_format.format(title=title, text=passage.text)
 
 
-def embed(endpoint: str, model: str, texts: list[str]) -> np.ndarray:
+def embed(
+    endpoint: str, model: str, texts: list[str],
+    progress: Callable[[int], None] | None = None,
+) -> np.ndarray:
     """Return the unit embedding of each text, as float32 matrix rows.
 
-    Texts go to the local Ollama in batches of EMBED_BATCH. Raises
+    Texts go to the local Ollama in batches of EMBED_BATCH; progress,
+    when given, is called after each with how many are embedded. Raises
     AgentError when Ollama does not return one vector per text, all of
     the same length.
     """
@@ -152,6 +157,8 @@ def embed(endpoint: str, model: str, texts: list[str]) -> np.ndarray:
             timeout=EMBED_TIMEOUT_SECONDS,
         )
         batches.append(_embedding_rows(result, model, len(batch)))
+        if progress is not None:
+            progress(start + len(batch))
     if batches:
         matrix = _unit_rows(np.concatenate(batches))
     else:

@@ -130,11 +130,18 @@ def test_agent_tool_cli_contract(agent_context):
     assert "INVALID_SESSION" in completed.stderr
 
 
-@pytest.mark.parametrize("arguments", [("--agent-tool", "CONTEXT", "get_project"), ("--mcp-server",)])
+@pytest.mark.parametrize("arguments", [
+    ("--agent-tool", "CONTEXT", "get_project"), ("--mcp-server",),
+    ("--index-documents", "FOLDER"),
+])
 def test_agent_entry_points_do_not_import_qt(agent_context, arguments):
     # -I keeps the child free of inherited PYTHON* settings; the source tree is put on the path explicitly
     # so the worktree, not an editable install elsewhere, is what runs.
-    argv = [str(agent_context.directory / "context.json") if part == "CONTEXT" else part for part in arguments]
+    folder = agent_context.projects_folder / "Reference documents"
+    folder.mkdir(parents=True, exist_ok=True)
+    places = {"CONTEXT": str(agent_context.directory / "context.json"),
+              "FOLDER": str(folder)}
+    argv = [places.get(part, part) for part in arguments]
     code = (
         "import sys; sys.path.insert(0, " + repr(SOURCE_ROOT) + ");"
         "sys.argv = ['gridlens', *" + repr(argv) + "];"

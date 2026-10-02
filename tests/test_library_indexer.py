@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import contextlib
+import multiprocessing
+import os
 import shutil
+
+import pytest
 
 from gridlens.agent.library import cache, index, indexer, reading, vectors
 
@@ -19,16 +23,24 @@ def indexed_files(folder):
 
 
 def reads(monkeypatch):
-    """Record the name of every file the indexer reads from disk."""
+    """Record the name of every file the indexer reads from disk.
+
+    A PDF is read from its outline on, and any other file whole.
+    """
     names = []
-    original = reading.extract
-
-    def extract(path):
-        names.append(path.name)
-        return original(path)
-
-    monkeypatch.setattr(reading, "extract", extract)
+    for name in ("extract", "pdf_outline"):
+        monkeypatch.setattr(reading, name, _recorded(getattr(reading, name),
+                                                     names))
     return names
+
+
+def _recorded(read, names):
+    """Wrap a reading function so it records the files it reads."""
+    def recorded(path):
+        names.append(path.name)
+        return read(path)
+
+    return recorded
 
 
 def test_update_indexes_readable_files_and_records_why_others_fail(
@@ -138,3 +150,59 @@ def test_a_new_document_format_embeds_the_passages_again(
     indexer.update(reference_library, ENDPOINT)
     assert len(local_embeddings) == 2 * first
     assert local_embeddings[-1].startswith("doc: ")
+
+
+def test_a_long_pdf_is_read_in_page_ranges_by_a_pool_of_processes(
+    reference_library, make_pdf, monkeypatch
+):
+    if (os.cpu_count() or 1) < 2:
+        pytest.skip("Reading in parallel needs two cores.")
+    monkeypatch.setattr(indexer, "PDF_CHUNK_PAGES", 2)
+    monkeypatch.setattr(indexer, "SPARE_CORES", 0)
+    contexts = []
+    real_context = multiprocessing.get_context
+
+    def get_context(method):
+        contexts.append(method)
+        return real_context(method)
+
+    monkeypatch.setattr(multiprocessing, "get_context", get_context)
+    path = reference_library / "long.pdf"
+    path.write_bytes(make_pdf([[f"Page {n} rating."] for n in range(1, 8)]))
+    steps = []
+    indexer.update(reference_library,
+                   progress=lambda *step: steps.append(step))
+    assert contexts == ["spawn"]
+    folder_index = reference_library / cache.INDEX_FOLDER
+    record = cache.load_text(folder_index, cache.file_sha256(path))
+    title, pages = reading.extract(path)
+    assert record == {"title": title, "pages": [list(page) for page in pages]}
+    assert steps[0][:3] == ("checking", 1, 5)
+    # The standard's 2 pages, the scanned page, and the long PDF's 7.
+    assert [step for step in steps if step[0] == "reading"][-1][1:3] == (
+        10, 10
+    )
+
+
+def test_a_pdf_that_takes_too_long_to_read_counts_as_unreadable(
+    reference_library, monkeypatch
+):
+    def stuck(path, start, stop):
+        raise multiprocessing.TimeoutError
+
+    monkeypatch.setattr(reading, "pdf_page_texts", stuck)
+    indexer.update(reference_library)
+    files, documents = indexed_files(reference_library)
+    standard = documents[files["TPL-001-5.1.pdf"].sha256]
+    assert standard.error == "it took too long to read; it may be damaged"
+
+
+def test_embedding_reports_its_progress_in_passages(reference_library,
+                                                    local_embeddings):
+    steps = []
+    summary = indexer.update(reference_library, ENDPOINT,
+                             lambda *step: steps.append(step))
+    embedding = [step for step in steps if step[0] == "embedding"]
+    assert embedding[0][1] == 0
+    assert embedding[-1][1:3] == (summary.passages, summary.passages)
+    assert summary == indexer.Summary(3, 4, 1)

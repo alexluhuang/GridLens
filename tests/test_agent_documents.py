@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from gridlens.agent import document_tools
+from gridlens.agent.library import worker
 from gridlens.agent.session import SessionContext
 from gridlens.agent.tools import ToolService
 
@@ -76,12 +78,39 @@ def test_an_embedding_model_adds_similarity_and_embeds_passages_once(
     assert "similarity" in data["rows"][0]
     assert data["rows"][0]["section"] in ("R2", "Voltage")
     assert data["total_matching"] == data["passages_searched"]
-    # A probe for the model's width, every passage, then the query.
-    assert len(local_embeddings) == data["passages_searched"] + 2
+    # The query, which finds nothing indexed; then the indexer's probe
+    # for the model's width and every passage; then the query again.
+    assert len(local_embeddings) == data["passages_searched"] + 3
     assert local_embeddings[-1] == (
         "task: search result | query: limits on voltage"
     )
     local_embeddings.clear()
     tools.search_documents("voltage", magnitude=3)
-    assert local_embeddings == ["task: search result | query: dimensions",
-                                "task: search result | query: voltage"]
+    assert local_embeddings == ["task: search result | query: voltage"]
+
+
+def test_files_still_being_indexed_are_named_and_left_out(
+    reference_library, inline_indexer, monkeypatch
+):
+    tools = tools_for(reference_library)
+    tools.search_documents("Rate B")
+    monkeypatch.setattr(worker, "start", lambda folder, endpoint="":
+                        inline_indexer.append(folder))
+    (reference_library / "new.md").write_text("Rate B is the new limit.")
+    found = tools.search_documents("Rate B")
+    data = found["data"]
+    assert data["being_indexed"] == ["new.md"]
+    assert "new.md" not in {row["file"] for row in data["rows"]}
+    assert any(warning.startswith("Not searched, because GridLens is still")
+               and "new.md" in warning for warning in found["warnings"])
+    assert inline_indexer[-1] == reference_library
+
+
+def test_a_search_with_nothing_indexed_yet_says_indexing_is_underway(
+    reference_library, monkeypatch
+):
+    monkeypatch.setattr(worker, "start", lambda folder, endpoint="": None)
+    monkeypatch.setattr(document_tools, "FIRST_INDEX_WAIT_SECONDS", 0)
+    refused = tools_for(reference_library).search_documents("Rate B")
+    assert refused["error"]["code"] == "DOCUMENTS_INDEXING"
+    assert "TPL-001-5.1.pdf" in refused["error"]["remedy"]

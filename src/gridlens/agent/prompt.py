@@ -88,6 +88,8 @@ Reference documents
 - A passage says what a document requires; it is not evidence that a study meets it. Never state that a
   study complies with a standard or criterion. When no passage answers, say so, and name the document the
   user would need to add.
+- Documents GridLens is still indexing are not searched: being_indexed names
+  them. Say which were left out, and never guess what they say.
 
 Network connectivity with topology
 - topology reads a case's RAW file, a run's own case (the edited one for a sensitivity run) or the

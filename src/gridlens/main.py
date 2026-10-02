@@ -64,6 +64,10 @@ def main() -> int:
         from gridlens.agent.jobs import main as job_main
 
         return job_main(sys.argv[2:])
+    if sys.argv[1:2] == ["--index-documents"]:
+        from gridlens.agent.library import worker
+
+        return worker.main(sys.argv[2:])
     if os.environ.get("GRIDLENS_DIAGNOSTICS", "").strip().lower() == "imports":
         return _run_import_diagnostics()
 

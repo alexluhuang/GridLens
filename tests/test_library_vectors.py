@@ -104,8 +104,11 @@ def test_texts_are_embedded_in_batches_as_unit_float32_rows(monkeypatch):
     )
     monkeypatch.setattr(vectors, "ollama_json", answer)
     texts = [f"passage {n}" for n in range(20)] + ["zero"]
-    matrix = vectors.embed(ENDPOINT, "embeddinggemma:latest", texts)
+    progress = []
+    matrix = vectors.embed(ENDPOINT, "embeddinggemma:latest", texts,
+                           progress.append)
     assert [len(batch) for batch in embedded] == [16, 5]
+    assert progress == [16, 21]
     assert matrix.dtype == np.float32 and matrix.shape == (21, 2)
     assert np.allclose(matrix[0], [0.6, 0.8])
     assert matrix[-1].tolist() == [0.0, 0.0]
