@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from pathlib import Path
 import shutil
 
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 import pytest
 
 from gridlens.agent.session import SessionContext
@@ -88,3 +91,87 @@ def three_bus_project(tmp_path):
     xml.write_text(render_input_configuration_xml(values), encoding="utf-8")
     project = Project("Sensitivity Test", tmp_path / "project")
     return project, project.save([raw, xml], "input.xml")
+
+
+# Two pages of a planning standard: lettered parts, requirements, and
+# the sentences the document search tests look for.
+REFERENCE_STANDARD = [
+    [
+        "B. Requirements and Measures",
+        "R1. Each Planning Coordinator shall maintain System models.",
+        "Rate B applies to the facility ratings after a contingency.",
+    ],
+    [
+        "R2. Each Transmission Planner shall study P1 single contingency "
+        "events.",
+        "Steady state voltage limits apply to every bus.",
+    ],
+]
+
+
+def _pdf(pages, *, title="", first_label=0):
+    """Return a PDF whose pages hold these lines of text.
+
+    title sets the PDF's own title, and first_label, when it is not 0,
+    numbers the printed page labels from it.
+    """
+    writer = PdfWriter()
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    })
+    resources = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+    })
+    for lines in pages:
+        page = writer.add_blank_page(612, 792)
+        page[NameObject("/Resources")] = resources
+        stream = DecodedStreamObject()
+        shown = "".join(f"({line}) Tj T* " for line in lines)
+        content = f"BT /F1 11 Tf 14 TL 72 720 Td {shown}ET"
+        stream.set_data(content.encode("latin-1"))
+        page.replace_contents(stream)
+    if first_label:
+        writer.set_page_label(0, len(pages) - 1, style="/D",
+                              start=first_label)
+    if title:
+        writer.add_metadata({"/Title": title})
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.fixture
+def make_pdf():
+    """Return a function that builds a small PDF from lines of text."""
+    return _pdf
+
+
+@pytest.fixture
+def reference_library(tmp_path) -> Path:
+    """Return a Reference documents folder of synthetic documents.
+
+    It holds a two-page standard with printed page labels from 5, a
+    Markdown note in a subfolder, an HTML page, and two files the
+    search cannot read: a PDF with no text and a Word document.
+    """
+    folder = tmp_path / "projects" / "Reference documents"
+    folder.mkdir(parents=True)
+    title = "TPL-001-5.1 Transmission System Planning Performance"
+    standard = _pdf(REFERENCE_STANDARD, title=title, first_label=5)
+    (folder / "TPL-001-5.1.pdf").write_bytes(standard)
+    (folder / "criteria").mkdir()
+    (folder / "criteria/planning_criteria.md").write_text(
+        "# Planning criteria\n\n## Ratings\n\n"
+        "Post-contingency flows are compared with Rate B.\n"
+    )
+    (folder / "guide.html").write_text(
+        "<html><head><title>Operating guide</title>"
+        "<script>var x = 'Rate B';</script></head><body>"
+        "<h2>Voltage</h2><p>Buses stay within 0.95 to 1.05 pu.</p>"
+        "</body></html>"
+    )
+    (folder / "scanned.pdf").write_bytes(_pdf([[]]))
+    (folder / "notes.docx").write_bytes(b"PK")
+    return folder
