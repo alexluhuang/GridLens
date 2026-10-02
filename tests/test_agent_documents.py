@@ -2,44 +2,16 @@
 from __future__ import annotations
 
 import hashlib
-import io
 from pathlib import Path
 import stat
 
 import pytest
-from pypdf import PdfWriter
-from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 import gridlens.agent.documents as documents
+from gridlens.agent.library import cache
 from gridlens.agent.policy import AgentError
 from gridlens.agent.session import SessionContext
 from gridlens.agent.tools import ToolService
-
-
-def pdf(pages: list[list[str]], *, title: str = "", first_label: int = 0) -> bytes:
-    """Return a PDF whose pages hold these lines of text, optionally titled and with printed page numbers."""
-    writer = PdfWriter()
-    font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")})
-    for lines in pages:
-        page = writer.add_blank_page(612, 792)
-        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
-        stream = DecodedStreamObject()
-        text = "".join(f"({line}) Tj T* " for line in lines)
-        stream.set_data(f"BT /F1 11 Tf 14 TL 72 720 Td {text}ET".encode("latin-1"))
-        page.replace_contents(stream)
-    if first_label:
-        writer.set_page_label(0, len(pages) - 1, style="/D", start=first_label)
-    if title:
-        writer.add_metadata({"/Title": title})
-    output = io.BytesIO()
-    writer.write(output)
-    return output.getvalue()
-
-
-STANDARD = [
-    ["B. Requirements and Measures", "R1. Each Planning Coordinator shall maintain System models.", "Rate B applies to the facility ratings after a contingency."],
-    ["R2. Each Transmission Planner shall study P1 single contingency events.", "Steady state voltage limits apply to every bus."],
-]
 
 
 @pytest.fixture(autouse=True)
@@ -50,35 +22,16 @@ def no_ollama(monkeypatch):
     monkeypatch.setattr(documents, "ollama_json", unavailable)
 
 
-@pytest.fixture
-def library(tmp_path) -> Path:
-    """Return a Reference documents folder with a standard, a Markdown note, an HTML page, and files it cannot read."""
-    folder = tmp_path / "projects" / "Reference documents"
-    folder.mkdir(parents=True)
-    (folder / "TPL-001-5.1.pdf").write_bytes(pdf(STANDARD, title="TPL-001-5.1 Transmission System Planning Performance", first_label=5))
-    (folder / "criteria").mkdir()
-    (folder / "criteria/planning_criteria.md").write_text("# Planning criteria\n\n## Ratings\n\nPost-contingency flows are compared with Rate B.\n")
-    (folder / "guide.html").write_text("<html><head><title>Operating guide</title><script>var x = 'Rate B';</script></head><body><h2>Voltage</h2><p>Buses stay within 0.95 to 1.05 pu.</p></body></html>")
-    (folder / "scanned.pdf").write_bytes(pdf([[]]))
-    (folder / "notes.docx").write_bytes(b"PK")
-    return folder
-
-
 def tools_for(folder: Path) -> ToolService:
     return ToolService(SessionContext.create(None, (), "fixture:model", "http://127.0.0.1:11434", projects_dir=folder.parent))
 
 
-def test_headings_are_found_by_pattern():
-    assert [documents.heading(line) for line in (
-        "R2.1.4. For each of the studies", "R1. Each Transmission Planner and Planning Coordinator shall maintain System models within its respective area for performing its studies.",
-        "4.1. Functional Entities:", "B. Requirements and Measures", "Table 1 – Steady State Performance", "## Scope", "M3. Each Planning Coordinator",
-        "The Planning Coordinator shall, within 30 days, do things.", "Page 3 of 24", "Rate B applies after a contingency.",
-    )] == ["R2.1.4", "R1", "4.1. Functional Entities:", "B. Requirements and Measures", "Table 1 – Steady State Performance", "Scope", "M3", "", "", ""]
+def test_tokens_keep_identifiers_whole_and_in_parts():
     assert documents.tokens("TPL-001-5.1 and the N-1 rule") == ["tpl-001-5.1", "tpl", "001", "5", "1", "n-1", "n", "1", "rule"]
 
 
-def test_passages_keep_their_page_label_and_carry_the_section_across_pages(library):
-    loaded = documents.load_library(library)
+def test_passages_keep_their_page_label_and_carry_the_section_across_pages(reference_library):
+    loaded = documents.load_library(reference_library)
     standard = [passage for passage in loaded.passages if passage.file == "TPL-001-5.1.pdf"]
     assert [(passage.page, passage.page_label, passage.section) for passage in standard] == [(1, "5", "R1"), (2, "6", "R2")]
     assert standard[0].document == "TPL-001-5.1 Transmission System Planning Performance"
@@ -91,24 +44,24 @@ def test_passages_keep_their_page_label_and_carry_the_section_across_pages(libra
     assert sorted(item["file"] for item in loaded.documents) == ["TPL-001-5.1.pdf", "criteria/planning_criteria.md", "guide.html"]
 
 
-def test_extracted_text_is_cached_privately_until_the_file_changes(library, monkeypatch):
-    documents.load_library(library)
-    index = library / documents.INDEX_FOLDER
+def test_extracted_text_is_cached_privately_until_the_file_changes(reference_library, monkeypatch):
+    documents.load_library(reference_library)
+    index = reference_library / cache.INDEX_FOLDER
     assert stat.S_IMODE(index.stat().st_mode) == 0o700
-    digest = hashlib.sha256((library / "TPL-001-5.1.pdf").read_bytes()).hexdigest()
+    digest = hashlib.sha256((reference_library / "TPL-001-5.1.pdf").read_bytes()).hexdigest()
     assert stat.S_IMODE((index / f"{digest}.json").stat().st_mode) == 0o600
     read = []
     original = documents.extract
     monkeypatch.setattr(documents, "extract", lambda path: read.append(path.name) or original(path))
-    documents.load_library(library)
+    documents.load_library(reference_library)
     assert read == []
-    (library / "guide.html").write_text("<h1>Voltage</h1><p>Buses stay within 0.90 to 1.10 pu.</p>")
-    loaded = documents.load_library(library)
+    (reference_library / "guide.html").write_text("<h1>Voltage</h1><p>Buses stay within 0.90 to 1.10 pu.</p>")
+    loaded = documents.load_library(reference_library)
     assert read == ["guide.html"] and any("0.90 to 1.10" in passage.text for passage in loaded.passages)
 
 
-def test_the_tool_lists_and_searches_documents_and_cites_the_files_it_read(library):
-    tools = tools_for(library)
+def test_the_tool_lists_and_searches_documents_and_cites_the_files_it_read(reference_library):
+    tools = tools_for(reference_library)
     listing = tools.search_documents()
     assert listing["error"] is None
     assert [(row["file"], row["pages"]) for row in listing["data"]["rows"]] == [("TPL-001-5.1.pdf", 2), ("criteria/planning_criteria.md", 0), ("guide.html", 0)]
@@ -133,7 +86,7 @@ def test_the_tool_says_where_to_put_documents(tmp_path):
     assert tools.search_documents("Rate B")["error"]["code"] == "NO_REFERENCE_DOCUMENTS"
 
 
-def test_an_installed_embedding_model_adds_similarity_and_its_vectors_are_cached(library, monkeypatch):
+def test_an_installed_embedding_model_adds_similarity_and_its_vectors_are_cached(reference_library, monkeypatch):
     """With an embedding model in the local Ollama, scores blend BM25 and similarity, and passages are embedded once."""
     embedded = []
 
@@ -153,7 +106,7 @@ def test_an_installed_embedding_model_adds_similarity_and_its_vectors_are_cached
         raise AssertionError(path)
 
     monkeypatch.setattr(documents, "ollama_json", fake)
-    tools = tools_for(library)
+    tools = tools_for(reference_library)
     data = tools.search_documents("limits on voltage", magnitude=3)["data"]
     assert "embeddinggemma:latest" in data["retrieval"] and "similarity" in data["rows"][0]
     assert data["rows"][0]["section"] in ("R2", "Voltage") and data["total_matching"] == data["passages_searched"]
@@ -164,7 +117,7 @@ def test_an_installed_embedding_model_adds_similarity_and_its_vectors_are_cached
     assert embedded[-1] == "task: search result | query: limits on voltage"
     tools.search_documents("voltage", magnitude=3)
     # Only the query is embedded the second time; the passages' vectors come from the cache.
-    assert len(embedded) == first + 1 and list((library / documents.INDEX_FOLDER).glob("*.embeddinggemma_latest.*.f32"))
+    assert len(embedded) == first + 1 and list((reference_library / cache.INDEX_FOLDER).glob("*.embeddinggemma_latest.*.f32"))
     assert "retrieval prompt format" in data["retrieval"]
 
 
@@ -184,7 +137,7 @@ def test_each_embedding_family_gets_its_model_cards_prompts():
     assert documents.document_prompt("embeddinggemma", documents.Passage("", "x.txt", None, "", "", "Rate B")) == "title: none | text: Rate B"
 
 
-def test_changing_the_document_format_embeds_the_passages_again(library, monkeypatch):
+def test_changing_the_document_format_embeds_the_passages_again(reference_library, monkeypatch):
     """Vectors are cached under the document format they were made with, so a new format does not reuse them."""
     calls = []
 
@@ -197,7 +150,7 @@ def test_changing_the_document_format_embeds_the_passages_again(library, monkeyp
         return {"embeddings": [[1.0, float(len(text))] for text in body["input"]]}
 
     monkeypatch.setattr(documents, "ollama_json", fake)
-    loaded = documents.load_library(library)
+    loaded = documents.load_library(reference_library)
     documents.passage_embeddings(loaded, "http://127.0.0.1:11434", "embeddinggemma:latest")
     documents.passage_embeddings(loaded, "http://127.0.0.1:11434", "embeddinggemma:latest")
     once = sum(calls)
