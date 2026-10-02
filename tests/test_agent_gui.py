@@ -439,7 +439,7 @@ def test_a_new_conversation_starts_indexing_the_reference_documents(
     tab.input.setPlainText("And for P2 events?")
     assert tab.send_button.isEnabled()
     tab.send()
-    # The second turn continues the conversation, so it starts no indexer.
+    # A second turn continues the conversation; it starts no indexer.
     assert tab.controller is controller and len(inline_indexer) == 1
     tab.worker = None
     assert tab.shutdown()

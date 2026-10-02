@@ -46,7 +46,7 @@ def create_server(context: SessionContext):
     for name in TOOL_NAMES:
         annotations = ToolAnnotations(readOnlyHint=name not in WRITE_TOOL_NAMES, destructiveHint=name in DESTRUCTIVE_TOOL_NAMES, openWorldHint=False)
         method = getattr(service, name)
-        # The docstring, without its indentation, is what the model reads.
+        # The model reads the docstring, without its indentation.
         server.add_tool(
             compact_json(method), description=inspect.getdoc(method),
             annotations=annotations, structured_output=False,
