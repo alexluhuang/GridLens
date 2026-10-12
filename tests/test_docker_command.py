@@ -37,13 +37,14 @@ class DockerCommandTests(unittest.TestCase):
         self.assertIn("pnnl/gridpack:latest", command)
         self.assertEqual(command[-5:], [MPI_EXECUTABLE, "-n", "4", "ca.x", "input.xml"])
 
-    def test_command_gives_the_container_all_gpus_by_default(self) -> None:
+    def test_command_gives_the_container_the_gpus_asked_for(self) -> None:
         command = build_gridpack_docker_command(
             work_dir=Path.cwd(),
             image="alh360/gridlens-solver-v0",
             executable="ca.x",
             xml_filename="input.xml",
             mpi_processes=4,
+            gpus="all",
             use_host_user=False,
             use_platform_flag=False,
         )

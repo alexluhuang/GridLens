@@ -47,7 +47,7 @@ def build_gridpack_docker_command(
     use_host_user: bool = True,
     use_platform_flag: bool = True,
     memory_limit: str = "",
-    gpus: str = "all",
+    gpus: str = "",
     extra_docker_args: str | list[str] | None = None,
     container_name: str = "",
     executable_args: list[str] | None = None,

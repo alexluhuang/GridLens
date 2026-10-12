@@ -8,7 +8,7 @@ import re
 import subprocess
 from typing import Callable
 
-from gridlens.core.project import ProjectData, copy_project_inputs_to_run, file_sha256
+from gridlens.core.project import ProjectData, configuration_uses_gpu, copy_project_inputs_to_run, file_sha256
 from gridlens.core.run_manifest import ManifestInputFile, RunManifest
 from gridlens.runner.docker_command import build_gridpack_docker_command, docker_container_name_from_args
 
@@ -30,7 +30,6 @@ class GridpackRunRequest:
     use_host_user: bool = True
     use_platform_flag: bool = True
     memory_limit: str = ""
-    gpus: str = "all"
     extra_docker_args: str = ""
     container_name: str = ""
     notes: str = ""
@@ -182,6 +181,8 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
 
     copy_project_inputs_to_run(request.project_data, files.run_dir)
     container_name = request.container_name or effective_gridpack_container_name(files.run_dir, request.extra_docker_args)
+    # The Configuration tab's GPU setting is saved in the XML, which says whether the container needs the GPUs.
+    gpus = "all" if configuration_uses_gpu(files.work_dir / request.xml_filename) else ""
     command = build_gridpack_docker_command(
         work_dir=files.work_dir,
         image=request.image,
@@ -193,7 +194,7 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
         use_host_user=request.use_host_user,
         use_platform_flag=request.use_platform_flag,
         memory_limit=request.memory_limit,
-        gpus=request.gpus,
+        gpus=gpus,
         extra_docker_args=request.extra_docker_args,
         container_name=container_name,
     )

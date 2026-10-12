@@ -32,7 +32,6 @@ class RunFormValues:
     pull_policy: str
     memory_limit: str = ""
     extra_docker_args: str = ""
-    gpus: str = "all"
     executable: str = GRIDPACK_EXECUTABLE
     network_disabled: bool = True
     use_platform_flag: bool = True
@@ -50,9 +49,6 @@ def validate_run_form_values(values: RunFormValues) -> RunFormValues:
     if pull_policy not in VALID_PULL_POLICIES:
         allowed = ", ".join(sorted(VALID_PULL_POLICIES))
         raise ValidationError(f"Docker pull policy must be one of: {allowed}.")
-    gpus = values.gpus.strip()
-    if any(char.isspace() for char in gpus):
-        raise ValidationError("GPUs cannot contain whitespace; use all, a count, or device=0,1.")
 
     return RunFormValues(
         image=image,
@@ -60,7 +56,6 @@ def validate_run_form_values(values: RunFormValues) -> RunFormValues:
         pull_policy=pull_policy,
         memory_limit=values.memory_limit.strip(),
         extra_docker_args=values.extra_docker_args.strip(),
-        gpus=gpus,
     )
 
 
@@ -71,7 +66,6 @@ def apply_run_form_values_to_settings(settings: AppSettings, values: RunFormValu
     settings.docker_pull_policy = normalized.pull_policy
     settings.memory_limit = normalized.memory_limit
     settings.extra_docker_args = normalized.extra_docker_args
-    settings.gpus = normalized.gpus
     return settings
 
 
@@ -93,7 +87,6 @@ def build_gridpack_run_request(
         use_host_user=normalized.use_host_user,
         use_platform_flag=normalized.use_platform_flag,
         memory_limit=normalized.memory_limit,
-        gpus=normalized.gpus,
         extra_docker_args=normalized.extra_docker_args,
         container_name=effective_gridpack_container_name(run_dir, normalized.extra_docker_args),
     )

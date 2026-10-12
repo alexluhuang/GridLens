@@ -34,9 +34,9 @@ class FakeCompletedProcess:
 
 
 class GridpackRunnerTests(unittest.TestCase):
-    def _make_request(self, root: Path) -> tuple[GridpackRunRequest, Path]:
+    def _make_request(self, root: Path, xml_text: str = "<Configuration />") -> tuple[GridpackRunRequest, Path]:
         xml = root / "input.xml"
-        xml.write_text("<Configuration />", encoding="utf-8")
+        xml.write_text(xml_text, encoding="utf-8")
 
         project = Project("Pilot Project 3", root / "project")
         project_data = project.save([xml], "input.xml")
@@ -85,6 +85,26 @@ class GridpackRunnerTests(unittest.TestCase):
                     }
                 ],
             )
+
+    def test_gpus_follow_the_run_configuration(self) -> None:
+        """The container gets the GPUs unless the XML turns GPUBatch off, as the Configuration tab does."""
+        cases = {
+            "<Configuration />": True,
+            "<Configuration><Contingency_analysis><GPUBatch><enabled>on</enabled></GPUBatch></Contingency_analysis></Configuration>": True,
+            "<Configuration><Contingency_analysis><GPUBatch><enabled> OFF </enabled></GPUBatch></Contingency_analysis></Configuration>": False,
+        }
+        for xml_text, uses_gpu in cases.items():
+            with self.subTest(xml_text=xml_text), TemporaryDirectory() as tmp:
+                request, run_dir = self._make_request(Path(tmp), xml_text)
+
+                with patch("gridlens.runner.gridpack_runner.subprocess.Popen", return_value=FakeProcess()):
+                    result = run_gridpack_case(request)
+
+                command = json.loads(result.manifest_file.read_text(encoding="utf-8"))["command"]
+                if uses_gpu:
+                    self.assertEqual(command[command.index("--gpus") + 1], "all")
+                else:
+                    self.assertNotIn("--gpus", command)
 
     def test_docker_start_failure_is_written_to_status_and_logs(self) -> None:
         with TemporaryDirectory() as tmp:

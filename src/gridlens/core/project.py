@@ -58,6 +58,20 @@ def is_gridpack_configuration_file(path: str | Path) -> bool:
         return False
 
 
+def configuration_uses_gpu(path: str | Path) -> bool:
+    """Return whether a GridPACK configuration lets the GridLens solver use a GPU.
+
+    Only Contingency_analysis/GPUBatch/enabled set to off keeps the solver on the CPU. Without it the
+    solver looks for a GPU, so any other configuration, or one that cannot be read, asks for one.
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError, ValueError):
+        return True
+    enabled = root.find("Contingency_analysis/GPUBatch/enabled")
+    return enabled is None or (enabled.text or "").strip().lower() != "off"
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:

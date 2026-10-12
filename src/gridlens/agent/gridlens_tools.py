@@ -154,7 +154,6 @@ def _run_settings(settings: AppSettings) -> dict:
     return {
         "image": settings.default_gridpack_image, "mpi_processes": settings.default_mpi_processes,
         "pull_policy": settings.docker_pull_policy, "memory_limit": settings.memory_limit, "extra_docker_args": settings.extra_docker_args,
-        "gpus": settings.gpus,
     }
 
 
