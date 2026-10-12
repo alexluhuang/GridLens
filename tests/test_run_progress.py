@@ -115,3 +115,69 @@ def test_parser_reset_clears_state() -> None:
     parser.reset()
     assert parser.total is None
     assert parser.completed == 0
+
+
+GPU_RUN = [
+    "[gpu-batch p0] GPU batch contingency path requested; effective settings:",
+    " Controller iteration = 1 ",  # the base case, on each rank
+    " Controller iteration = 1 ",
+    "Auto-generating N-1 contingencies from network",
+    "Total contingencies to analyze: 9633",
+    "[gpu-batch p0] classified 9633 cases in 0.0263151 s: 9460 GPU, 173 CPU (9631 by the fast path)",
+    "[gpu-batch p0] batch-size sweep: alg2 B=2048: 187.579 us per member (factor + solve)",
+    "[gpu-batch p0] backend alg2 (batched left-looking LU, levels 502), batch size 2048, memory profile unified, setup 8.04354 s",
+    " Controller iteration = 1 ",  # a CPU-path case
+    "[gpu-batch p0] GPU chunk of 8192 cases: 8187 converged, 4 diverged, 1 flagged, 0 not run",
+    "[gpu-batch p0] GPU chunk of 1268 cases: 1268 converged, 0 diverged, 0 flagged, 0 not run",
+    "[gpu-batch p0] paths: 9455 reported from the GPU, 173 on the CPU path, 5 solved again on the CPU after the GPU",
+    "[summary] wrote case_summary.json (9633 contingencies, 9255 converged)",
+]
+
+
+def test_parser_follows_the_gpu_batch_path() -> None:
+    """GPU cases are counted by chunk; reporting them prints nothing per case, so the bar is then busy."""
+    parser = GridpackProgressParser()
+    updates = {line: parser.feed(line) for line in GPU_RUN}
+
+    planning = updates[GPU_RUN[5]]
+    assert (planning.completed, planning.total) == (0, None)
+    assert "9,460" in planning.message and "173" in planning.message
+    solving = updates[GPU_RUN[7]]
+    assert (solving.completed, solving.total) == (0, 9460) and "alg2" in solving.message
+    assert updates[GPU_RUN[8]] is None
+    first_chunk = updates[GPU_RUN[9]]
+    assert (first_chunk.completed, first_chunk.total) == (8192, 9460)
+    reporting = updates[GPU_RUN[10]]
+    assert reporting.total is None and "Reporting" in reporting.message
+    done = updates[GPU_RUN[11]]
+    assert done.phase == PHASE_POSTPROCESSING
+    assert (done.completed, done.total, done.fraction) == (9633, 9633, 1.0)
+    assert "9,455 on the GPU, 178 on the CPU" in done.message
+    assert updates[GPU_RUN[12]] is None
+
+
+def test_parser_counts_contingencies_when_the_gpu_path_falls_back_to_the_cpu_loop() -> None:
+    """A run that requests the GPU path but never classifies its cases solves them one by one on the CPU."""
+    parser = GridpackProgressParser()
+    parser.feed("[gpu-batch p0] GPU batch contingency path requested; effective settings:")
+    parser.feed("[gpu-batch p0] WARNING: network copies differ between ranks; using GridPACK's CPU loop")
+    parser.feed("Total contingencies to analyze: 10")
+    update = parser.feed(" Controller iteration = 1 ")
+
+    assert (update.completed, update.total) == (1, 10)
+
+
+def test_parser_does_not_read_n_minus_1_as_a_total() -> None:
+    parser = GridpackProgressParser()
+
+    assert parser.feed("Auto-generating N-1 contingencies from network") is None
+    assert parser.total is None
+
+
+def test_parser_keeps_the_writing_message_after_a_summary_line() -> None:
+    parser = GridpackProgressParser()
+    parser.feed("Total contingencies to analyze: 2")
+    parser.feed("contingency: 1 success: true")
+    parser.feed("Writing output files to success.txt")
+
+    assert parser.feed("[summary] wrote case_summary.json (2 contingencies, 2 converged)") is None

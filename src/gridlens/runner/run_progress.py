@@ -21,6 +21,16 @@ after some initial solving has begun:
 
 Completion is counted by occurrence, not by trusting any printed index to
 arrive in order, since MPI ranks report out of order.
+
+The GridLens solver's GPU batch path prints no per-contingency line for the
+cases it solves on the GPU. Its ``[gpu-batch pN]`` lines say how many cases go
+to the GPU (``classified 9633 cases ...: 9460 GPU, 173 CPU``), how many each
+finished GPU chunk holds (``GPU chunk of 8192 cases: ...``), and when every case
+is reported (``paths: 9455 reported from the GPU, 173 on the CPU path, ...``).
+Once the classification line appears, progress follows those lines instead of
+the per-contingency markers, which then come only from the few CPU-path cases.
+A run that requests the GPU path but falls back to GridPACK's CPU loop never
+prints the classification, so it keeps the per-contingency counting.
 """
 
 from __future__ import annotations
@@ -60,7 +70,8 @@ class RunProgress:
 _TOTAL_PATTERNS = (
     re.compile(r"(?:total|number)\b[^\d\n]*?(?:contingenc(?:y|ies)|tasks|events)[^\d\n]*?(\d+)", re.IGNORECASE),
     re.compile(r"(?:contingenc(?:y|ies)|tasks|events)[^\d\n]*?(?:total|count)[^\d\n]*?(\d+)", re.IGNORECASE),
-    re.compile(r"\b(\d+)\s+contingencies\b", re.IGNORECASE),
+    # Not the "1" of "N-1 contingencies".
+    re.compile(r"(?<![\w-])(\d+)\s+contingencies\b", re.IGNORECASE),
 )
 
 # Ordered families of "one contingency" markers. GridPACK builds differ in what
@@ -107,6 +118,14 @@ _POSTPROCESS_PATTERN = re.compile(
 )
 
 
+# The GPU batch path's [gpu-batch pN] lines, from rank N of the run.
+_GPU_CLASSIFIED = re.compile(r"\[gpu-batch p\d+\]\s+classified (\d+) cases in \S+ s: (\d+) GPU, (\d+) CPU")
+_GPU_SWEEP = re.compile(r"\[gpu-batch p\d+\]\s+batch-size sweep: (\S+) B=(\d+)")
+_GPU_BACKEND = re.compile(r"\[gpu-batch p\d+\]\s+backend (\S+) \(.*\), batch size (\d+)")
+_GPU_CHUNK = re.compile(r"\[gpu-batch p\d+\]\s+GPU chunk of (\d+) cases")
+_GPU_PATHS = re.compile(r"\[gpu-batch p\d+\]\s+paths: (\d+) reported from the GPU, (\d+) on the CPU path")
+
+
 def _humanize(completed: int, total: int | None, latest_index: int | None) -> str:
     if total:
         text = f"Solving powerflow - {completed:,} / {total:,} contingencies"
@@ -132,6 +151,9 @@ class GridpackProgressParser:
         self._latest_index: int | None = None
         self._phase = PHASE_STARTING
         self._locked_family: str | None = None
+        # Set once the GPU batch path classifies the cases: how many it sends to the GPU, and how many are solved.
+        self._gpu_cases: int | None = None
+        self._gpu_solved = 0
 
     def reset(self) -> None:
         self.__init__()
@@ -149,9 +171,14 @@ class GridpackProgressParser:
         if not text:
             return None
 
+        if "[gpu-batch p" in text:
+            update = self._feed_gpu(text)
+            if update is not None:
+                return update
+
         # A per-contingency marker is the most useful signal, so check it before
         # the (structurally similar) total-count patterns.
-        matched, index = self._match_completion(text)
+        matched, index = self._match_completion(text) if self._gpu_cases is None else (False, None)
         if matched:
             self._completed += 1
             if index is not None:
@@ -160,18 +187,79 @@ class GridpackProgressParser:
             return self._snapshot(_humanize(self._completed, self._total, self._latest_index))
 
         total = _match_first(text, _TOTAL_PATTERNS)
-        if total is not None and total > 0:
+        if total is not None and total > 0 and self._phase != PHASE_POSTPROCESSING:
             # Keep the largest announced total; ignore smaller/echoed values.
             if self._total is None or total > self._total:
                 self._total = total
-            message = f"Preparing {self._total:,} contingencies..."
-            return self._snapshot(message)
+            if self._phase == PHASE_STARTING:
+                return self._snapshot(f"Preparing {self._total:,} contingencies...")
+            if self._gpu_cases is None:
+                return self._snapshot(_humanize(self._completed, self._total, self._latest_index))
+            return None
 
         if self._phase == PHASE_SOLVING and _POSTPROCESS_PATTERN.search(text):
             self._phase = PHASE_POSTPROCESSING
             return self._snapshot("Writing GridPACK output files...")
 
         return None
+
+    def _feed_gpu(self, text: str) -> RunProgress | None:
+        """Follow the GPU batch path through its [gpu-batch pN] lines; return None for any other line.
+
+        While the GPU solves, progress counts its cases. Reporting their results afterwards prints
+        nothing per case, so the bar is then indeterminate until every case is reported.
+        """
+        match = _GPU_CLASSIFIED.search(text)
+        if match:
+            total, gpu, cpu = (int(group) for group in match.groups())
+            # Markers seen before this came from the base case and setup, not from contingencies.
+            self._total, self._gpu_cases, self._gpu_solved, self._completed = total, gpu, 0, 0
+            self._latest_index = None
+            self._phase = PHASE_SOLVING
+            if not gpu:
+                return self._snapshot(f"Solving powerflow on the CPU - {cpu:,} contingencies...", completed=0, total=None)
+            return self._snapshot(
+                f"Planning the GPU batch - {gpu:,} contingencies for the GPU, {cpu:,} for the CPU...",
+                completed=0, total=None,
+            )
+        if self._gpu_cases is None:
+            return None
+        match = _GPU_SWEEP.search(text)
+        if match:
+            return self._snapshot(
+                f"Planning the GPU batch - timing {match.group(1)} with batch size {int(match.group(2)):,}...",
+                completed=0, total=None,
+            )
+        match = _GPU_BACKEND.search(text)
+        if match:
+            return self._gpu_snapshot(f" with {match.group(1)}, batch size {int(match.group(2)):,}")
+        match = _GPU_CHUNK.search(text)
+        if match:
+            self._gpu_solved = min(self._gpu_cases, self._gpu_solved + int(match.group(1)))
+            if self._gpu_solved >= self._gpu_cases:
+                return self._snapshot(
+                    f"Reporting results for {self._total:,} contingencies...", completed=0, total=None
+                )
+            return self._gpu_snapshot()
+        match = _GPU_PATHS.search(text)
+        if match:
+            # Cases the GPU did not solve, such as diverged ones, are solved again on the CPU.
+            gpu = int(match.group(1))
+            self._completed = max(self._total or 0, gpu + int(match.group(2)))
+            cpu = self._completed - gpu
+            self._phase = PHASE_POSTPROCESSING
+            return self._snapshot(
+                f"Solved {self._completed:,} contingencies ({gpu:,} on the GPU, {cpu:,} on the CPU) - "
+                "writing GridPACK output files...",
+                total=self._completed,
+            )
+        return None
+
+    def _gpu_snapshot(self, detail: str = "") -> RunProgress:
+        return self._snapshot(
+            f"Solving powerflow on the GPU{detail} - {self._gpu_solved:,} / {self._gpu_cases:,} contingencies",
+            completed=self._gpu_solved, total=self._gpu_cases,
+        )
 
     def _match_completion(self, text: str) -> tuple[bool, int | None]:
         """Return ``(matched, index)`` for a per-contingency marker line.
@@ -196,11 +284,14 @@ class GridpackProgressParser:
                     return True, index
         return False, None
 
-    def _snapshot(self, message: str) -> RunProgress:
+    _UNSET = object()
+
+    def _snapshot(self, message: str, *, completed: int | None = None, total: object = _UNSET) -> RunProgress:
+        """Return the current state; the GPU path passes the count its bar shows, or no total for a busy bar."""
         return RunProgress(
             phase=self._phase,
-            completed=self._completed,
-            total=self._total,
+            completed=self._completed if completed is None else completed,
+            total=self._total if total is self._UNSET else total,
             message=message,
             latest_index=self._latest_index,
         )
