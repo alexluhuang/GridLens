@@ -40,8 +40,11 @@ build an approved local service wrapper. Avoid asking regulators to run terminal
 Pull or load the image before you work with sensitive CEII inputs:
 
 ```bash
-docker pull pnnl/gridpack:latest
+docker pull alh360/gridlens-solver-v0
 ```
+
+The image runs contingency cases on the GPU. It is built for linux/arm64. On another machine, name
+another image on the Run tab, for example the CPU-only `pnnl/gridpack:latest`.
 
 In production, pin a versioned image instead of `latest`:
 

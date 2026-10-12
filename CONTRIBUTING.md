@@ -10,9 +10,10 @@ your changes understandable for regulators and maintainable for the next develop
   includes hosted model APIs. A local model served on a loopback address by a CLI the user installed is not an
   online service. Adapters for hosted providers stay disabled, and a normal feature pull request cannot enable
   them.
-- Keep Docker runs local and least-privilege by default. `--network none` and `--pull=never` are absolute
-  rules for every container GridLens builds a command for. Mounts differ by container, and the difference is
-  deliberate:
+- Keep Docker runs local and least-privilege by default. `--network none` is an absolute rule for every
+  container GridLens builds a command for. The GridPACK solver container defaults to `--pull=missing`, so a
+  first run fetches the solver image; pulling sends no project data. The generated-analysis sandbox always
+  gets `--pull=never`. Mounts differ by container, and the difference is deliberate:
   - The GridPACK solver container mounts only the per-run `work/` directory.
   - The optional generated-analysis sandbox mounts the selected run directory read-only at `/run-data`, plus
     the reviewed script. It runs under a pinned `sha256` image ID, a non-root UID and GID, `--cap-drop ALL`,

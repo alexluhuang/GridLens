@@ -189,7 +189,7 @@ def test_start_run_checks_docker_then_starts_a_job(workspace, monkeypatch):
     tools.create_project("Study One", [str(inputs / "case.raw")])
     assert tools.start_run("Study One")["error"]["code"] == "NO_CONFIGURATION"
     tools.configure_run({}, project="Study One")
-    monkeypatch.setattr(AppSettings, "load", classmethod(lambda cls, path=None: cls(default_gridpack_image="pnnl/gridpack:test", default_mpi_processes=8)))
+    monkeypatch.setattr(AppSettings, "load", classmethod(lambda cls, path=None: cls(default_gridpack_image="pnnl/gridpack:test", default_mpi_processes=8, docker_pull_policy="never")))
     monkeypatch.setattr(gridlens_tools.docker_probe, "docker_engine_available", lambda: ProbeResult(False, "Cannot connect to the Docker daemon"))
     assert tools.start_run("Study One")["error"]["code"] == "DOCKER_UNAVAILABLE"
     monkeypatch.setattr(gridlens_tools.docker_probe, "docker_engine_available", lambda: ProbeResult(True, "Docker Engine 27"))

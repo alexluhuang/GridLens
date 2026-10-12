@@ -17,7 +17,9 @@ and downloads nothing.
 ## Defaults
 
 - Docker run network mode is `none`.
-- Docker pull policy is `never`.
+- Docker pull policy for the GridPACK solver is `missing`: Docker pulls the image only when it is not on the
+  machine. A pull sends no project data. Set the policy to `never` on a machine that must stay offline. The
+  generated-analysis sandbox is never pulled.
 - Two containers exist, and they mount different things. The GridPACK solver container mounts only the
   per-run `work/` folder. The optional generated-analysis sandbox mounts the selected run folder read-only at
   `/run-data`. For why, and for the rest of its confinement, see [Generated scripts](#generated-scripts).

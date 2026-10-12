@@ -26,7 +26,7 @@ class GridpackRunRequest:
     xml_filename: str
     mpi_processes: int
     network_mode: str = "none"
-    pull_policy: str = "never"
+    pull_policy: str = "missing"
     use_host_user: bool = True
     use_platform_flag: bool = True
     memory_limit: str = ""

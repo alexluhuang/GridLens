@@ -20,11 +20,11 @@ def _default_config_dir() -> Path:
 @dataclass(slots=True)
 class AppSettings:
     app_name: str = "GridLens"
-    default_gridpack_image: str = "pnnl/gridpack:latest"
+    default_gridpack_image: str = "alh360/gridlens-solver-v0"
     default_xml_file: str = "input.xml"
     default_mpi_processes: int = 4
     default_projects_dir: Path = field(default_factory=_default_projects_dir)
-    docker_pull_policy: str = "never"
+    docker_pull_policy: str = "missing"
     memory_limit: str = ""
     gpus: str = "all"
     extra_docker_args: str = ""

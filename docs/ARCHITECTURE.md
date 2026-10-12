@@ -191,7 +191,7 @@ sequenceDiagram
     Run->>Run: create runs/YYYY-MM-DD_HH-MM-SS/
     Run->>Runner: GridpackRunRequest
     Runner->>Runner: copy inputs to work/, write manifest.json,<br/>status.json = running
-    Runner->>Docker: docker run --rm --network none --pull=never ...
+    Runner->>Docker: docker run --rm --network none --pull=missing ...
     Docker->>GP: mpirun -n N ca.x input.xml
     GP-->>Runner: stdout lines
     Runner-->>Run: each line, to logs/run.log, work/terminal.log,<br/>and the progress parser
@@ -249,7 +249,7 @@ sequenceDiagram
 
 | Boundary | What crosses it | Enforced by |
 |---|---|---|
-| GUI process and GridPACK container | The run's `work/` folder, bind-mounted at `/app/workspace`; the command's stdout | `runner/docker_command.py`: argument list, `--network none`, `--pull=never` by default, `-u uid:gid` |
+| GUI process and GridPACK container | The run's `work/` folder, bind-mounted at `/app/workspace`; the command's stdout | `runner/docker_command.py`: argument list, `--network none`, `--pull=missing` by default, `-u uid:gid` |
 | GUI process and analysis worker | Run folder path and options in; progress and an `AnalysisBuildResult` back through a `multiprocessing` queue | `analysis/service.py`: `spawn` context, cross-process file lock, group kill on cancel |
 | GridLens and the model runtime | Prompt files, stream-json events, MCP tool calls and results | `agent/policy.py` (loopback-only route), `agent/hermes.py` (isolated profile, pinned version), `agent/controller.py` (deadline and byte caps) |
 | Model and the file system | Only what `ToolService` returns | `agent/session.py` `scoped_path`, tool result bounds in `agent/tool_base.py`, confirmation of destructive changes |
@@ -261,7 +261,7 @@ These decisions are visible in the code and in the repository's documents. No fo
 
 1. **GridPACK runs out of process, in Docker, never in a shell.** The command is built as a Python list and
    run with `subprocess.Popen` without `shell=True`. The container gets `--network none`, the run's pull
-   policy (`never` by default), the host UID and GID, and only the run's `work/` folder, unless extra Docker
+   policy (`missing` by default), the host UID and GID, and only the run's `work/` folder, unless extra Docker
    arguments add more.
    *Why:* the inputs are Critical Energy/Electric Infrastructure Information (CEII), and GridPACK with its
    MPI toolchain comes as prebuilt Docker images. *Consequences:* the user must be able to run Docker, which on
@@ -628,9 +628,9 @@ disk, written with the Python standard library, pandas, or pyarrow.
 - **Location:** `$XDG_CONFIG_HOME/gridlens/settings.json`, or `~/.config/gridlens/settings.json`.
 - **Purpose:** Defaults and the Run tab's last settings, loaded at startup and saved when the window
   closes and when a run starts.
-- **Fields (`AppSettings`):** `app_name` (`GridLens`), `default_gridpack_image` (`pnnl/gridpack:latest`),
+- **Fields (`AppSettings`):** `app_name` (`GridLens`), `default_gridpack_image` (`alh360/gridlens-solver-v0`),
   `default_xml_file` (`input.xml`), `default_mpi_processes` (4), `default_projects_dir`
-  (`~/GridLensProjects`), `docker_pull_policy` (`never`; also `missing` or `always`), `memory_limit` (empty),
+  (`~/GridLensProjects`), `docker_pull_policy` (`missing`; also `never` or `always`), `memory_limit` (empty),
   `extra_docker_args` (empty). Unknown keys are ignored.
 
 ### 4.2 Projects folder and projects
@@ -760,7 +760,7 @@ download sites.
 | Integration | Purpose | Method | Where |
 |---|---|---|---|
 | Docker Engine | Run GridPACK and the script sandbox | Docker CLI as a subprocess | `runner/`, `agent/scripts.py` |
-| GridPACK images (default `pnnl/gridpack:latest`) | The contingency analysis solver, `mpirun ... ca.x <xml>` | Container with the run's `work/` at `/app/workspace` | `runner/docker_command.py` |
+| GridPACK images (default `alh360/gridlens-solver-v0`) | The contingency analysis solver, `mpirun ... ca.x <xml>` | Container with the run's `work/` at `/app/workspace` | `runner/docker_command.py` |
 | Ollama | Local inference for Clarke; model inventory, checks, downloads; embeddings for the reference search | HTTP on loopback: `/api/version`, `/api/tags`, `/api/show`, `/api/pull`, `/api/delete`, `/api/embed`; Hermes uses the OpenAI-compatible `/v1` | `agent/policy.py`, `agent/setup.py`, `agent/hermes.py`, `agent/library/vectors.py` |
 | SQLite | The passage index of the reference documents | Python's `sqlite3`, write-ahead log, one database per Reference documents folder | `agent/library/index.py` |
 | pypdf | Text and page labels of reference PDFs | Python library, imported when a PDF is first read | `agent/library/reading.py` |

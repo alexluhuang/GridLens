@@ -50,7 +50,7 @@ The GUI builds a Docker command equivalent to:
 
 ```bash
 docker run --rm \
-  --pull=never \
+  --pull=missing \
   --network none \
   --platform linux/arm64 \
   -u "$(id -u):$(id -g)" \
@@ -58,7 +58,7 @@ docker run --rm \
   --gpus all \
   -v /path/to/project/runs/YYYY-MM-DD_HH-MM-SS/work:/app/workspace \
   -w /app/workspace \
-  pnnl/gridpack:latest \
+  alh360/gridlens-solver-v0 \
   mpirun -n 4 ca.x input.xml
 ```
 

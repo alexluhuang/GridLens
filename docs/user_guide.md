@@ -72,8 +72,8 @@ To use the newer GridPACK container, enter this image in the Run tab:
 pnnl/gridpack:ca-scalability-v2
 ```
 
-If the image is not already in Docker's local image store, set the Docker pull policy to `missing` or
-`always`. In **Configuration**, expand **Advanced Configuration** and set the contingency **Output format**
+The Docker pull policy defaults to `missing`, so Docker pulls the image when it is not already in the local
+image store. Choose `never` on a machine that must stay offline. In **Configuration**, expand **Advanced Configuration** and set the contingency **Output format**
 to `csv_flat` before you click **Generate / Save XML**.
 
 ## Run a sensitivity analysis

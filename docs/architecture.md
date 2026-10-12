@@ -60,7 +60,7 @@ GridPACK's Docker documentation describes `/app/workspace` as the working direct
 inside the container. This app follows that model and adds security and reproducibility defaults:
 
 - `--network none`
-- `--pull=never`
+- `--pull=missing`, the Run tab's default pull policy
 - `--platform linux/amd64` or `linux/arm64`
 - `-u uid:gid`
 - `-e HOME=/tmp`

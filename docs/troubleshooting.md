@@ -49,12 +49,13 @@ ls -l /var/run/docker.sock
 
 ## Image not available
 
-The app defaults to `--pull=never`, so a run fails when the image is missing.
+The app defaults to `--pull=missing`, so Docker pulls a missing image on the first run. A run still fails
+when the image is missing and the pull policy is `never`, or Docker cannot reach the registry.
 
 Fix:
 
 ```bash
-docker pull pnnl/gridpack:latest
+docker pull alh360/gridlens-solver-v0
 ```
 
 Or load an approved image tarball:
@@ -86,7 +87,7 @@ sudo chown -R "$USER:$USER" ~/GridLensProjects
 Confirm the manual command works first:
 
 ```bash
-docker run --rm -v "$PWD:/app/workspace" -w /app/workspace pnnl/gridpack:latest \
+docker run --rm --gpus all -v "$PWD:/app/workspace" -w /app/workspace alh360/gridlens-solver-v0 \
   mpirun -n 4 ca.x input.xml
 ```
 
