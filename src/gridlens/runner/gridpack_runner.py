@@ -30,6 +30,7 @@ class GridpackRunRequest:
     use_host_user: bool = True
     use_platform_flag: bool = True
     memory_limit: str = ""
+    gpus: str = "all"
     extra_docker_args: str = ""
     container_name: str = ""
     notes: str = ""
@@ -192,6 +193,7 @@ def run_gridpack_case(request: GridpackRunRequest, log_callback: LogCallback | N
         use_host_user=request.use_host_user,
         use_platform_flag=request.use_platform_flag,
         memory_limit=request.memory_limit,
+        gpus=request.gpus,
         extra_docker_args=request.extra_docker_args,
         container_name=container_name,
     )

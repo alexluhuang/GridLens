@@ -37,6 +37,34 @@ class DockerCommandTests(unittest.TestCase):
         self.assertIn("pnnl/gridpack:latest", command)
         self.assertEqual(command[-5:], [MPI_EXECUTABLE, "-n", "4", "ca.x", "input.xml"])
 
+    def test_command_gives_the_container_all_gpus_by_default(self) -> None:
+        command = build_gridpack_docker_command(
+            work_dir=Path.cwd(),
+            image="alh360/gridlens-solver-v0",
+            executable="ca.x",
+            xml_filename="input.xml",
+            mpi_processes=4,
+            use_host_user=False,
+            use_platform_flag=False,
+        )
+
+        self.assertEqual(command[command.index("--gpus") + 1], "all")
+        self.assertLess(command.index("--gpus"), command.index("alh360/gridlens-solver-v0"))
+
+    def test_blank_gpus_runs_without_a_gpu(self) -> None:
+        command = build_gridpack_docker_command(
+            work_dir=Path.cwd(),
+            image="pnnl/gridpack:latest",
+            executable="ca.x",
+            xml_filename="input.xml",
+            mpi_processes=4,
+            gpus=" ",
+            use_host_user=False,
+            use_platform_flag=False,
+        )
+
+        self.assertNotIn("--gpus", command)
+
     def test_extra_args_are_split_without_shell(self) -> None:
         command = build_gridpack_docker_command(
             work_dir=Path.cwd(),

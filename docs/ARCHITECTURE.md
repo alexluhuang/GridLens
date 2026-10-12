@@ -419,8 +419,9 @@ on the user's machine.
 - **Description:**
   - `docker_command.py`: `build_gridpack_docker_command` builds
     `docker run --rm --pull=<policy> --network none --platform <platform> -u <uid>:<gid> -e HOME=/tmp
-    [--memory <limit>] --name gridlens-<run id> [extra args] -v <run>/work:/app/workspace -w /app/workspace
+    [--memory <limit>] [--gpus <gpus>] --name gridlens-<run id> [extra args] -v <run>/work:/app/workspace -w /app/workspace
     <image> mpirun -n <N> ca.x <xml>`. Extra arguments are split with `shlex`, never passed to a shell.
+    `<gpus>` is the Run tab's GPUs setting, `all` by default; a blank setting leaves `--gpus` out.
   - `gridpack_runner.py`: `run_gridpack_case` copies inputs, writes the manifest and status, streams output
     to both log files and a callback, and records the exit code. `terminate_gridpack_run` runs
     `docker stop --time 10`, and `docker kill` if that fails or times out.

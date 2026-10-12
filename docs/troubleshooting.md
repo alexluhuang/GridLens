@@ -63,6 +63,15 @@ Or load an approved image tarball:
 docker load -i gridpack-ca-0.1.0-linux-arm64.tar
 ```
 
+## Docker cannot select a GPU driver
+
+GridLens passes `--gpus all` by default. On a machine without NVIDIA GPUs, or without the NVIDIA Container
+Toolkit, Docker stops with `could not select device driver "" with capabilities: [[gpu]]`.
+
+Fix: clear the GPUs setting on the Run tab. GridLens then runs the container without a GPU. The GPU solver
+image `alh360/gridlens-solver-v0` uses the CPU when no GPU is found, unless the case's XML sets
+`GPUBatch/onUnavailable` to `error`.
+
 ## Output files owned by root
 
 The app runs Docker with `-u uid:gid` by default. If older runs produced root-owned files, fix the ownership

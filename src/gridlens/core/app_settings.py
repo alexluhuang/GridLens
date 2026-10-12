@@ -26,6 +26,7 @@ class AppSettings:
     default_projects_dir: Path = field(default_factory=_default_projects_dir)
     docker_pull_policy: str = "never"
     memory_limit: str = ""
+    gpus: str = "all"
     extra_docker_args: str = ""
 
     @classmethod

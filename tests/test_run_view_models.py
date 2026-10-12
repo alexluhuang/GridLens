@@ -25,6 +25,7 @@ def test_apply_run_form_values_normalizes_settings() -> None:
         pull_policy="missing",
         memory_limit=" 16g ",
         extra_docker_args=" --ipc=host ",
+        gpus=" device=0 ",
     )
 
     apply_run_form_values_to_settings(settings, values)
@@ -34,6 +35,7 @@ def test_apply_run_form_values_normalizes_settings() -> None:
     assert settings.docker_pull_policy == "missing"
     assert settings.memory_limit == "16g"
     assert settings.extra_docker_args == "--ipc=host"
+    assert settings.gpus == "device=0"
 
 
 def test_build_gridpack_run_request_uses_project_xml_and_normalized_values(tmp_path: Path) -> None:
@@ -57,6 +59,7 @@ def test_build_gridpack_run_request_uses_project_xml_and_normalized_values(tmp_p
     assert request.network_mode == "none"
     assert request.use_platform_flag is True
     assert request.use_host_user is True
+    assert request.gpus == "all"
     assert request.container_name == "gridlens-run"
 
 
@@ -80,6 +83,20 @@ def test_settings_saved_with_the_removed_run_options_still_load(tmp_path: Path) 
 
     assert settings.default_gridpack_image == "pnnl/gridpack:old"
     assert not hasattr(settings, "default_executable")
+
+
+def test_settings_saved_before_the_gpus_option_run_on_all_gpus(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"default_gridpack_image": "alh360/gridlens-solver-v0"}), encoding="utf-8")
+
+    assert AppSettings.load(path).gpus == "all"
+
+
+def test_run_form_validation_rejects_gpus_with_whitespace() -> None:
+    values = RunFormValues(image="pnnl/gridpack:test", mpi_processes=1, pull_policy="never", gpus="all --privileged")
+
+    with pytest.raises(ValidationError, match="GPUs"):
+        validate_run_form_values(values)
 
 
 def test_run_form_validation_rejects_unknown_pull_policy() -> None:

@@ -55,6 +55,7 @@ docker run --rm \
   --platform linux/arm64 \
   -u "$(id -u):$(id -g)" \
   -e HOME=/tmp \
+  --gpus all \
   -v /path/to/project/runs/YYYY-MM-DD_HH-MM-SS/work:/app/workspace \
   -w /app/workspace \
   pnnl/gridpack:latest \
@@ -62,6 +63,9 @@ docker run --rm \
 ```
 
 On x86_64 systems the platform is `linux/amd64`. On DGX Spark ARM64 it is usually `linux/arm64`.
+
+`--gpus all` comes from the Run tab's GPUs setting. The GPU solver image `alh360/gridlens-solver-v0` needs it
+to see the GPU. On a machine without NVIDIA GPUs, clear the setting, and GridLens leaves `--gpus` out.
 
 ## Repository layout
 

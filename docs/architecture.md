@@ -64,6 +64,7 @@ inside the container. This app follows that model and adds security and reproduc
 - `--platform linux/amd64` or `linux/arm64`
 - `-u uid:gid`
 - `-e HOME=/tmp`
+- `--gpus all`, from the Run tab's GPUs setting (blank leaves it out)
 - `-v run/work:/app/workspace`
 - `-w /app/workspace`
 

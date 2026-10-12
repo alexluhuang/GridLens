@@ -47,6 +47,7 @@ def build_gridpack_docker_command(
     use_host_user: bool = True,
     use_platform_flag: bool = True,
     memory_limit: str = "",
+    gpus: str = "all",
     extra_docker_args: str | list[str] | None = None,
     container_name: str = "",
     executable_args: list[str] | None = None,
@@ -81,6 +82,11 @@ def build_gridpack_docker_command(
 
     if memory_limit.strip():
         cmd += ["--memory", memory_limit.strip()]
+
+    # The GridLens solver image runs contingency cases on the GPU, which
+    # Docker exposes only with --gpus. Blank leaves the container CPU-only.
+    if gpus.strip():
+        cmd += ["--gpus", gpus.strip()]
 
     extra_args = _split_extra_args(extra_docker_args)
     if container_name.strip() and not docker_container_name_from_args(extra_args):

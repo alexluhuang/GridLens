@@ -117,6 +117,9 @@ class RunTab(QWidget):
         self.memory_limit = QLineEdit(settings.memory_limit)
         self.memory_limit.setPlaceholderText("Optional, for example 8g")
         self.memory_limit.setToolTip("Optional Docker memory limit, such as 8g.")
+        self.gpus = QLineEdit(settings.gpus)
+        self.gpus.setPlaceholderText("Blank runs without a GPU")
+        self.gpus.setToolTip("Docker --gpus value, such as all, 1 or device=0. Clear it on a machine without NVIDIA GPUs.")
         self.extra_args = QLineEdit(settings.extra_docker_args)
         self.extra_args.setPlaceholderText("Optional Docker args, parsed safely")
         self.extra_args.setToolTip("Optional Docker arguments parsed without invoking a shell.")
@@ -130,6 +133,7 @@ class RunTab(QWidget):
         form.addRow("MPI processes", self.mpi_processes)
         form.addRow("Docker pull policy", self.pull_policy)
         form.addRow("Memory limit", self.memory_limit)
+        form.addRow("GPUs", self.gpus)
         form.addRow("Extra Docker args", self.extra_args)
 
         action_row = QHBoxLayout()
@@ -342,6 +346,7 @@ class RunTab(QWidget):
             pull_policy=self.pull_policy.currentText(),
             memory_limit=self.memory_limit.text(),
             extra_docker_args=self.extra_args.text(),
+            gpus=self.gpus.text(),
         )
 
     def on_finished(self, result: GridpackRunResult) -> None:
