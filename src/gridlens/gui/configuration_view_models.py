@@ -27,6 +27,18 @@ NETWORK_CONFIGURATION_TAG_OPTIONS = (
     "networkConfiguration_mat",
     "networkConfiguration_GOSS",
 )
+# The GridLens solver's GPU settings, in Contingency_analysis/GPUBatch and Contingency_analysis/Execution.
+GPU_ENABLED_OPTIONS = ("on", "auto")
+GPU_ON_UNAVAILABLE_OPTIONS = ("fallback", "error")
+GPU_BACKEND_OPTIONS = ("auto", "alg2", "cudss", "cpu_reference")
+GPU_WARM_START_OPTIONS = ("base_case", "raw")
+GPU_MEMORY_PROFILE_OPTIONS = ("auto", "unified", "coherent", "discrete")
+GPU_FORMULATION_OPTIONS = ("superset",)
+GPU_PLANNER_ORDERING_OPTIONS = ("amd", "colamd")
+GPU_SOLVE_PLACEMENT_OPTIONS = ("gpu", "host")
+GPU_TELEMETRY_OPTIONS = ("off", "summary", "detailed")
+CPU_BINDING_OPTIONS = ("auto", "none", "performance_first")
+LOG_LEVEL_OPTIONS = ("error", "warn", "info", "debug")
 DEFAULT_XML_FILE_NAME = "input.xml"
 DEFAULT_PETSC_OPTIONS = """-ksp_type preonly
 -pc_type lu
@@ -69,6 +81,34 @@ class InputConfigurationValues:
     phase_shift_sign: str = "1.0"
     petsc_prefix: str = ""
     petsc_options: str = DEFAULT_PETSC_OPTIONS
+    use_gpu: bool = True
+    gpu_enabled: str = "on"
+    gpu_on_unavailable: str = "fallback"
+    gpu_backend: str = "auto"
+    gpu_batch_size: str = "auto"
+    gpu_warm_start: str = "base_case"
+    gpu_shadow_fraction: str = "0"
+    gpu_plugin_path: str = ""
+    gpu_device: str = "0"
+    gpu_max_validated_batch: str = ""
+    gpu_backfill: bool = True
+    gpu_threads_per_block: str = "auto"
+    gpu_memory_profile: str = "auto"
+    gpu_memory_headroom_gb: str = ""
+    gpu_max_memory_gb: str = "0"
+    gpu_formulation: str = "superset"
+    gpu_planner_ordering: str = "amd"
+    gpu_pivot_tolerance: str = "0.001"
+    gpu_solve_placement: str = "gpu"
+    gpu_refinement_steps: str = "0"
+    gpu_residual_limit: str = "1e-6"
+    gpu_pivot_limit: str = "1e-12"
+    gpu_check_non_finite: bool = True
+    gpu_telemetry: str = "summary"
+    gpu_profiler_ranges: bool = False
+    accelerator_ranks: str = "auto"
+    cpu_binding: str = "auto"
+    log_level: str = "info"
 
 
 def default_input_configuration_values(
@@ -155,6 +195,7 @@ def load_input_configuration_values(
             monitor_kv_min=_element_text(contingency, "monitorKvMin", values.monitor_kv_min),
             monitor_kv_max=_element_text(contingency, "monitorKvMax", values.monitor_kv_max),
         )
+        values = _load_gpu_values(contingency, values)
 
     if powerflow is not None:
         network_tag, network_name = _network_configuration(powerflow)
@@ -202,6 +243,55 @@ def load_input_configuration_values(
     return normalize_input_configuration_values(values)
 
 
+def _load_gpu_values(contingency: ET.Element, values: InputConfigurationValues) -> InputConfigurationValues:
+    """Read the GPU settings; a configuration without GPUBatch gets the defaults, as the solver does."""
+    gpu = contingency.find("GPUBatch")
+    if gpu is not None:
+        enabled = _element_text(gpu, "enabled", values.gpu_enabled).lower()
+        values = replace(
+            values,
+            use_gpu=enabled != "off",
+            gpu_enabled=values.gpu_enabled if enabled == "off" else enabled,
+            gpu_on_unavailable=_element_text(gpu, "onUnavailable", values.gpu_on_unavailable),
+            gpu_backend=_element_text(gpu, "backend", values.gpu_backend),
+            gpu_batch_size=_element_text(gpu, "batchSize", values.gpu_batch_size),
+            gpu_warm_start=_element_text(gpu, "warmStart", values.gpu_warm_start),
+            gpu_shadow_fraction=_element_text(gpu, "shadowFraction", values.gpu_shadow_fraction),
+            gpu_plugin_path=_element_text(gpu, "pluginPath", values.gpu_plugin_path),
+            gpu_device=_element_text(gpu, "device", values.gpu_device),
+            gpu_max_validated_batch=_element_text(gpu, "maxValidatedBatch", values.gpu_max_validated_batch),
+            gpu_backfill=_element_bool(gpu, "backfill", values.gpu_backfill),
+            gpu_threads_per_block=_element_text(gpu, "threadsPerBlock", values.gpu_threads_per_block),
+            gpu_memory_profile=_element_text(gpu, "memoryProfile", values.gpu_memory_profile),
+            gpu_memory_headroom_gb=_element_text(gpu, "memoryHeadroomGB", values.gpu_memory_headroom_gb),
+            gpu_max_memory_gb=_element_text(gpu, "maxMemoryGB", values.gpu_max_memory_gb),
+            gpu_formulation=_element_text(gpu, "formulation", values.gpu_formulation),
+            gpu_planner_ordering=_element_text(gpu, "plannerOrdering", values.gpu_planner_ordering),
+            gpu_pivot_tolerance=_element_text(gpu, "pivotTolerance", values.gpu_pivot_tolerance),
+            gpu_solve_placement=_element_text(gpu, "solvePlacement", values.gpu_solve_placement),
+            gpu_refinement_steps=_element_text(gpu, "refinementSteps", values.gpu_refinement_steps),
+            gpu_telemetry=_element_text(gpu, "telemetry", values.gpu_telemetry),
+            gpu_profiler_ranges=_element_bool(gpu, "profilerRanges", values.gpu_profiler_ranges),
+        )
+        health = gpu.find("health")
+        if health is not None:
+            values = replace(
+                values,
+                gpu_residual_limit=_element_text(health, "residualLimit", values.gpu_residual_limit),
+                gpu_pivot_limit=_element_text(health, "pivotLimit", values.gpu_pivot_limit),
+                gpu_check_non_finite=_element_bool(health, "checkNonFinite", values.gpu_check_non_finite),
+            )
+    execution = contingency.find("Execution")
+    if execution is not None:
+        values = replace(
+            values,
+            accelerator_ranks=_element_text(execution, "acceleratorRanks", values.accelerator_ranks),
+            cpu_binding=_element_text(execution, "cpuBinding", values.cpu_binding),
+            log_level=_element_text(execution, "logLevel", values.log_level),
+        )
+    return values
+
+
 def normalize_input_configuration_values(values: InputConfigurationValues) -> InputConfigurationValues:
     xml_file_name = _validate_file_name(values.xml_file_name, "Generated XML file")
     if Path(xml_file_name).suffix.lower() != ".xml":
@@ -226,7 +316,7 @@ def normalize_input_configuration_values(values: InputConfigurationValues) -> In
     init_start = _validate_option(values.init_start, INIT_START_OPTIONS, "Powerflow init start")
 
     return replace(
-        values,
+        _normalize_gpu_values(values),
         xml_file_name=xml_file_name,
         network_file_name=network_file_name,
         network_configuration_tag=network_configuration_tag,
@@ -262,6 +352,55 @@ def normalize_input_configuration_values(values: InputConfigurationValues) -> In
         phase_shift_sign=_validate_float(values.phase_shift_sign, "Phase shift sign"),
         petsc_prefix=_validate_optional_text(values.petsc_prefix, "PETSc prefix"),
         petsc_options=values.petsc_options.strip(),
+    )
+
+
+def _normalize_gpu_values(values: InputConfigurationValues) -> InputConfigurationValues:
+    """Validate the GPU settings when the GPU is used; otherwise they are not written, so they are left alone."""
+    if not values.use_gpu:
+        return values
+    return replace(
+        values,
+        gpu_enabled=_validate_option(values.gpu_enabled, GPU_ENABLED_OPTIONS, "GPU enabled"),
+        gpu_on_unavailable=_validate_option(values.gpu_on_unavailable, GPU_ON_UNAVAILABLE_OPTIONS, "GPU unavailable"),
+        gpu_backend=_validate_option(values.gpu_backend, GPU_BACKEND_OPTIONS, "GPU backend"),
+        gpu_batch_size=_validate_auto_int(values.gpu_batch_size, "GPU batch size", 1, 65536),
+        gpu_warm_start=_validate_option(values.gpu_warm_start, GPU_WARM_START_OPTIONS, "GPU warm start"),
+        gpu_shadow_fraction=_validate_fraction(values.gpu_shadow_fraction, "GPU shadow fraction"),
+        gpu_plugin_path=_validate_optional_text(values.gpu_plugin_path, "GPU plugin path"),
+        gpu_device=_validate_int(values.gpu_device, "GPU device", minimum=0, maximum=1023),
+        gpu_max_validated_batch=_validate_optional_int(
+            values.gpu_max_validated_batch,
+            "GPU maximum validated batch",
+            1,
+            65536,
+        ),
+        gpu_threads_per_block=_validate_threads_per_block(values.gpu_threads_per_block),
+        gpu_memory_profile=_validate_option(values.gpu_memory_profile, GPU_MEMORY_PROFILE_OPTIONS, "GPU memory profile"),
+        gpu_memory_headroom_gb=_validate_optional_nonnegative_float(
+            values.gpu_memory_headroom_gb,
+            "GPU memory headroom",
+        ),
+        gpu_max_memory_gb=_validate_nonnegative_float(values.gpu_max_memory_gb, "GPU maximum memory"),
+        gpu_formulation=_validate_option(values.gpu_formulation, GPU_FORMULATION_OPTIONS, "GPU formulation"),
+        gpu_planner_ordering=_validate_option(
+            values.gpu_planner_ordering,
+            GPU_PLANNER_ORDERING_OPTIONS,
+            "GPU planner ordering",
+        ),
+        gpu_pivot_tolerance=_validate_fraction(values.gpu_pivot_tolerance, "GPU pivot tolerance"),
+        gpu_solve_placement=_validate_option(
+            values.gpu_solve_placement,
+            GPU_SOLVE_PLACEMENT_OPTIONS,
+            "GPU solve placement",
+        ),
+        gpu_refinement_steps=_validate_int(values.gpu_refinement_steps, "GPU refinement steps", minimum=0, maximum=100),
+        gpu_residual_limit=_validate_fraction(values.gpu_residual_limit, "GPU residual limit"),
+        gpu_pivot_limit=_validate_fraction(values.gpu_pivot_limit, "GPU pivot limit"),
+        gpu_telemetry=_validate_option(values.gpu_telemetry, GPU_TELEMETRY_OPTIONS, "GPU telemetry"),
+        accelerator_ranks=_validate_accelerator_ranks(values.accelerator_ranks),
+        cpu_binding=_validate_option(values.cpu_binding, CPU_BINDING_OPTIONS, "CPU binding"),
+        log_level=_validate_option(values.log_level, LOG_LEVEL_OPTIONS, "Log level"),
     )
 
 
@@ -318,6 +457,7 @@ def _configuration_tree(normalized: InputConfigurationValues) -> ET.Element:
         _add_text(contingency, "monitorKvMin", normalized.monitor_kv_min)
     if float(normalized.monitor_kv_max) > 0.0:
         _add_text(contingency, "monitorKvMax", normalized.monitor_kv_max)
+    _add_gpu_settings(contingency, normalized)
 
     powerflow = ET.SubElement(root, "Powerflow")
     _add_text(powerflow, normalized.network_configuration_tag, normalized.network_file_name)
@@ -341,6 +481,47 @@ def _configuration_tree(normalized: InputConfigurationValues) -> ET.Element:
     return root
 
 
+def _add_gpu_settings(contingency: ET.Element, normalized: InputConfigurationValues) -> None:
+    """Add GPUBatch and Execution; without the GPU, only GPUBatch's enabled, set to off, so the solver stays on the CPU."""
+    gpu = ET.SubElement(contingency, "GPUBatch")
+    if not normalized.use_gpu:
+        _add_text(gpu, "enabled", "off")
+        return
+    _add_text(gpu, "enabled", normalized.gpu_enabled)
+    _add_text(gpu, "onUnavailable", normalized.gpu_on_unavailable)
+    _add_text(gpu, "backend", normalized.gpu_backend)
+    _add_text(gpu, "batchSize", normalized.gpu_batch_size)
+    _add_text(gpu, "warmStart", normalized.gpu_warm_start)
+    _add_text(gpu, "shadowFraction", normalized.gpu_shadow_fraction)
+    if normalized.gpu_plugin_path:
+        _add_text(gpu, "pluginPath", normalized.gpu_plugin_path)
+    _add_text(gpu, "device", normalized.gpu_device)
+    if normalized.gpu_max_validated_batch:
+        _add_text(gpu, "maxValidatedBatch", normalized.gpu_max_validated_batch)
+    _add_text(gpu, "backfill", _bool_text(normalized.gpu_backfill))
+    _add_text(gpu, "threadsPerBlock", normalized.gpu_threads_per_block)
+    _add_text(gpu, "memoryProfile", normalized.gpu_memory_profile)
+    if normalized.gpu_memory_headroom_gb:
+        _add_text(gpu, "memoryHeadroomGB", normalized.gpu_memory_headroom_gb)
+    _add_text(gpu, "maxMemoryGB", normalized.gpu_max_memory_gb)
+    _add_text(gpu, "formulation", normalized.gpu_formulation)
+    _add_text(gpu, "plannerOrdering", normalized.gpu_planner_ordering)
+    _add_text(gpu, "pivotTolerance", normalized.gpu_pivot_tolerance)
+    _add_text(gpu, "solvePlacement", normalized.gpu_solve_placement)
+    _add_text(gpu, "refinementSteps", normalized.gpu_refinement_steps)
+    health = ET.SubElement(gpu, "health")
+    _add_text(health, "residualLimit", normalized.gpu_residual_limit)
+    _add_text(health, "pivotLimit", normalized.gpu_pivot_limit)
+    _add_text(health, "checkNonFinite", _bool_text(normalized.gpu_check_non_finite))
+    _add_text(gpu, "telemetry", normalized.gpu_telemetry)
+    _add_text(gpu, "profilerRanges", _bool_text(normalized.gpu_profiler_ranges))
+
+    execution = ET.SubElement(contingency, "Execution")
+    _add_text(execution, "acceleratorRanks", normalized.accelerator_ranks)
+    _add_text(execution, "cpuBinding", normalized.cpu_binding)
+    _add_text(execution, "logLevel", normalized.log_level)
+
+
 def _xml_document(root: ET.Element) -> str:
     ET.indent(root, space="  ")
     xml_text = ET.tostring(root, encoding="unicode", short_empty_elements=False)
@@ -353,8 +534,17 @@ _MANAGED_TAGS = {
     "Contingency_analysis": frozenset({
         "printCalcFiles", "contingencyList", "FullBranchN1", "FullGeneratorN1", "groupSize", "maxVoltage",
         "minVoltage", "contingencyRating", "qlim", "qlimDeadband", "LTC", "writeStats", "outputFormat",
-        "outputFile", "monitorBranchesFile", "monitorAreas", "monitorKvMin", "monitorKvMax",
+        "outputFile", "monitorBranchesFile", "monitorAreas", "monitorKvMin", "monitorKvMax", "GPUBatch",
+        "Execution",
     }),
+    "GPUBatch": frozenset({
+        "enabled", "onUnavailable", "backend", "batchSize", "warmStart", "shadowFraction", "pluginPath", "device",
+        "maxValidatedBatch", "backfill", "threadsPerBlock", "memoryProfile", "memoryHeadroomGB", "maxMemoryGB",
+        "formulation", "plannerOrdering", "pivotTolerance", "solvePlacement", "refinementSteps", "health",
+        "telemetry", "profilerRanges",
+    }),
+    "health": frozenset({"residualLimit", "pivotLimit", "checkNonFinite"}),
+    "Execution": frozenset({"acceleratorRanks", "cpuBinding", "logLevel"}),
     "Powerflow": frozenset({
         *NETWORK_CONFIGURATION_TAG_OPTIONS, "initStart", "SwitchedShunt", "qlim", "qlimDeadband", "LTC",
         "AreaInterchange", "maxControllerIterations", "maxIteration", "tolerance", "maxQlimIterations",
@@ -483,7 +673,7 @@ def _validate_option(value: str, options: tuple[str, ...], label: str) -> str:
     return text
 
 
-def _validate_int(value: str, label: str, minimum: int | None = None) -> str:
+def _validate_int(value: str, label: str, minimum: int | None = None, maximum: int | None = None) -> str:
     text = _validate_text(value, label)
     try:
         parsed = int(text)
@@ -491,7 +681,41 @@ def _validate_int(value: str, label: str, minimum: int | None = None) -> str:
         raise ValidationError(f"{label} must be an integer.") from exc
     if minimum is not None and parsed < minimum:
         raise ValidationError(f"{label} must be at least {minimum}.")
+    if maximum is not None and parsed > maximum:
+        raise ValidationError(f"{label} must be at most {maximum}.")
     return text
+
+
+def _validate_optional_int(value: str, label: str, minimum: int, maximum: int) -> str:
+    if not value.strip():
+        return ""
+    return _validate_int(value, label, minimum=minimum, maximum=maximum)
+
+
+def _validate_auto_int(value: str, label: str, minimum: int, maximum: int) -> str:
+    if value.strip().lower() == "auto":
+        return "auto"
+    try:
+        return _validate_int(value, label, minimum=minimum, maximum=maximum)
+    except ValidationError as exc:
+        raise ValidationError(f"{label} must be auto or an integer from {minimum} to {maximum}.") from exc
+
+
+def _validate_threads_per_block(value: str) -> str:
+    text = _validate_auto_int(value, "GPU threads per block", 32, 1024)
+    if text != "auto" and int(text) % 32:
+        raise ValidationError("GPU threads per block must be auto or a multiple of 32 from 32 to 1024.")
+    return text
+
+
+def _validate_accelerator_ranks(value: str) -> str:
+    text = _validate_text(value, "Accelerator ranks")
+    if text.lower() == "auto":
+        return "auto"
+    ranks = [token.strip() for token in text.split(",")]
+    if not all(token.isdigit() for token in ranks):
+        raise ValidationError("Accelerator ranks must be auto or a comma-separated list of MPI ranks, such as 0,8.")
+    return ",".join(ranks)
 
 
 def _validate_float(value: str, label: str) -> str:
@@ -507,6 +731,19 @@ def _validate_nonnegative_float(value: str, label: str) -> str:
     text = _validate_float(value, label)
     if float(text) < 0.0:
         raise ValidationError(f"{label} must be zero or greater.")
+    return text
+
+
+def _validate_optional_nonnegative_float(value: str, label: str) -> str:
+    if not value.strip():
+        return ""
+    return _validate_nonnegative_float(value, label)
+
+
+def _validate_fraction(value: str, label: str) -> str:
+    text = _validate_float(value, label)
+    if not 0.0 <= float(text) <= 1.0:
+        raise ValidationError(f"{label} must be from 0 to 1.")
     return text
 
 
@@ -542,9 +779,20 @@ __all__ = [
     "BOOLEAN_OPTIONS",
     "CONTINGENCY_OUTPUT_FORMAT_OPTIONS",
     "CONTINGENCY_RATING_OPTIONS",
+    "CPU_BINDING_OPTIONS",
     "DEFAULT_PETSC_OPTIONS",
     "DEFAULT_XML_FILE_NAME",
+    "GPU_BACKEND_OPTIONS",
+    "GPU_ENABLED_OPTIONS",
+    "GPU_FORMULATION_OPTIONS",
+    "GPU_MEMORY_PROFILE_OPTIONS",
+    "GPU_ON_UNAVAILABLE_OPTIONS",
+    "GPU_PLANNER_ORDERING_OPTIONS",
+    "GPU_SOLVE_PLACEMENT_OPTIONS",
+    "GPU_TELEMETRY_OPTIONS",
+    "GPU_WARM_START_OPTIONS",
     "INIT_START_OPTIONS",
+    "LOG_LEVEL_OPTIONS",
     "InputConfigurationValues",
     "NETWORK_CONFIGURATION_TAG_OPTIONS",
     "attached_configuration",

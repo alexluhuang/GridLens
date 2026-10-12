@@ -24,8 +24,19 @@ from gridlens.gui.configuration_view_models import (
     BOOLEAN_OPTIONS,
     CONTINGENCY_OUTPUT_FORMAT_OPTIONS,
     CONTINGENCY_RATING_OPTIONS,
+    CPU_BINDING_OPTIONS,
     DEFAULT_XML_FILE_NAME,
+    GPU_BACKEND_OPTIONS,
+    GPU_ENABLED_OPTIONS,
+    GPU_FORMULATION_OPTIONS,
+    GPU_MEMORY_PROFILE_OPTIONS,
+    GPU_ON_UNAVAILABLE_OPTIONS,
+    GPU_PLANNER_ORDERING_OPTIONS,
+    GPU_SOLVE_PLACEMENT_OPTIONS,
+    GPU_TELEMETRY_OPTIONS,
+    GPU_WARM_START_OPTIONS,
     INIT_START_OPTIONS,
+    LOG_LEVEL_OPTIONS,
     NETWORK_CONFIGURATION_TAG_OPTIONS,
     InputConfigurationValues,
     attached_configuration,
@@ -80,11 +91,13 @@ class ConfigurationTab(QWidget):
         contingency_type_row.addStretch()
         self.contingency_rating = _combo(CONTINGENCY_RATING_OPTIONS)
         self.enforce_reactive_power_limit = _combo(BOOLEAN_OPTIONS)
+        self.use_gpu = QCheckBox("Run contingency cases on the GPU")
         basic_form.addRow("Generated XML file", self.xml_file_name)
         basic_form.addRow("Network file", self.network_file)
         basic_form.addRow("Contingency type", contingency_type_row)
         basic_form.addRow("Contingency rating", self.contingency_rating)
         basic_form.addRow("Enforce reactive power limit", self.enforce_reactive_power_limit)
+        basic_form.addRow("GPU", self.use_gpu)
 
         self.advanced_box = QGroupBox("Advanced Configuration")
         self.advanced_box.setObjectName("sectionToggle")
@@ -133,6 +146,37 @@ class ConfigurationTab(QWidget):
         self.petsc_options.setAcceptRichText(False)
         self.petsc_options.setMinimumHeight(92)
 
+        self.gpu_enabled = _combo(GPU_ENABLED_OPTIONS)
+        self.gpu_on_unavailable = _combo(GPU_ON_UNAVAILABLE_OPTIONS)
+        self.gpu_backend = _combo(GPU_BACKEND_OPTIONS)
+        self.gpu_batch_size = QLineEdit()
+        self.gpu_warm_start = _combo(GPU_WARM_START_OPTIONS)
+        self.gpu_shadow_fraction = QLineEdit()
+        self.gpu_plugin_path = QLineEdit()
+        self.gpu_plugin_path.setPlaceholderText("Optional, next to ca.x by default")
+        self.gpu_device = QLineEdit()
+        self.gpu_max_validated_batch = QLineEdit()
+        self.gpu_max_validated_batch.setPlaceholderText("Optional, 2048 by default")
+        self.gpu_backfill = _combo(BOOLEAN_OPTIONS)
+        self.gpu_threads_per_block = QLineEdit()
+        self.gpu_memory_profile = _combo(GPU_MEMORY_PROFILE_OPTIONS)
+        self.gpu_memory_headroom_gb = QLineEdit()
+        self.gpu_memory_headroom_gb.setPlaceholderText("Optional, 10% of unified or 5% of discrete memory by default")
+        self.gpu_max_memory_gb = QLineEdit()
+        self.gpu_formulation = _combo(GPU_FORMULATION_OPTIONS)
+        self.gpu_planner_ordering = _combo(GPU_PLANNER_ORDERING_OPTIONS)
+        self.gpu_pivot_tolerance = QLineEdit()
+        self.gpu_solve_placement = _combo(GPU_SOLVE_PLACEMENT_OPTIONS)
+        self.gpu_refinement_steps = QLineEdit()
+        self.gpu_residual_limit = QLineEdit()
+        self.gpu_pivot_limit = QLineEdit()
+        self.gpu_check_non_finite = _combo(BOOLEAN_OPTIONS)
+        self.gpu_telemetry = _combo(GPU_TELEMETRY_OPTIONS)
+        self.gpu_profiler_ranges = _combo(BOOLEAN_OPTIONS)
+        self.accelerator_ranks = QLineEdit()
+        self.cpu_binding = _combo(CPU_BINDING_OPTIONS)
+        self.log_level = _combo(LOG_LEVEL_OPTIONS)
+
         contingency_box = QGroupBox("Contingency")
         contingency_form = QFormLayout(contingency_box)
         configure_form_layout(contingency_form)
@@ -173,9 +217,43 @@ class ConfigurationTab(QWidget):
         monitoring_form.addRow("Monitor kV minimum", self.monitor_kv_min)
         monitoring_form.addRow("Monitor kV maximum", self.monitor_kv_max)
 
+        # Shown only while the GPU is used; without it the XML turns the GPU off and holds none of these.
+        self.gpu_box = QGroupBox("GPU Configuration")
+        gpu_form = QFormLayout(self.gpu_box)
+        configure_form_layout(gpu_form)
+        gpu_form.addRow("Enabled", self.gpu_enabled)
+        gpu_form.addRow("When no GPU is found", self.gpu_on_unavailable)
+        gpu_form.addRow("Backend", self.gpu_backend)
+        gpu_form.addRow("Batch size", self.gpu_batch_size)
+        gpu_form.addRow("Warm start", self.gpu_warm_start)
+        gpu_form.addRow("Shadow fraction", self.gpu_shadow_fraction)
+        gpu_form.addRow("Plugin path", self.gpu_plugin_path)
+        gpu_form.addRow("Device", self.gpu_device)
+        gpu_form.addRow("Maximum validated batch", self.gpu_max_validated_batch)
+        gpu_form.addRow("Backfill", self.gpu_backfill)
+        gpu_form.addRow("Threads per block", self.gpu_threads_per_block)
+        gpu_form.addRow("Memory profile", self.gpu_memory_profile)
+        gpu_form.addRow("Memory headroom (GB)", self.gpu_memory_headroom_gb)
+        gpu_form.addRow("Maximum memory (GB)", self.gpu_max_memory_gb)
+        gpu_form.addRow("Formulation", self.gpu_formulation)
+        gpu_form.addRow("Planner ordering", self.gpu_planner_ordering)
+        gpu_form.addRow("Pivot tolerance", self.gpu_pivot_tolerance)
+        gpu_form.addRow("Solve placement", self.gpu_solve_placement)
+        gpu_form.addRow("Refinement steps", self.gpu_refinement_steps)
+        gpu_form.addRow("Health: residual limit", self.gpu_residual_limit)
+        gpu_form.addRow("Health: pivot limit", self.gpu_pivot_limit)
+        gpu_form.addRow("Health: check non-finite", self.gpu_check_non_finite)
+        gpu_form.addRow("Telemetry", self.gpu_telemetry)
+        gpu_form.addRow("Profiler ranges", self.gpu_profiler_ranges)
+        gpu_form.addRow("Accelerator ranks", self.accelerator_ranks)
+        gpu_form.addRow("CPU binding", self.cpu_binding)
+        gpu_form.addRow("Log level", self.log_level)
+        self.use_gpu.toggled.connect(self.gpu_box.setVisible)
+
         advanced_fields_layout.addWidget(contingency_box)
         advanced_fields_layout.addWidget(powerflow_box)
         advanced_fields_layout.addWidget(monitoring_box)
+        advanced_fields_layout.addWidget(self.gpu_box)
 
         advanced_layout.addWidget(self.advanced_fields)
         self.advanced_fields.setVisible(False)
@@ -235,6 +313,37 @@ class ConfigurationTab(QWidget):
         self.monitor_areas.setToolTip("Optional space-separated area numbers to monitor.")
         self.monitor_kv_min.setToolTip("Optional minimum kV value for monitored facilities.")
         self.monitor_kv_max.setToolTip("Optional maximum kV value for monitored facilities.")
+        self.use_gpu.setToolTip(
+            "Give the run's container the GPUs and let the GridLens solver use them. "
+            "Clear it on a machine without NVIDIA GPUs, or for an image without GPU support."
+        )
+        self.gpu_enabled.setToolTip("on: use the GPU. auto: use the GPU if one is found, else the CPU.")
+        self.gpu_on_unavailable.setToolTip("fallback: run on the CPU when no GPU is found. error: stop the run.")
+        self.gpu_backend.setToolTip("GPU solver. auto: the fastest at startup. cpu_reference: for testing.")
+        self.gpu_batch_size.setToolTip("Contingency cases solved together: auto (chosen at startup) or 1-65536.")
+        self.gpu_warm_start.setToolTip("Start each case from the base-case solution or from the network file.")
+        self.gpu_shadow_fraction.setToolTip("Share of GPU cases, 0-1, re-solved on the CPU as a check.")
+        self.gpu_plugin_path.setToolTip("Directory holding the GPU solver plugin. Blank: GRIDPACK_BATCHPF_PLUGIN_PATH, else next to ca.x.")
+        self.gpu_device.setToolTip("GPU index, 0-1023.")
+        self.gpu_max_validated_batch.setToolTip("Batch size cap, 1-65536. Blank: 2048, the tested limit.")
+        self.gpu_backfill.setToolTip("Refill finished batch slots immediately.")
+        self.gpu_threads_per_block.setToolTip("CUDA threads per block: auto, or 32-1024 in steps of 32.")
+        self.gpu_memory_profile.setToolTip("GPU memory model. auto: detected.")
+        self.gpu_memory_headroom_gb.setToolTip("GPU memory kept free, in GB. Blank: 10% of unified memory, else 5%.")
+        self.gpu_max_memory_gb.setToolTip("GPU memory cap in GB. 0: no cap.")
+        self.gpu_formulation.setToolTip("Batch formulation; superset is the only one.")
+        self.gpu_planner_ordering.setToolTip("Factorization ordering.")
+        self.gpu_pivot_tolerance.setToolTip("Pivoting threshold, 0-1, for the factorization ordering.")
+        self.gpu_solve_placement.setToolTip("gpu: solve on the GPU. host: alg2 solves on the CPU, for testing.")
+        self.gpu_refinement_steps.setToolTip("Extra accuracy passes, 0-100, for cudss.")
+        self.gpu_residual_limit.setToolTip("Linear solve error limit, 0-1; a case over it goes to the CPU. 0: off.")
+        self.gpu_pivot_limit.setToolTip("Near-zero pivot limit, 0-1; a case under it goes to the CPU.")
+        self.gpu_check_non_finite.setToolTip("Send a case with NaN or infinite values to the CPU.")
+        self.gpu_telemetry.setToolTip("GPU log detail.")
+        self.gpu_profiler_ranges.setToolTip("Add NVTX markers for profilers.")
+        self.accelerator_ranks.setToolTip("MPI ranks that drive a GPU: auto (one rank per GPU) or a list such as 0,8.")
+        self.cpu_binding.setToolTip("How MPI ranks are bound to CPU cores. none: keep mpiexec's placement.")
+        self.log_level.setToolTip("Solver log level.")
 
     def set_project(self, project: Project, project_data: ProjectData) -> None:
         self.project = project
@@ -335,6 +444,35 @@ class ConfigurationTab(QWidget):
         self.phase_shift_sign.setText(values.phase_shift_sign)
         self.petsc_prefix.setText(values.petsc_prefix)
         self.petsc_options.setPlainText(values.petsc_options)
+        self.use_gpu.setChecked(values.use_gpu)
+        self.gpu_box.setVisible(values.use_gpu)
+        _set_combo(self.gpu_enabled, values.gpu_enabled)
+        _set_combo(self.gpu_on_unavailable, values.gpu_on_unavailable)
+        _set_combo(self.gpu_backend, values.gpu_backend)
+        self.gpu_batch_size.setText(values.gpu_batch_size)
+        _set_combo(self.gpu_warm_start, values.gpu_warm_start)
+        self.gpu_shadow_fraction.setText(values.gpu_shadow_fraction)
+        self.gpu_plugin_path.setText(values.gpu_plugin_path)
+        self.gpu_device.setText(values.gpu_device)
+        self.gpu_max_validated_batch.setText(values.gpu_max_validated_batch)
+        _set_bool_combo(self.gpu_backfill, values.gpu_backfill)
+        self.gpu_threads_per_block.setText(values.gpu_threads_per_block)
+        _set_combo(self.gpu_memory_profile, values.gpu_memory_profile)
+        self.gpu_memory_headroom_gb.setText(values.gpu_memory_headroom_gb)
+        self.gpu_max_memory_gb.setText(values.gpu_max_memory_gb)
+        _set_combo(self.gpu_formulation, values.gpu_formulation)
+        _set_combo(self.gpu_planner_ordering, values.gpu_planner_ordering)
+        self.gpu_pivot_tolerance.setText(values.gpu_pivot_tolerance)
+        _set_combo(self.gpu_solve_placement, values.gpu_solve_placement)
+        self.gpu_refinement_steps.setText(values.gpu_refinement_steps)
+        self.gpu_residual_limit.setText(values.gpu_residual_limit)
+        self.gpu_pivot_limit.setText(values.gpu_pivot_limit)
+        _set_bool_combo(self.gpu_check_non_finite, values.gpu_check_non_finite)
+        _set_combo(self.gpu_telemetry, values.gpu_telemetry)
+        _set_bool_combo(self.gpu_profiler_ranges, values.gpu_profiler_ranges)
+        self.accelerator_ranks.setText(values.accelerator_ranks)
+        _set_combo(self.cpu_binding, values.cpu_binding)
+        _set_combo(self.log_level, values.log_level)
 
     def _form_values(self) -> InputConfigurationValues:
         return InputConfigurationValues(
@@ -372,6 +510,34 @@ class ConfigurationTab(QWidget):
             phase_shift_sign=self.phase_shift_sign.text(),
             petsc_prefix=self.petsc_prefix.text(),
             petsc_options=self.petsc_options.toPlainText(),
+            use_gpu=self.use_gpu.isChecked(),
+            gpu_enabled=self.gpu_enabled.currentText(),
+            gpu_on_unavailable=self.gpu_on_unavailable.currentText(),
+            gpu_backend=self.gpu_backend.currentText(),
+            gpu_batch_size=self.gpu_batch_size.text(),
+            gpu_warm_start=self.gpu_warm_start.currentText(),
+            gpu_shadow_fraction=self.gpu_shadow_fraction.text(),
+            gpu_plugin_path=self.gpu_plugin_path.text(),
+            gpu_device=self.gpu_device.text(),
+            gpu_max_validated_batch=self.gpu_max_validated_batch.text(),
+            gpu_backfill=_combo_bool(self.gpu_backfill),
+            gpu_threads_per_block=self.gpu_threads_per_block.text(),
+            gpu_memory_profile=self.gpu_memory_profile.currentText(),
+            gpu_memory_headroom_gb=self.gpu_memory_headroom_gb.text(),
+            gpu_max_memory_gb=self.gpu_max_memory_gb.text(),
+            gpu_formulation=self.gpu_formulation.currentText(),
+            gpu_planner_ordering=self.gpu_planner_ordering.currentText(),
+            gpu_pivot_tolerance=self.gpu_pivot_tolerance.text(),
+            gpu_solve_placement=self.gpu_solve_placement.currentText(),
+            gpu_refinement_steps=self.gpu_refinement_steps.text(),
+            gpu_residual_limit=self.gpu_residual_limit.text(),
+            gpu_pivot_limit=self.gpu_pivot_limit.text(),
+            gpu_check_non_finite=_combo_bool(self.gpu_check_non_finite),
+            gpu_telemetry=self.gpu_telemetry.currentText(),
+            gpu_profiler_ranges=_combo_bool(self.gpu_profiler_ranges),
+            accelerator_ranks=self.accelerator_ranks.text(),
+            cpu_binding=self.cpu_binding.currentText(),
+            log_level=self.log_level.currentText(),
         )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -152,6 +152,79 @@ ATTACHED = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
+def test_render_input_configuration_uses_the_gpu_by_default() -> None:
+    root = ET.fromstring(render_input_configuration_xml(default_input_configuration_values("case.raw")))
+    gpu = root.find("Contingency_analysis/GPUBatch")
+
+    assert gpu.findtext("enabled") == "on"
+    assert gpu.findtext("onUnavailable") == "fallback"
+    assert gpu.findtext("batchSize") == "auto"
+    assert gpu.findtext("health/residualLimit") == "1e-6"
+    assert gpu.find("pluginPath") is None and gpu.find("maxValidatedBatch") is None and gpu.find("memoryHeadroomGB") is None
+    assert root.findtext("Contingency_analysis/Execution/acceleratorRanks") == "auto"
+    assert root.findtext("Contingency_analysis/Execution/logLevel") == "info"
+
+
+def test_render_input_configuration_without_the_gpu_turns_it_off() -> None:
+    """Without the GPU the XML says so, and holds none of the GPU settings, which may then be anything."""
+    values = replace(default_input_configuration_values("case.raw"), use_gpu=False, gpu_batch_size="many")
+    contingency = ET.fromstring(render_input_configuration_xml(values)).find("Contingency_analysis")
+
+    assert [child.tag for child in contingency.find("GPUBatch")] == ["enabled"]
+    assert contingency.findtext("GPUBatch/enabled") == "off"
+    assert contingency.find("Execution") is None
+
+
+def test_load_input_configuration_reads_gpu_settings(tmp_path: Path) -> None:
+    values = replace(
+        default_input_configuration_values("case.raw"),
+        gpu_backend="alg2",
+        gpu_batch_size="512",
+        gpu_on_unavailable="error",
+        gpu_plugin_path="/opt/plugins",
+        gpu_memory_headroom_gb="12",
+        gpu_check_non_finite=False,
+        accelerator_ranks="0, 8",
+        log_level="debug",
+    )
+    xml = tmp_path / "input.xml"
+    xml.write_text(render_input_configuration_xml(values), encoding="utf-8")
+
+    loaded = load_input_configuration_values(xml, "case.raw")
+
+    gpu_settings = [item.name for item in fields(values) if item.name.startswith("gpu_")]
+    assert [getattr(loaded, name) for name in gpu_settings] == [getattr(values, name) for name in gpu_settings]
+    assert (loaded.use_gpu, loaded.accelerator_ranks, loaded.log_level) == (True, "0,8", "debug")
+    xml.write_text(render_input_configuration_xml(replace(values, use_gpu=False)), encoding="utf-8")
+    assert load_input_configuration_values(xml, "case.raw").use_gpu is False
+
+
+def test_load_input_configuration_without_gpu_settings_uses_the_gpu(tmp_path: Path) -> None:
+    """The solver looks for a GPU when the XML does not say otherwise, so the form shows the GPU on."""
+    xml = tmp_path / "input.xml"
+    xml.write_text("<Configuration><Powerflow><networkConfiguration>case.raw</networkConfiguration></Powerflow></Configuration>", encoding="utf-8")
+
+    assert load_input_configuration_values(xml).use_gpu is True
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "message"),
+    [
+        ("gpu_batch_size", "0", "GPU batch size"),
+        ("gpu_threads_per_block", "100", "multiple of 32"),
+        ("gpu_shadow_fraction", "1.5", "from 0 to 1"),
+        ("gpu_device", "1024", "at most 1023"),
+        ("gpu_backend", "opencl", "GPU backend"),
+        ("accelerator_ranks", "0;8", "Accelerator ranks"),
+    ],
+)
+def test_input_configuration_rejects_invalid_gpu_settings(setting: str, value: str, message: str) -> None:
+    values = replace(default_input_configuration_values("case.raw"), **{setting: value})
+
+    with pytest.raises(ValidationError, match=message):
+        render_input_configuration_xml(values)
+
+
 def test_merge_updates_managed_settings_and_keeps_everything_else() -> None:
     """Saving into an attached XML changes the form's settings and keeps elements, attributes, and comments it has no field for."""
     values = replace(default_input_configuration_values("case.raw"), max_voltage="1.05", contingency_list="")
@@ -181,6 +254,9 @@ def test_merge_into_a_generated_xml_writes_what_render_writes() -> None:
 
     assert merge_input_configuration_xml(render_input_configuration_xml(before), after) == render_input_configuration_xml(after)
     assert merge_input_configuration_xml(render_input_configuration_xml(after), before) == render_input_configuration_xml(before)
+    cpu = replace(before, use_gpu=False)
+    assert merge_input_configuration_xml(render_input_configuration_xml(before), cpu) == render_input_configuration_xml(cpu)
+    assert merge_input_configuration_xml(render_input_configuration_xml(cpu), before) == render_input_configuration_xml(before)
 
 
 def test_merge_refuses_an_xml_that_is_not_a_configuration() -> None:
