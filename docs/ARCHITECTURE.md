@@ -428,6 +428,8 @@ on the user's machine.
     `docker stop --time 10`, and `docker kill` if that fails or times out.
   - `docker_probe.py`: `docker --version`, `docker version`, and `docker image inspect` checks.
   - `run_progress.py`: `GridpackProgressParser` turns `ca.x` output into a progress fraction and message.
+    On the GPU solver's batch path it follows the `[gpu-batch pN]` lines instead: the GPU cases solved, chunk
+    by chunk, then an indeterminate bar while the solver reports results, which prints nothing per case.
     It tolerates differing GridPACK builds and MPI ranks printing out of order.
 - **Technologies:** `subprocess`, the Docker CLI.
 - **Deployment:** In-process; called from the Run tab's `RunWorker` and from agent job workers.
