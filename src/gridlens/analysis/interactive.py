@@ -76,7 +76,8 @@ def build_interactive_analysis_result(
         group_branch_rows=group_branch_rows,
         control_area_rows=control_area_rows,
         voltage_group_rows=voltage_group_rows,
-        line_rows=list(max_line_rows),
+        # An unrated facility's 0% is unknown, not low, so the charts leave it out as the group means do.
+        line_rows=[row for row in max_line_rows if row.get("utilization_known", True)],
     )
 
 

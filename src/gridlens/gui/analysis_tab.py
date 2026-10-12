@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 import threading
@@ -38,6 +39,7 @@ from gridlens.analysis.csv_flat import (
     CSV_FLAT_ALLOW_CPU_DASK_ENV,
     CSV_FLAT_RESULTS_TABLE,
     cpu_dask_fallback_warning,
+    not_converged_count,
 )
 from gridlens.analysis.dataset import RunAnalysisDataset
 from gridlens.analysis.interactive import (
@@ -56,9 +58,13 @@ from gridlens.gui.theme import set_button_role, set_context_label, set_muted_lab
 
 
 CONTROL_AREA_FULL_WIDTH_ROWS = 36
+# The control-area chart grows with its rows, between these heights; past the maximum its rows get thinner.
 CONTROL_AREA_MIN_HEIGHT = 360
-CONTROL_AREA_TOP_BOTTOM_PADDING = 150
+CONTROL_AREA_MAX_HEIGHT = 1400
+CONTROL_AREA_TOP_BOTTOM_PADDING = 130
 CONTROL_AREA_ROW_PIXELS = 26
+# Rows thinner than this show only every few area names; hovering a bar still names its area.
+CONTROL_AREA_MIN_LABELED_ROW_PIXELS = 9
 CONTROL_AREA_LABEL_LIMIT = 46
 MTA_BLUE = "#0039a6"
 MTA_GREEN = "#00933c"
@@ -118,6 +124,7 @@ class AnalysisTab(QWidget):
         self.transformer_analysis = transformer_analysis
         self.project: Project | None = None
         self.current_dataset: RunAnalysisDataset | None = None
+        self._not_converged_cache: tuple[Path | None, int | None] = (None, None)
         self.group_branch_rows: list[dict[str, object]] = []
         self.max_line_rows: list[dict[str, object]] = []
         self.control_area_rows: list[dict[str, object]] = []
@@ -440,7 +447,8 @@ class AnalysisTab(QWidget):
         controls.addStretch()
         layout.addLayout(controls)
 
-        figure = Figure(figsize=(7.0, 3.2), facecolor="#ffffff")
+        # Constrained layout fits the margins to the labels, so none are cut off at any chart size.
+        figure = Figure(figsize=(7.0, 3.2), facecolor="#ffffff", layout="constrained")
         canvas = FigureCanvas(figure)
         canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         toolbar = NavigationToolbar(canvas, panel)
@@ -536,14 +544,39 @@ class AnalysisTab(QWidget):
     def _update_generated_status(self) -> None:
         runtime_status = _csv_flat_runtime_status(self.current_dataset)
         runtime_suffix = f" {runtime_status}" if runtime_status else ""
+        unrated = sum(1 for row in self.max_line_rows if not row.get("utilization_known", True))
+        unrated_note = (
+            f" {unrated:,} {self._entity_plural()} with no positive rating are left out: "
+            "GridPACK reports their loading as 0%, which means unknown."
+            if unrated else ""
+        )
+        failed = self._not_converged_count()
+        if failed:
+            unrated_note += (
+                f" {failed:,} contingencies that did not converge are left out; "
+                "utilization covers the base case and converged contingencies."
+            )
         self.status_label.setText(
             "Generated "
             f"{len(self.control_area_rows)} control-area groups, "
             f"{len(self.voltage_group_rows)} {self._category_plural()}, and "
             f"{len(self.line_rows)} {self._entity_plural()} "
             f"({self._utilization_scope_label()})."
-            f"{runtime_suffix}"
+            f"{unrated_note}{runtime_suffix}"
         )
+
+    def _not_converged_count(self) -> int | None:
+        """Count the shown run's contingencies that did not converge, reading its convergence file once."""
+        run_dir = self.current_dataset.run_dir if self.current_dataset else None
+        if run_dir is None:
+            return None
+        if self._not_converged_cache[0] != run_dir:
+            try:
+                count = not_converged_count(run_dir)
+            except (OSError, ValueError):
+                count = None
+            self._not_converged_cache = (run_dir, count)
+        return self._not_converged_cache[1]
 
     def _refresh_filtered_rows(self) -> None:
         self.control_area_rows = summarize_control_area_utilization(self.group_branch_rows)
@@ -556,7 +589,8 @@ class AnalysisTab(QWidget):
         self.selected_voltage_groups.intersection_update(visible_voltage_groups)
         self.line_rows = [
             row for row in self.max_line_rows
-            if self._row_matches_selected_areas(row) and self._row_matches_selected_voltage_groups(row)
+            if row.get("utilization_known", True)
+            and self._row_matches_selected_areas(row) and self._row_matches_selected_voltage_groups(row)
         ]
 
     def _row_matches_selected_areas(self, row: dict[str, object]) -> bool:
@@ -628,11 +662,13 @@ class AnalysisTab(QWidget):
 
         row_count = len(rows)
         canvas_height = self._control_area_canvas_height(row_count)
-        tick_font_size = self._control_area_tick_font_size(row_count)
-        value_font_size = max(7, tick_font_size - 1)
+        row_pixels = (canvas_height - CONTROL_AREA_TOP_BOTTOM_PADDING) / row_count
+        tick_font_size = self._control_area_tick_font_size(row_pixels)
+        value_font_size = max(6, tick_font_size - 1)
+        label_step = max(1, math.ceil(CONTROL_AREA_MIN_LABELED_ROW_PIXELS / row_pixels))
         labels = [
-            self._control_area_axis_label(row.get("control_area", "unknown"), row_count)
-            for row in rows
+            self._control_area_axis_label(row.get("control_area", "unknown"), row_count) if index % label_step == 0 else ""
+            for index, row in enumerate(rows)
         ]
         values = [numeric_value(row.get("average_utilization_pct")) for row in rows]
         y_positions = list(range(row_count))
@@ -654,8 +690,10 @@ class AnalysisTab(QWidget):
         self._style_axis(axis)
         axis.tick_params(axis="y", labelsize=tick_font_size, pad=3)
         axis.legend(loc="lower right", fontsize=8)
-        for bar, row, value in zip(bars, rows, values):
+        for index, (bar, row, value) in enumerate(zip(bars, rows, values)):
             self._style_selected_bar(bar, str(row.get("control_area") or "") in self.selected_control_areas)
+            if index % label_step:
+                continue
             axis.text(
                 value + max(max_value * 0.015, 0.5),
                 bar.get_y() + bar.get_height() / 2,
@@ -664,8 +702,8 @@ class AnalysisTab(QWidget):
                 fontsize=value_font_size,
                 clip_on=False,
             )
-        canvas.setMinimumHeight(canvas_height)
-        self.control_area_panel.setMinimumHeight(canvas_height + 96)
+        # A fixed height makes the panel's layout reserve the whole chart, so the scroll area shows all of it.
+        canvas.setFixedHeight(canvas_height)
         self.control_area_panel.updateGeometry()
         self.chart_container.adjustSize()
         self.control_area_click_items = list(zip(bars, rows))
@@ -791,14 +829,12 @@ class AnalysisTab(QWidget):
         axis.tick_params(axis="both", labelsize=8)
 
     def _control_area_canvas_height(self, row_count: int) -> int:
-        return max(CONTROL_AREA_MIN_HEIGHT, CONTROL_AREA_TOP_BOTTOM_PADDING + row_count * CONTROL_AREA_ROW_PIXELS)
+        height = CONTROL_AREA_TOP_BOTTOM_PADDING + row_count * CONTROL_AREA_ROW_PIXELS
+        return min(CONTROL_AREA_MAX_HEIGHT, max(CONTROL_AREA_MIN_HEIGHT, height))
 
-    def _control_area_tick_font_size(self, row_count: int) -> int:
-        if row_count >= 120:
-            return 7
-        if row_count >= 80:
-            return 8
-        return 9
+    def _control_area_tick_font_size(self, row_pixels: float) -> int:
+        """Return a label size, in points, that fits rows row_pixels tall: 9 for roomy rows, down to 6."""
+        return max(6, min(9, int(row_pixels * 0.55)))
 
     def _control_area_axis_label(self, label: object, row_count: int) -> str:
         clean = " ".join(str(label or "unknown").split())

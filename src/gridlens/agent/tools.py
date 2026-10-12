@@ -113,6 +113,13 @@ def _order(record: dict) -> tuple:
     return tuple((0, value, "") if isinstance(value, int) else (1, 0, str(value)) for name, value in record["identity"].items() if name not in ("object", "contingency"))
 
 
+# What a cases result covers. GridPACK writes flows only for converged contingencies, and _cases leaves out
+# any failed one unless a qualifier names converged or status_code.
+CASES_CAVEAT = (
+    "Cases are the drill-down index's rows for the base case and converged contingencies; failed or "
+    "non-converged contingencies are left out. Voltages and angles are recorded only at the ends of monitored branches."
+)
+
 class AnalysisTools(ToolBase):
     """The analysis tools, bound to one session. The shared call machinery is in `ToolBase`."""
 
@@ -246,7 +253,7 @@ class AnalysisTools(ToolBase):
             if max(_number(row.get("from_base_kv")) or 0, _number(row.get("to_base_kv")) or 0) < min_kv:
                 excluded_min_kv += 1
                 continue
-            details, branch = summary[branch_key(row)], metadata[branch_key(row)]
+            details = summary[branch_key(row)]
             if area and area.casefold() not in {str(value).casefold() for value in [*row["control_areas"], details.get("from_area"), details.get("to_area")]}:
                 excluded_area += 1
                 continue
@@ -258,9 +265,8 @@ class AnalysisTools(ToolBase):
             legacy_rating |= not source.startswith("csv_flat")
             # csv_flat caches record the lowest loading; legacy caches record the lowest MW flow instead.
             row["min_utilization_pct"] = _number(details.get("min_value")) if source.startswith("csv_flat") else None
-            rating = _number(branch.get("rate_mva")) if source.startswith("csv_flat") else _number(branch.get("ratec"))
-            if rating is not None and rating <= 0:
-                rating = None
+            # max_line_utilization_rows gives the facility's positive rating, or None, as the analysis tabs use it.
+            rating = row["rating_mva"]
             if row["base_utilization_pct"] is None and not source.startswith("csv_flat") and rating:
                 base_flow = _number(details.get("base_value"))
                 if base_flow is not None:
@@ -268,16 +274,14 @@ class AnalysisTools(ToolBase):
             row.update(
                 max_contingency_label=details.get("max_contingency_label", ""),
                 thermal_margin_pct_points=round(100 - row["max_utilization_pct"], 6),
-                rating_mva=rating, rating_basis="GridPACK reported loading_percent / rate_mva" if source.startswith("csv_flat") else "RAW rate C; legacy MW flow / MVA rating approximation",
+                rating_basis="GridPACK reported loading_percent / rate_mva" if source.startswith("csv_flat") else "RAW rate C; legacy MW flow / MVA rating approximation",
                 utilization_source=source,
-                # Without a positive rating GridPACK reports 0% loading, which means unknown, not unloaded.
-                utilization_known=rating is not None,
             )
             filtered.append(row)
         unrated = sum(1 for row in filtered if not row["utilization_known"])
         if unrated:
             self.warnings.append(f"{unrated} of {len(filtered)} facilities have no positive rating, so their reported utilization, often 0%, is unknown rather than low: it shows neither that they are unloaded nor an MVA margin. Rows with utilization_known false are these facilities.")
-        convergence = self._convergence(run)
+        convergence = self._convergence(run, excluded=not legacy_rating)
         convergence.pop("rows")
         if excluded_facility:
             self.warnings.append(f"{excluded_facility} of {monitored} monitored facilities were excluded by {parameter}='{chosen}'; use {parameter}='{everything}' to include supported types above the voltage cutoff.")
@@ -293,6 +297,8 @@ class AnalysisTools(ToolBase):
         elif legacy_rating and configured_rating.upper() != "C":
             self.warnings.append(f"The run configured contingencyRating={configured_rating}, but the legacy pflow_mm approximation divides by RAW rate C; those utilizations are not on the configured rating basis.")
         self.warnings.extend([
+            "Maximum observed loading is over the base case and the converged contingencies; it includes the base case, so it is not an N-1-only metric."
+            if not legacy_rating else
             "Maximum observed loading includes all rows in the cache, including the base case; it is not a converged N-1-only metric.",
             "Thermal margin is 100 minus maximum utilization, in percentage points. It is not available transfer, generation, or load-serving capacity.",
             "contingency_count counts recorded loading rows (including base); overload_count counts those at or above 100% loading.",
@@ -330,15 +336,21 @@ class AnalysisTools(ToolBase):
             raise AgentError("INVALID_ARTIFACT", "No valid convergence records were found.")
         return rows
 
-    def _convergence(self, run: Path) -> dict:
-        """Count a run's recorded cases and return the failed ones, for the caveats every loading result carries."""
+    def _convergence(self, run: Path, *, excluded: bool = False) -> dict:
+        """Count a run's recorded cases and return the failed ones, for the caveats every loading result carries.
+
+        excluded says the loading summaries come from csv_flat, which holds no rows for a failed case:
+        GridPACK writes flows only for converged ones, and the parser drops any others.
+        """
         rows = self._convergence_rows(run)
         if rows is None:
             self.warnings.append("Convergence information is unavailable; no claim of converged-only results can be made.")
             return {"known": False, "total": None, "converged": None, "failed": None, "rows": []}
         failed = [row for row in rows if str(row.get("converged", "")).lower() not in ("true", "1") or str(row.get("status_code") or "OK").upper() != "OK"]
-        if failed:
-            self.warnings.append(f"{len(failed)} of {len(rows)} recorded cases failed or were not converged; cached loading summaries do not exclude their rows.")
+        if failed and excluded:
+            self.warnings.append(f"{len(failed)} of {len(rows)} recorded cases failed or did not converge and are left out of every loading value: their flows are not a valid post-contingency state. Loading covers the base case and the {len(rows) - len(failed)} converged contingencies.")
+        elif failed:
+            self.warnings.append(f"{len(failed)} of {len(rows)} recorded cases failed or were not converged; this run's legacy loading summaries may include their rows.")
         return {"known": True, "total": len(rows), "converged": len(rows) - len(failed), "failed": len(failed), "rows": failed}
 
     def _facilities(self, run: Path, kind: str) -> tuple[list[dict], dict, list[str]]:
@@ -475,8 +487,14 @@ class AnalysisTools(ToolBase):
             keys = {case_key(*key) for key, attributes in facilities.items() if qualifies({"fields": facility_fields(key, attributes)}, facility_conditions)}
         if contingency_conditions:
             events = {event for event, record in {0: BASE_CASE, **contingencies}.items() if qualifies(record, contingency_conditions)}
+        # A failed contingency's flows are not a valid solution, so its cases are left out unless asked for.
+        failed = {event for event, record in contingencies.items() if record["fields"]["converged"] == "false"}
+        left_out = bool(failed) and not ({column for column, _, _ in conditions} | used) & {"converged", "status_code"}
+        if left_out:
+            events = ({0, *contingencies} if events is None else events) - failed
         return {
             "facilities": facilities, "contingencies": contingencies, "keys": keys, "events": events,
+            "contingency_qualified": bool(contingency_conditions), "failed_left_out": left_out,
             "index_conditions": [condition for condition in conditions if condition[0] in CASE_INDEX_COLUMNS],
         }
 
@@ -505,7 +523,10 @@ class AnalysisTools(ToolBase):
             run, scan_cases, metric=metric, descending=descending, limit=magnitude, events=scope["events"], keys=scope["keys"],
             conditions=scope["index_conditions"], extra=tuple(name for name in extra if name in CASE_INDEX_COLUMNS),
         )
-        if scope["keys"] and scope["events"] is None and not scope["index_conditions"] and not total:
+        if scope["keys"] and not scope["contingency_qualified"] and not scope["index_conditions"] and not total and not (
+            # The facilities may have cases only in the failed contingencies left out.
+            scope["failed_left_out"] and self._index(run, scan_cases, metric=metric, descending=descending, limit=1, events=None, keys=scope["keys"], conditions=[])[1]
+        ):
             raise AgentError("KEY_NOT_INDEXED", "These facilities are in the analysis cache but not in the drill-down index; rebuild both with run_analysis(include_index=True, rebuild=True).")
         output, failed = [], []
         for position, row in enumerate(rows, 1):
@@ -517,7 +538,7 @@ class AnalysisTools(ToolBase):
         if failed:
             events = ", ".join(str(event) for event in list(dict.fromkeys(failed))[:10])
             self.warnings.append(f"{len(failed)} of these cases are in contingencies that failed or did not converge (event_idx {events}); their flows are not a valid post-contingency state.")
-        self.warnings.append("Cases are every recorded row of the drill-down index, including the base case and non-converged contingencies. Voltages and angles are recorded only at the ends of monitored branches.")
+        self.warnings.append(CASES_CAVEAT)
         return output, total, {"recorded_cases": self._json(run, "reports/event_index/manifest.json").get("rows")}
 
     def _group_cases(self, run: Path, group: str, metric: str, statistic: str, conditions: list) -> tuple[list[tuple], dict]:
@@ -533,7 +554,7 @@ class AnalysisTools(ToolBase):
             by = "facility"
             labels = {case_key(*key): [facility_label(key, attributes)] if group == "facility" else group_labels(facility_fields(key, attributes), group) for key, attributes in scope["facilities"].items()}
         accumulators, used, _ = self._index(run, group_cases, metric=metric, statistic=statistic, by=by, labels=labels, events=scope["events"], keys=scope["keys"], conditions=scope["index_conditions"])
-        self.warnings.append("Cases are every recorded row of the drill-down index, including the base case and non-converged contingencies. Voltages and angles are recorded only at the ends of monitored branches.")
+        self.warnings.append(CASES_CAVEAT)
         if metric in SIGNED_FLOWS and group != "facility" and statistic != "count":
             starts = Counter(attributes["end_areas"][0] for key, attributes in scope["facilities"].items() if scope["keys"] is None or case_key(*key) in scope["keys"])
             split = ", ".join(f"{count:,} in {area}" for area, count in starts.most_common())

@@ -112,8 +112,11 @@ Analysis with rank and rank_groups
 - Take every count, mean, total, median, or spread from rank_groups, total_matching, or read_file
   group_by. Never compute one from returned rows: they are the top of a ranking, not a sample.
 - Most congested means highest maximum observed utilization. State, in plain words, the metric, units,
-  rating basis, scope, and convergence coverage. Maximum loading includes the base case and non-converged
-  cases. Use object='both' before claiming anything about the whole system. overload_count, the cases at or
+  rating basis, scope, and convergence coverage. Every facility loading value, and every case, covers the
+  base case and converged contingencies only: failed or non-converged contingencies are already left out,
+  so no qualifier is needed to exclude them, and facilities have no converged field. A facility with no
+  positive rating has unknown loading and is left out of loading statistics. Use object='both' before
+  claiming anything about the whole system. overload_count, the cases at or
   above 100%, separates facilities that overload in many contingencies from ones that overload once. The case
   field viol is GridPACK's own flag, which mostly marks the outaged branch itself; never count it as an
   overload.

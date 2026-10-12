@@ -110,11 +110,24 @@ Voltage grouping for non-transformer branches uses the larger endpoint base kV: 
 buckets: step-up if the to-bus kV is higher than the from-bus kV, step-down if it is lower, same-voltage if
 the endpoints differ by no more than 0.5 kV, and unknown if endpoint voltage is missing.
 
+Two kinds of data are left out of every chart, and of the agent's loading values, so both report the same
+numbers:
+
+- **Contingencies that did not converge.** GridPACK's csv_flat output holds flows only for the base case and
+  converged contingencies; it writes no rows for a case its convergence file marks `converged=false`, such as
+  `SLACK_OVERLOAD`, `ISLANDED`, or `DIVERGED`, on the CPU and GPU solver paths alike. The parser also drops any
+  such rows, so `max_utilization_pct` is the highest loading over the base case and the converged
+  contingencies. The contingency summary still lists every contingency with its status.
+- **Facilities with no positive rating.** GridPACK reports their loading as 0%, which means unknown, not
+  unloaded. They are counted in the status line but kept out of the means and the utilization curve.
+
 ## What each chart shows
 
 - **Mean Max Utilization by Control Area**: each bar is the arithmetic mean of `max_utilization_pct` for
   accepted facilities in that control area. The chart also tracks facility count and the min-to-max range used
-  in hover text. The dashed 30% line is a visual reference, not a filtering rule.
+  in hover text. The dashed 30% line is a visual reference, not a filtering rule. The chart grows by one row
+  per area, between 360 and 1,400 pixels tall; past that, rows get thinner and only every few area names are
+  labeled, while hovering a bar still names its area.
 - **Mean Max Utilization by Voltage Group or Step Direction**: each bar is the arithmetic mean of
   `max_utilization_pct` for the currently visible area selection, grouped by voltage bucket or transformer
   step direction.

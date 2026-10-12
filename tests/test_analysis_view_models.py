@@ -399,3 +399,24 @@ def _perf(from_bus: int, to_bus: int, line_id: str, max_value: float, max_contin
         "max_value": max_value,
         "max_contingency": max_contingency,
     }
+
+
+def test_area_means_leave_out_facilities_with_no_positive_rating() -> None:
+    """GridPACK reports an unrated facility's loading as 0%, which is unknown, so the means skip it as the agent does."""
+    def csv_flat_branch(from_bus: int, rate_mva: float) -> dict:
+        return {**_branch(from_bus, from_bus + 1, "1", 138.0, 138.0, 100.0, "North", "100-229 kV", 1, "North", 1, "North"), "rate_mva": rate_mva}
+
+    def csv_flat_summary(from_bus: int, utilization: float) -> dict:
+        return {"from_bus": from_bus, "to_bus": from_bus + 1, "line_id": "1", "max_utilization_pct": utilization, "utilization_source": "csv_flat.loading_percent"}
+
+    tables = {
+        "branch_metadata": ParsedTable("branch_metadata", "case.raw", [], [csv_flat_branch(101, 100.0), csv_flat_branch(201, 0.0)]),
+        "pflow_mm": ParsedTable("pflow_mm", "cache", [], [csv_flat_summary(101, 60.0), csv_flat_summary(201, 0.0)]),
+    }
+
+    rows = max_line_utilization_rows(tables)
+
+    assert {row["from_bus"]: (row["utilization_known"], row["rating_mva"]) for row in rows} == {101: (True, 100.0), 201: (False, None)}
+    area = summarize_control_area_utilization(rows)
+    assert [(row["control_area"], row["line_count"], row["average_utilization_pct"]) for row in area] == [("North", 1, 60.0)]
+    assert [row["line_count"] for row in summarize_voltage_group_utilization(rows)] == [1]

@@ -33,10 +33,10 @@ MIN_BRANCH_ANALYSIS_VOLTAGE_KV = 50.0
 
 
 def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
-    """Summarize mean maximum branch utilization by actual endpoint control area."""
+    """Summarize mean maximum branch utilization by actual endpoint control area, over rated branches."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
-        if _line_voltage_kv(row) < MIN_BRANCH_ANALYSIS_VOLTAGE_KV:
+        if _line_voltage_kv(row) < MIN_BRANCH_ANALYSIS_VOLTAGE_KV or not row.get("utilization_known", True):
             continue
         for area in _row_control_areas(row):
             buckets.setdefault(area, []).append(float(row["utilization_pct"]))
@@ -47,9 +47,11 @@ def summarize_control_area_utilization(rows: Iterable[Mapping[str, object]]) -> 
 
 
 def summarize_voltage_group_utilization(rows: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
-    """Summarize mean maximum branch utilization by voltage group."""
+    """Summarize mean maximum branch utilization by voltage group, over rated branches."""
     buckets: dict[str, list[float]] = {}
     for row in rows:
+        if not row.get("utilization_known", True):
+            continue
         group = _row_voltage_group(row)
         buckets.setdefault(group, []).append(float(row["utilization_pct"]))
 
@@ -62,7 +64,11 @@ def max_line_utilization_rows(
     tables: Mapping[str, ParsedTable],
     branch_options: UtilizationBranchOptions | None = None,
 ) -> list[dict[str, object]]:
-    """Maximum observed utilization rows for branch lines, sorted from lowest to highest."""
+    """Maximum observed utilization rows for branch lines, sorted from lowest to highest.
+
+    A row whose facility has no positive rating has utilization_known False: GridPACK reports its
+    loading as 0%, which means unknown, not unloaded, so the charts and their means leave it out.
+    """
     duplicate_area_names = _duplicate_area_names(tables.get("area_metadata"))
     branches = _table_index(tables.get("branch_metadata"))
     rows: list[dict[str, object]] = []
@@ -78,7 +84,9 @@ def max_line_utilization_rows(
         utilization = _pflow_mm_max_utilization_pct(context)
         if utilization is None:
             continue
-        rows.append(_line_utilization_row(context, utilization, duplicate_area_names, "pflow_mm"))
+        # The rating comes from the case's branch data alone; the summary row says only how loading was computed.
+        rating = facility_rating_mva({**branch, "utilization_source": row.get("utilization_source")})
+        rows.append(_line_utilization_row(context, utilization, duplicate_area_names, "pflow_mm", rating))
 
     rows.sort(key=lambda item: numeric_value(item.get("max_utilization_pct")))
     return rows
@@ -132,11 +140,24 @@ def bus_area_labels(rows: Iterable[Mapping[str, object]]) -> dict[int, str]:
     return labels
 
 
+def facility_rating_mva(row: Mapping[str, object]) -> float | None:
+    """Return the positive MVA rating a facility's utilization is relative to, or None when it has none.
+
+    row is the facility's branch_metadata row with its pflow_mm row's utilization_source. A csv_flat run's
+    loading is GridPACK's, against the rating it reports as rate_mva; a legacy run's is computed here
+    against RAW rate C.
+    """
+    if str(row.get("utilization_source") or "").startswith("csv_flat"):
+        return _positive_float(row.get("rate_mva"))
+    return _line_rating(row)
+
+
 def _line_utilization_row(
     context: Mapping[str, object],
     utilization: float,
     duplicate_area_names: set[str],
     utilization_source: str,
+    rating: float | None,
 ) -> dict[str, object]:
     voltage_group = _utilization_voltage_group(context)
     return {
@@ -157,6 +178,8 @@ def _line_utilization_row(
         "utilization_pct": round(utilization, 6),
         "utilization_source": utilization_source,
         "raw_branch_type": context.get("raw_branch_type", ""),
+        "rating_mva": rating,
+        "utilization_known": rating is not None,
     }
 
 
@@ -387,6 +410,7 @@ def numeric_value(value: object, default: float = 0.0) -> float:
 __all__ = [
     "branch_key",
     "facility_attributes",
+    "facility_rating_mva",
     "UtilizationBranchOptions",
     "max_line_utilization_rows",
     "numeric_value",

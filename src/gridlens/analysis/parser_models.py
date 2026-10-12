@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-PARSER_VERSION = "2026.07.05"
+# 2026.10.12: branch loading summaries leave out contingencies GridPACK did not converge.
+PARSER_VERSION = "2026.10.12"
 
 
 @dataclass(slots=True)

@@ -106,3 +106,18 @@ def test_an_automatic_build_that_fails_says_so_in_the_status_line(agent_project,
     assert [name for name, _ in shown] == ["critical"]
     tab.deleteLater()
     app.processEvents()
+
+
+def test_control_area_chart_grows_with_its_areas_between_a_minimum_and_a_maximum_height():
+    """A long area list makes the chart taller, up to a cap, and the whole chart stays inside its panel."""
+    QApplication.instance() or QApplication([])
+    tab = AnalysisTab()
+    row = {"control_area": "North", "average_utilization_pct": 40.0, "line_count": 3}
+    heights = []
+    for count in (2, 30, 200):
+        tab.control_area_rows = [dict(row, control_area=f"Area {index}") for index in range(count)]
+        tab._render_control_area_chart()
+        heights.append(tab.control_area_canvas.height())
+        assert tab.control_area_panel.minimumSizeHint().height() > tab.control_area_canvas.height()
+
+    assert heights == [analysis_tab.CONTROL_AREA_MIN_HEIGHT, 130 + 30 * 26, analysis_tab.CONTROL_AREA_MAX_HEIGHT]

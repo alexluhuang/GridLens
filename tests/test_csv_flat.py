@@ -36,7 +36,9 @@ def test_csv_flat_outputs_parse_into_existing_analysis_tables(tmp_path) -> None:
     pflow_mm = tables["pflow_mm"]
     first_branch = next(row for row in pflow_mm.rows if row["from_bus"] == 101)
     assert first_branch["base_utilization_pct"] == 10.0
-    assert first_branch["mean_utilization_pct"] == 65.0
+    # Contingency 2 diverged, so its 60% row is left out: the mean is of the base case and contingency 1.
+    assert first_branch["mean_utilization_pct"] == 67.5
+    assert first_branch["contingency_count"] == 2
     assert first_branch["max_utilization_pct"] == 125.0
     assert first_branch["max_utilization_contingency"] == 1
     assert first_branch["max_contingency_label"] == "BR_101_102_1"
@@ -131,6 +133,7 @@ def test_csv_flat_accelerated_backend_uses_absolute_max_loading(tmp_path, monkey
         ),
         encoding="utf-8",
     )
+    _all_converged(run_dir, 2)
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", "dask")
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "off")
     monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
@@ -169,6 +172,7 @@ def test_csv_flat_thermal_overload_counts_leave_out_violation_flags(tmp_path, mo
         ),
         encoding="utf-8",
     )
+    _all_converged(run_dir, 4)
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", backend)
     monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "off")
     monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
@@ -401,6 +405,54 @@ def test_cpu_dask_fallback_warning_describes_missing_gpu_backends(tmp_path, monk
     assert "RAPIDS cuDF and dask-cuDF are not available" in warning
     assert "CPU Dask" in warning
     assert "training_tiny_flat1.csv" in warning
+
+
+@pytest.mark.parametrize("backend", ["python", "dask"])
+def test_csv_flat_branch_summaries_leave_out_contingencies_that_did_not_converge(tmp_path, monkeypatch, backend) -> None:
+    """A failed contingency's flows are not a valid solution, so branch loading leaves them out; the contingency summary keeps it."""
+    run_dir = _csv_flat_run(tmp_path)
+    (run_dir / "work" / "training_tiny_flat1.csv").write_text(
+        "\n".join(
+            [
+                "event_idx,contingency,from_bus,to_bus,circuit_id,rate_mva,loading_percent,viol",
+                "0,base_case,101,102,1,100,10,0",
+                "1,BR_101_102_1,101,102,1,100,50,0",
+                "2,BR_201_202_1,101,102,1,100,400,0",
+                "3,BR_301_302_1,101,102,1,100,300,0",
+                "4,GN_101_1,101,102,1,100,200,0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_BACKEND", backend)
+    monkeypatch.setenv("GRIDLENS_CSV_FLAT_CLUSTER", "off")
+    monkeypatch.setenv(csv_flat.CSV_FLAT_ALLOW_CPU_DASK_ENV, "1")
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"cudf", "dask_cudf"}:
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    tables = parse_all_output_tables(run_dir)
+
+    # Contingencies 2 to 4 are DIVERGED, ISLANDED, and SLACK_OVERLOAD in the fixture's convergence file.
+    branch = next(row for row in tables["pflow_mm"].rows if row["from_bus"] == 101)
+    assert (branch["max_utilization_pct"], branch["mean_utilization_pct"], branch["contingency_count"]) == (50.0, 30.0, 2)
+    assert any("3 contingencies GridPACK did not converge" in note for note in tables["pflow_mm"].notes)
+    assert {int(row["event_idx"]) for row in tables["contingency_summary"].rows} >= {1, 2, 3, 4}
+
+
+def _all_converged(run_dir, events: int) -> None:
+    """Replace the fixture's convergence file with one in which contingencies 1 to events all converged."""
+    (run_dir / "work" / "training_tiny_convergence.csv").write_text(
+        "\n".join(
+            ["event_idx,contingency,type,converged,iterations,final_tolerance,max_p_bus,max_p_mismatch,max_q_bus,max_q_mismatch,status_code"]
+            + [f"{event},CASE_{event},branch,true,2,1e-6,101,0,102,0,OK" for event in range(1, events + 1)]
+        ),
+        encoding="utf-8",
+    )
 
 
 def _csv_flat_run(root) -> object:

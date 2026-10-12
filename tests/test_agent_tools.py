@@ -51,7 +51,7 @@ def test_ranking_matches_gui_and_keeps_circuits_sections(agent_context):
     gui = max_line_utilization_rows(_load_cached_interactive_dataset(agent_context.run("run_a")).tables)
     assert sorted(row["max_utilization_pct"] for row in gui) == [80, 110, 120]
     assert result["data"]["convergence"] == {"known": True, "total": 3, "converged": 2, "failed": 1}
-    assert any("not a converged N-1-only" in warning for warning in result["warnings"])
+    assert any("not an N-1-only metric" in warning for warning in result["warnings"])
     assert result["provenance"]["sources"]
     assert all(source["path"].startswith(str(agent_context.project_root) + "/") for source in result["provenance"]["sources"])
 
@@ -397,7 +397,11 @@ def test_compact_contingencies_and_indexed_drilldown(agent_context):
     assert (event["data"]["rows"][0]["event_idx"], event["data"]["rows"][0]["converged"], event["data"]["rows"][0]["status_code"]) == (2, "false", "ISLANDED")
     assert any("failed or did not converge" in warning for warning in event["warnings"])
     key = [{"column": "from_bus", "op": "==", "value": 1}, {"column": "to_bus", "op": "==", "value": 2}, {"column": "line_id", "op": "==", "value": "1"}, {"column": "section", "op": "==", "value": "2"}]
+    # The branch's only case is in the islanded contingency, whose cases are left out unless asked for.
     branch = service.rank("run_a", object="cases", filters=key)
+    assert branch["data"]["total_matching"] == 0
+    assert any("non-converged contingencies are left out" in warning for warning in branch["warnings"])
+    branch = service.rank("run_a", object="cases", filters=[*key, {"column": "status_code", "op": "in", "value": ["OK", "ISLANDED"]}])
     assert branch["data"]["total_matching"] == 1
     assert branch["data"]["rows"][0]["event_idx"] == 2
     assert service.rank("run_a", object="cases", filters=[{"column": "line_id", "op": "==", "value": "2"}])["error"]["code"] == "KEY_NOT_INDEXED"

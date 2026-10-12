@@ -235,10 +235,15 @@ def parse_csv_flat_outputs(run_dir: str | Path, progress: ProgressCallback | Non
     backend_decision_path = _largest_existing_path(path for path in (flat_path, convergence_path, bus_path) if path)
 
     tables: dict[str, ParsedTable] = {}
-    if flat_path:
-        tables.update(_parse_flat_results(flat_path, backend_decision_path, progress=progress))
+    # Convergence comes first: a contingency GridPACK did not converge has no valid flows, so the branch
+    # loading summaries leave its rows out.
+    convergence = success = None
     if convergence_path:
         convergence, success = _parse_convergence(convergence_path)
+    if flat_path:
+        excluded = not_converged_events(convergence)
+        tables.update(_parse_flat_results(flat_path, backend_decision_path, progress=progress, excluded_events=excluded))
+    if convergence is not None:
         tables[CSV_FLAT_CONVERGENCE_TABLE] = convergence
         tables["success"] = success
         if SUMMARY_NAME in tables:
@@ -255,6 +260,38 @@ def parse_csv_flat_outputs(run_dir: str | Path, progress: ProgressCallback | Non
         tables["bus_metadata"] = bus_metadata
         tables["area_metadata"] = area_metadata
     return tables
+
+
+def not_converged_events(convergence: ParsedTable | None) -> frozenset[int]:
+    """Return the event_idx of every contingency the convergence table says did not converge.
+
+    That is any case without converged=true and status_code OK, such as SLACK_OVERLOAD, ISLANDED, or
+    DIVERGED. The base case and any case the table does not list are not in the set.
+    """
+    if convergence is None:
+        return frozenset()
+    return frozenset(
+        int(row["event_idx"]) for row in convergence.rows
+        if not (row.get("converged") and str(row.get("status_code") or "OK") == "OK")
+    )
+
+
+def not_converged_count(run_dir: str | Path) -> int | None:
+    """Return how many of a run's contingencies did not converge, or None when it has no csv_flat convergence file."""
+    work_dir = Path(run_dir) / "work"
+    csv_files = sorted(path for path in work_dir.rglob("*.csv") if path.is_file()) if work_dir.is_dir() else []
+    path = _find_matching_csv(csv_files, _is_convergence_header, preferred_terms=("convergence",)) if csv_files else None
+    if path is None:
+        return None
+    return len(not_converged_events(_parse_convergence(path)[0]))
+
+
+def _not_converged_note(excluded_events: frozenset[int], excluded_rows: int | None = None) -> str:
+    rows = f" ({excluded_rows:,} rows)" if excluded_rows is not None else ""
+    return (
+        f"{len(excluded_events):,} contingencies GridPACK did not converge{rows} are left out of the branch loading "
+        "summaries, whose flows are not a valid post-contingency state; the contingency summary still lists them."
+    )
 
 
 def parse_csv_flat_success(run_dir: str | Path) -> ParsedTable | None:
@@ -389,17 +426,20 @@ def _parse_flat_results(
     path: Path,
     backend_decision_path: Path | None = None,
     progress: ProgressCallback | None = None,
+    excluded_events: frozenset[int] = frozenset(),
 ) -> dict[str, ParsedTable]:
+    """Summarize the flat result by branch, leaving out excluded_events, and by contingency, keeping every one."""
     lookup = _column_lookup(_header(path))
     total_estimate = _estimate_total_rows(path) if progress is not None else None
     accelerated, fallback_note = _parse_flat_results_accelerated(
-        path, lookup, backend_decision_path or path, progress=progress, total_estimate=total_estimate
+        path, lookup, backend_decision_path or path, progress=progress, total_estimate=total_estimate,
+        excluded_events=excluded_events,
     )
     if accelerated:
         return accelerated
 
     return _parse_flat_results_streaming(
-        path, lookup, fallback_note, progress=progress, total_estimate=total_estimate
+        path, lookup, fallback_note, progress=progress, total_estimate=total_estimate, excluded_events=excluded_events
     )
 
 
@@ -409,11 +449,13 @@ def _parse_flat_results_streaming(
     fallback_note: str = "",
     progress: ProgressCallback | None = None,
     total_estimate: int | None = None,
+    excluded_events: frozenset[int] = frozenset(),
 ) -> dict[str, ParsedTable]:
     aggregates: dict[tuple[object, object, str, str], _BranchAggregate] = {}
     events: dict = {}
     preview_rows: list[dict[str, object]] = []
     rejected = 0
+    excluded_rows = 0
 
     total_text = _format_rows(total_estimate)
     seen = 0
@@ -433,6 +475,10 @@ def _parse_flat_results_streaming(
             continue
         if len(preview_rows) < CSV_FLAT_PREVIEW_LIMIT:
             preview_rows.append(row)
+        update_summary(events, row)
+        if row.get("event_idx") in excluded_events:
+            excluded_rows += 1
+            continue
 
         key = (
             row.get("from_bus"),
@@ -451,7 +497,6 @@ def _parse_flat_results_streaming(
             )
             aggregates[key] = aggregate
         aggregate.update(row)
-        update_summary(events, row)
 
     notes = [
         (
@@ -464,6 +509,8 @@ def _parse_flat_results_streaming(
         notes.append(fallback_note)
     if rejected:
         notes.append(f"Rejected {rejected} csv_flat rows with missing branch keys or loading_percent.")
+    if excluded_events:
+        notes.append(_not_converged_note(excluded_events, excluded_rows))
 
     tables = _flat_tables_from_aggregates(path, preview_rows, aggregates.values(), notes)
     tables[SUMMARY_NAME] = summary_table(path.name, list(events.values()))
@@ -476,6 +523,7 @@ def _parse_flat_results_accelerated(
     backend_decision_path: Path,
     progress: ProgressCallback | None = None,
     total_estimate: int | None = None,
+    excluded_events: frozenset[int] = frozenset(),
 ) -> tuple[dict[str, ParsedTable] | None, str]:
     try:
         backend = _lazy_backend(backend_decision_path)
@@ -498,20 +546,22 @@ def _parse_flat_results_accelerated(
                 data = _normalized_eager_flat_frame(path, lookup, backend)
                 preview_rows = _preview_rows(path, lookup)
                 keys = ["from_bus", "to_bus", "line_id", "section"]
+                events, worst = summary_frames(data)
+                data = _without_events(data, excluded_events)
                 grouped = _flat_grouped_frame(data, keys)
                 label_frame = _lazy_extreme_label_frame(data, keys)
                 labels = _extreme_labels_from_frame(label_frame)
                 aggregates = _aggregates_from_frame(grouped, labels)
-                events, worst = summary_frames(data)
             runtime_note = ""
         else:
             with _dask_runtime(backend) as runtime, _progress_heartbeat(progress, _heartbeat_message):
                 data = _normalized_lazy_flat_frame(path, lookup, backend, backend_decision_path)
                 preview_rows = _preview_rows(path, lookup)
                 keys = ["from_bus", "to_bus", "line_id", "section"]
+                events, worst = summary_frames(data)
+                data = _without_events(data, excluded_events)
                 grouped = _flat_grouped_frame(data, keys)
                 label_frame = _lazy_extreme_label_frame(data, keys)
-                events, worst = summary_frames(data)
                 grouped, label_frame, events, worst = _compute_lazy_frames(grouped, label_frame, events, worst, runtime=runtime)
                 labels = _extreme_labels_from_frame(label_frame)
                 aggregates = _aggregates_from_frame(grouped, labels)
@@ -529,6 +579,8 @@ def _parse_flat_results_accelerated(
     ]
     if runtime_note:
         notes.append(runtime_note)
+    if excluded_events:
+        notes.append(_not_converged_note(excluded_events))
     tables = _flat_tables_from_aggregates(path, preview_rows, aggregates, notes)
     tables[SUMMARY_NAME] = summary_table(path.name, summary_from_records(_records_from_frame(events), _records_from_frame(worst)))
     return tables, ""
@@ -626,6 +678,13 @@ def _normalize_flat_frame_columns(data):
     data["abs_loading"] = data["loading_percent"].abs()
     data["thermal_overloaded"] = (data["abs_loading"] >= 100.0).astype("int64")
     return data
+
+
+def _without_events(data, excluded_events: frozenset[int]):
+    """Drop the rows of excluded_events from a flat-result frame; event_idx is float there."""
+    if not excluded_events:
+        return data
+    return data[~data["event_idx"].isin(sorted(float(event) for event in excluded_events))]
 
 
 def _flat_grouped_frame(data, keys: list[str]):
@@ -1614,6 +1673,8 @@ __all__ = [
     "cpu_dask_fallback_warning",
     "ensure_csv_flat_parquet",
     "merge_csv_flat_branch_metadata",
+    "not_converged_count",
+    "not_converged_events",
     "parse_csv_flat_outputs",
     "parse_csv_flat_success",
 ]

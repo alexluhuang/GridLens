@@ -60,13 +60,13 @@ OBJECT_KINDS = {"branches": "line", "transformers": "transformer", "both": "all"
 FAMILY_OF = {"branches": "facility", "transformers": "facility", "both": "facility", "contingencies": "contingency", "cases": "case"}
 # Each facility metric's units, its definition, and whether it is a loading, which is unknown without a positive rating.
 FACILITY_METRICS = {
-    "max_utilization_pct": ("%", "highest loading over every recorded case, including the base case and non-converged cases", True),
+    "max_utilization_pct": ("%", "highest loading over the base case and every converged contingency", True),
     "base_utilization_pct": ("%", "loading in the base case", True),
-    "mean_utilization_pct": ("%", "mean loading over every recorded case", True),
-    "min_utilization_pct": ("%", "lowest loading over every recorded case", True),
+    "mean_utilization_pct": ("%", "mean loading over the base case and every converged contingency", True),
+    "min_utilization_pct": ("%", "lowest loading over the base case and every converged contingency", True),
     "thermal_margin_pct_points": ("percentage points", "100 minus maximum loading; not transfer, generation, or load-serving capacity", True),
-    "overload_count": ("cases", "recorded cases, including the base case, with loading of at least 100%", True),
-    "contingency_count": ("cases", "recorded loading cases, including the base case", False),
+    "overload_count": ("cases", "the base case and converged contingencies with loading of at least 100%", True),
+    "contingency_count": ("cases", "loading cases: the base case and every converged contingency", False),
     "rating_mva": ("MVA", "the rating that loading percentages are computed against", False),
     "nominal_kv": ("kV", "the higher of the two end base voltages", False),
 }
