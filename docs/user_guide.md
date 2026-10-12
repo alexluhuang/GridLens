@@ -24,9 +24,12 @@ project already has, such as your own `input.xml` over the generated one, GridLe
 2. Confirm the generated XML file name, usually `input.xml`.
 3. Choose the network file.
 4. Choose the contingency type, the contingency rating, and the reactive-power-limit setting.
-5. If you need to change GridPACK defaults such as output format, voltage limits, monitor files, PETSc
-   options, or powerflow settings, expand **Advanced Configuration**.
-6. Click **Generate / Save XML**.
+5. Keep **GPU** set to run contingency cases on the GPU with `alh360/gridlens-solver-v0`, or clear it on a
+   machine without NVIDIA GPUs. The run gives the container the GPUs only when it is set.
+6. If you need to change GridPACK defaults such as output format, voltage limits, monitor files, PETSc
+   options, powerflow settings, or, with **GPU** set, the GPU solver's `GPUBatch` and `Execution` settings
+   under **GPU Configuration**, expand **Advanced Configuration**.
+7. Click **Generate / Save XML**.
 
 The app writes the XML configuration into `original_inputs/` and updates the project so the Run tab can use
 it. When the XML file already exists, for example one you added in the **Project** tab, GridLens edits it in

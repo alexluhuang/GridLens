@@ -64,8 +64,10 @@ docker run --rm \
 
 On x86_64 systems the platform is `linux/amd64`. On DGX Spark ARM64 it is usually `linux/arm64`.
 
-`--gpus all` comes from the Run tab's GPUs setting. The GPU solver image `alh360/gridlens-solver-v0` needs it
-to see the GPU. On a machine without NVIDIA GPUs, clear the setting, and GridLens leaves `--gpus` out.
+`--gpus all` follows the Configuration tab's GPU setting, which is on by default and saved in the XML as
+`GPUBatch`. The GPU solver image `alh360/gridlens-solver-v0` needs it to see the GPU. On a machine without
+NVIDIA GPUs, clear the GPU setting and save the XML: it then sets `GPUBatch/enabled` to `off`, and GridLens
+leaves `--gpus` out.
 
 ## Repository layout
 
