@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+import threading
 import traceback
 
 from PySide6.QtCore import QThread, Signal, QUrl
@@ -36,13 +37,14 @@ from gridlens.gui.run_view_models import (
 from gridlens.gui.theme import configure_form_layout, set_button_role, set_context_label
 from gridlens.runner.docker_probe import docker_client_available, docker_engine_available, image_exists
 from gridlens.runner.gridpack_runner import (
+    GridpackRunFiles,
     GridpackRunRequest,
     GridpackRunResult,
     GridpackTerminationResult,
     run_gridpack_case,
     terminate_gridpack_run,
 )
-from gridlens.runner.run_progress import GridpackProgressParser
+from gridlens.runner.run_progress import GridpackProgressParser, watch_flat_parts
 
 
 class RunWorker(QThread):
@@ -57,18 +59,25 @@ class RunWorker(QThread):
 
     def run(self) -> None:
         parser = GridpackProgressParser()
+        lock, stop = threading.Lock(), threading.Event()
 
         def on_line(line: str) -> None:
             self.log_line.emit(line)
-            update = parser.feed(line)
-            if update is not None:
-                self.progress.emit(update)
+            with lock:
+                update = parser.feed(line)
+                if update is not None:
+                    self.progress.emit(update)
 
+        # The GPU batch path prints nothing per case, so its progress comes from the part files' growth.
+        watcher = watch_flat_parts(GridpackRunFiles.for_run(self.request.run_dir).work_dir, parser, self.progress.emit, stop, lock)
         try:
             result = run_gridpack_case(self.request, log_callback=on_line)
             self.finished_run.emit(result)
         except Exception:
             self.failed_run.emit(traceback.format_exc())
+        finally:
+            stop.set()
+            watcher.join()
 
 
 class TerminateWorker(QThread):

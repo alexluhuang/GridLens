@@ -279,8 +279,8 @@ def _run_gridpack(job: dict, folder: Path) -> dict:
     """Run GridPACK for a job and return its outcome, recording progress as the run streams output."""
     from gridlens.core.project import ProjectData
     from gridlens.gui.run_view_models import RunFormValues, build_gridpack_run_request
-    from gridlens.runner.gridpack_runner import run_gridpack_case
-    from gridlens.runner.run_progress import GridpackProgressParser
+    from gridlens.runner.gridpack_runner import GridpackRunFiles, run_gridpack_case
+    from gridlens.runner.run_progress import GridpackProgressParser, watch_flat_parts
 
     project_data = ProjectData.from_dict(read_json(Path(job["project_root"]) / PROJECT_FILE))
     request = build_gridpack_run_request(project_data, Path(job["run_dir"]), RunFormValues(**job["request"]["form"]))
@@ -294,14 +294,23 @@ def _run_gridpack(job: dict, folder: Path) -> dict:
 
     def on_line(line: str) -> None:
         """Record each progress update the run's output reveals."""
-        update = parser.feed(line)
-        if update is not None:
-            _write_status(folder, "running", update.message, progress=asdict(update))
-            progress_log.update(update.phase, update.message)
+        with lock:
+            update = parser.feed(line)
+            if update is not None:
+                record(update)
 
+    def record(update) -> None:
+        _write_status(folder, "running", update.message, progress=asdict(update))
+        progress_log.update(update.phase, update.message)
+
+    # The GPU batch path prints nothing per case, so its progress comes from the part files' growth.
+    lock, stop = threading.Lock(), threading.Event()
+    watcher = watch_flat_parts(GridpackRunFiles.for_run(request.run_dir).work_dir, parser, record, stop, lock)
     try:
         result = run_gridpack_case(request, log_callback=on_line)
     finally:
+        stop.set()
+        watcher.join()
         progress_log.flush()
     return {"ok": result.return_code == 0, "message": f"GridPACK exited with code {result.return_code}.", "return_code": result.return_code, "run_log": str(result.log_file)}
 

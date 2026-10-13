@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from gridlens.runner.run_progress import (
+    FlatPartMeter,
     PHASE_POSTPROCESSING,
     PHASE_SOLVING,
     GridpackProgressParser,
@@ -135,25 +136,45 @@ GPU_RUN = [
 
 
 def test_parser_follows_the_gpu_batch_path() -> None:
-    """GPU cases are counted by chunk; reporting them prints nothing per case, so the bar is then busy."""
+    """The bar counts reported contingencies from the part files; the GPU chunk lines say how far the GPU has got."""
     parser = GridpackProgressParser()
-    updates = {line: parser.feed(line) for line in GPU_RUN}
+    updates = {line: parser.feed(line) for line in GPU_RUN[:8]}
 
     planning = updates[GPU_RUN[5]]
     assert (planning.completed, planning.total) == (0, None)
     assert "9,460" in planning.message and "173" in planning.message
     solving = updates[GPU_RUN[7]]
-    assert (solving.completed, solving.total) == (0, 9460) and "alg2" in solving.message
-    assert updates[GPU_RUN[8]] is None
-    first_chunk = updates[GPU_RUN[9]]
-    assert (first_chunk.completed, first_chunk.total) == (8192, 9460)
-    reporting = updates[GPU_RUN[10]]
-    assert reporting.total is None and "Reporting" in reporting.message
-    done = updates[GPU_RUN[11]]
+    assert (solving.completed, solving.total) == (0, None) and "alg2" in solving.message
+    assert parser.feed(GPU_RUN[8]) is None
+    reported = parser.feed_reported_cases(150)
+    assert (reported.completed, reported.total) == (150, 9633) and "150 / 9,633 contingencies reported" in reported.message
+    assert parser.feed_reported_cases(150) is None and parser.feed_reported_cases(120) is None
+    first_chunk = parser.feed(GPU_RUN[9])
+    assert first_chunk.completed == 150 and "8,192 / 9,460 GPU cases solved" in first_chunk.message
+    last_chunk = parser.feed(GPU_RUN[10])
+    assert "Solved all 9,460 GPU cases" in last_chunk.message
+    assert parser.feed_reported_cases(9300).completed == 9300
+    done = parser.feed(GPU_RUN[11])
     assert done.phase == PHASE_POSTPROCESSING
     assert (done.completed, done.total, done.fraction) == (9633, 9633, 1.0)
     assert "9,455 on the GPU, 178 on the CPU" in done.message
-    assert updates[GPU_RUN[12]] is None
+    assert parser.feed_reported_cases(9633) is None
+    assert parser.feed(GPU_RUN[12]) is None
+
+
+def test_flat_part_meter_counts_reported_cases_from_part_sizes(tmp_path) -> None:
+    """Rank 0's base case gives the rows per case, and the rows after it the bytes per row."""
+    meter = FlatPartMeter(tmp_path)
+    assert meter.reported_cases() is None
+    row = "{event},CASE,1,2,1,10,1,10,100,{loading},0,1.0,1.0,0,0\n"
+    base = "".join(row.format(event=0, loading=10 + branch) for branch in range(1000))
+    cases = "".join(row.format(event=event, loading=20 + branch) for event in range(1, 4) for branch in range(1000))
+    (tmp_path / "study_flat.0.part").write_text(base, encoding="utf-8")
+    assert meter.reported_cases() is None  # no contingency rows yet to measure a row by
+    (tmp_path / "study_flat.0.part").write_text(base + cases, encoding="utf-8")
+    (tmp_path / "study_flat.1.part").write_text(cases, encoding="utf-8")
+
+    assert meter.reported_cases() == 6
 
 
 def test_parser_counts_contingencies_when_the_gpu_path_falls_back_to_the_cpu_loop() -> None:
